@@ -57,6 +57,21 @@ struct mempolicy {
 };
 
 /*
+ * Describes settings of a mempolicy during set/get syscalls.
+ * Kept in-sync with mpol_args from uapi/linux/mempolicy.c
+ * Largely used to convert userland nodemasks into kernel nodemask_t
+ */
+struct mempolicy_args {
+	unsigned short mode;
+	unsigned short mode_flags; 	/* policy mode flags */
+	nodemask_t *policy_nodes;
+	int policy_node;
+	unsigned long addr;		/* get: vma address */
+	int addr_node;
+	unsigned long home_node;
+};
+
+/*
  * Support for managing mempolicy data objects (clone, copy, destroy)
  * The default fast path of a NULL MPOL_DEFAULT policy is always inlined.
  */
