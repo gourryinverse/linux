@@ -26,6 +26,24 @@ enum {
 	MPOL_MAX,	/* always last member of enum */
 };
 
+struct mpol_args {
+	/* Basic mempolicy settings */
+	unsigned short mode;
+	unsigned short mode_flags;
+	unsigned long *pol_nodes;
+	unsigned long pol_maxnodes;
+	/* get_mempolicy: policy information (e.g. next interleave node) */
+	int policy_node;
+	/* get_mempolicy: memory range policy */
+	unsigned long addr;
+	int addr_node;
+	/* all operations: policy home node */
+	unsigned long home_node;
+	/* mbind2: address ranges to apply the policy */
+	const struct iovec __user *vec;
+	size_t vlen;
+};
+
 /* Flags for set_mempolicy */
 #define MPOL_F_STATIC_NODES	(1 << 15)
 #define MPOL_F_RELATIVE_NODES	(1 << 14)
