@@ -259,6 +259,27 @@ static int mpol_set_nodemask(struct mempolicy *pol,
 	return ret;
 }
 
+static unsigned char* copy_il_weights(nodemask_t *nodes,
+				      unsigned char* in_weights)
+{
+	char *weights = kmalloc(MAX_NUMNODES, GFP_KERNEL);
+	if (!weights)
+		return -ENOMEM;
+	/* Minimum weight value is always 1 */
+	memset(weights, 1, MAX_NUMNODES);
+	node = first_node(*nodes);
+	while (node != MAX_NUMNODES) {
+		weight = in_weights[node];
+		if (!weight) {
+			kfree(weights);
+			return NULL;
+		}
+		weights[node] = weight;
+		node = next_node(node, *nodes);
+	}
+	return weights;
+}
+
 /*
  * This function just creates a new policy, does some check and simple
  * initialization. You must invoke mpol_set_nodemask() to set nodes.
@@ -269,6 +290,8 @@ static struct mempolicy *mpol_new(struct mempolicy_args *args)
 	unsigned short mode = args->mode;
 	unsigned short flags = args->mode_flags;
 	nodemask_t *nodes = args->policy_nodes;
+	int node;
+	unsigned char *weights = NULL;
 
 	if (mode == MPOL_DEFAULT) {
 		if (nodes && !nodes_empty(*nodes))
@@ -295,16 +318,27 @@ static struct mempolicy *mpol_new(struct mempolicy_args *args)
 		    (flags & MPOL_F_STATIC_NODES) ||
 		    (flags & MPOL_F_RELATIVE_NODES))
 			return ERR_PTR(-EINVAL);
+	} else if (mode == MPOL_WEIGHTED_INTERLEAVE) {
+		/* weighted interleave requires a nodemask and weights */
+		if (nodes_empty(*nodes) || !args->interleave_weights)
+			return -EINVAL;
+		weights = copy_il_weights(nodes, args->interleave_weights);
+		if (!weights)
+			return -EINVAL;
 	} else if (nodes_empty(*nodes))
 		return ERR_PTR(-EINVAL);
 
 	policy = kmem_cache_alloc(policy_cache, GFP_KERNEL);
-	if (!policy)
+	if (!policy) {
+		if (weights)
+			kfree(weights);
 		return ERR_PTR(-ENOMEM);
+	}
 	atomic_set(&policy->refcnt, 1);
 	policy->mode = mode;
 	policy->flags = flags;
 	policy->home_node = args->home_node;
+	policy->interleave_weights = weights;
 
 	return policy;
 }
@@ -1622,11 +1656,20 @@ SYSCALL_DEFINE3(mbind2, struct mpol_args __user *, uargs, size_t, usize,
 	} else
 		margs.policy_nodes = NULL;
 
+	if (kargs.mode == MPOL_WEIGHTED_INTERLEAVE &&
+	    kargs.interleave_weights) {
+		margs.interleave_weights = get_il_weights_from_user(kargs);
+		if (IS_ERR(margs.interleave_weights))
+			return PTR_ERR(margs.interleave_weights);
+	} else
+		margs.interleave_weights = NULL;
+
 	/* For each address range in vector, do_mbind */
 	err = import_iovec(ITER_DEST, kargs.vec, kargs.vlen,
 			   ARRAY_SIZE(iovstack), &iov, &iter);
 	if (err)
-		return err;
+		goto exit_weights;
+
 	while (iov_iter_count(&iter)) {
 		unsigned long start, len;
 
@@ -1639,6 +1682,9 @@ SYSCALL_DEFINE3(mbind2, struct mpol_args __user *, uargs, size_t, usize,
 	}
 
 	kfree(iov);
+goto exit_weights:
+	if (margs.interleave_weights)
+		kfree(margs.inteleave_weights);
 	return err;
 }
 
@@ -1675,6 +1721,20 @@ SYSCALL_DEFINE3(set_mempolicy, int, mode, const unsigned long __user *, nmask,
 	return kernel_set_mempolicy(mode, nmask, maxnode);
 }
 
+static unsigned char *get_il_weights_from_user(struct mpol_args kargs)
+{
+	unsigned char *kweights = kmalloc(MAX_NUMNODES, GFP_KERNEL);
+	if (!kweights)
+		return ERR_PTR(-ENOMEM);
+	err = copy_from_user(kweights, kargs.interleave_weights,
+			     kargs.pol_maxnodes);
+	if (err) {
+		kfree(kweights);
+		return ERR_PTR(err);
+	}
+	return kweights;
+}
+
 SYSCALL_DEFINE3(set_mempolicy2, struct mpol_args __user *, uargs, size_t, usize,
 		unsigned long, flags)
 {
@@ -1706,7 +1766,20 @@ SYSCALL_DEFINE3(set_mempolicy2, struct mpol_args __user *, uargs, size_t, usize,
 	} else
 		margs.policy_nodes = NULL;
 
-	return do_set_mempolicy(&margs);
+	if (kargs.mode == MPOL_WEIGHTED_INTERLEAVE &&
+	    kargs.interleave_weights) {
+		margs.interleave_weights = get_il_weights_from_user(kargs);
+		if (IS_ERR(margs.interleave_weights))
+			return PTR_ERR(margs.interleave_weights);
+	} else
+		margs.interleave_weights = NULL;
+
+	err = do_set_mempolicy(&margs);
+
+	if (margs.interleave_weights)
+		kfree(margs.interleave_weights);
+
+	return err;
 }
 
 static int kernel_migrate_pages(pid_t pid, unsigned long maxnode,

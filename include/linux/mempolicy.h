@@ -54,6 +54,13 @@ struct mempolicy {
 		nodemask_t cpuset_mems_allowed;	/* relative to these nodes */
 		nodemask_t user_nodemask;	/* nodemask passed by user */
 	} w;
+
+	/* Weighted interleave */
+	struct {
+		unsigned int il_weight;
+		unsigned char cur_weight;
+		unsigned char weights[MAX_NUMNODES];
+	} wil;
 };
 
 /*
@@ -69,6 +76,7 @@ struct mempolicy_args {
 	unsigned long addr;		/* get: vma address */
 	int addr_node;
 	unsigned long home_node;
+	unsigned char *interleave_weights;
 };
 
 /*

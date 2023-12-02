@@ -23,6 +23,7 @@ enum {
 	MPOL_INTERLEAVE,
 	MPOL_LOCAL,
 	MPOL_PREFERRED_MANY,
+	MPOL_WEIGHTED_INTERLEAVE,
 	MPOL_MAX,	/* always last member of enum */
 };
 
@@ -42,6 +43,8 @@ struct mpol_args {
 	/* mbind2: address ranges to apply the policy */
 	const struct iovec __user *vec;
 	size_t vlen;
+	/* weighted interleave settings */
+	unsigned char *interleave_weights;
 };
 
 /* Flags for set_mempolicy */
