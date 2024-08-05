@@ -1370,6 +1370,10 @@ struct task_struct {
 	unsigned long			numa_faults_locality[3];
 
 	unsigned long			numa_pages_migrated;
+
+	struct callback_head		numa_promo_work;
+	struct list_head		promo_list;
+	unsigned long			promo_count;
 #endif /* CONFIG_NUMA_BALANCING */
 
 #ifdef CONFIG_RSEQ

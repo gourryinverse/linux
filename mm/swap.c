@@ -37,6 +37,10 @@
 #include <linux/page_idle.h>
 #include <linux/local_lock.h>
 #include <linux/buffer_head.h>
+#include <linux/migrate.h>
+#include <linux/memory-tiers.h>
+#include <linux/sched/sysctl.h>
+#include <linux/sched/numa_balancing.h>
 
 #include "internal.h"
 
@@ -476,6 +480,10 @@ void folio_mark_accessed(struct folio *folio)
 			__lru_cache_activate_folio(folio);
 		folio_clear_referenced(folio);
 		workingset_activation(folio);
+	} else if (!folio_test_isolated(folio) &&
+		   (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING) &&
+		   numa_pagecache_promotion_enabled) {
+		promotion_candidate(folio);
 	}
 	if (folio_test_idle(folio))
 		folio_clear_idle(folio);

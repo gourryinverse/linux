@@ -43,6 +43,7 @@
 #include <linux/interrupt.h>
 #include <linux/memory-tiers.h>
 #include <linux/mempolicy.h>
+#include <linux/migrate.h>
 #include <linux/mutex_api.h>
 #include <linux/profile.h>
 #include <linux/psi.h>
@@ -129,7 +130,7 @@ static unsigned int sysctl_sched_cfs_bandwidth_slice		= 5000UL;
 
 #ifdef CONFIG_NUMA_BALANCING
 /* Restrict the NUMA promotion throughput (MB/s) for each target node. */
-static unsigned int sysctl_numa_balancing_promote_rate_limit = 65536;
+unsigned int sysctl_numa_balancing_promote_rate_limit = 65536;
 #endif
 
 #ifdef CONFIG_SYSCTL
@@ -3535,6 +3536,25 @@ out:
 	}
 }
 
+static void task_numa_promotion_work(struct callback_head *work)
+{
+	struct task_struct *p = current;
+	struct list_head *promo_list= &p->promo_list;
+	int nid = numa_node_id();
+
+	SCHED_WARN_ON(p != container_of(work, struct task_struct, numa_promo_work));
+
+	work->next = work;
+
+	if (list_empty(promo_list))
+		return;
+
+	migrate_misplaced_folio_batch(promo_list, nid);
+	current->promo_count = 0;
+	return;
+}
+
+
 void init_numa_balancing(unsigned long clone_flags, struct task_struct *p)
 {
 	int mm_users = 0;
@@ -3559,8 +3579,10 @@ void init_numa_balancing(unsigned long clone_flags, struct task_struct *p)
 	RCU_INIT_POINTER(p->numa_group, NULL);
 	p->last_task_numa_placement	= 0;
 	p->last_sum_exec_runtime	= 0;
+	INIT_LIST_HEAD(&p->promo_list);
 
 	init_task_work(&p->numa_work, task_numa_work);
+	init_task_work(&p->numa_promo_work, task_numa_promotion_work);
 
 	/* New address space, reset the preferred nid */
 	if (!(clone_flags & CLONE_VM)) {

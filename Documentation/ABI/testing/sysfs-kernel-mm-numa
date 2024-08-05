@@ -22,3 +22,23 @@ Description:	Enable/disable demoting pages during reclaim
 		the guarantees of cpusets.  This should not be enabled
 		on systems which need strict cpuset location
 		guarantees.
+
+What:		/sys/kernel/mm/numa/pagecache_promotion_enabled
+Date:		January 2025
+Contact:	Linux memory management mailing list <linux-mm@kvack.org>
+Description:	Enable/disable promoting pages during file access
+
+		Page migration during file access is intended for systems
+		with tiered memory configurations that have significant
+		unmapped file cache usage. By default, file cache memory
+		on slower tiers will not be opportunistically promoted by
+		normal NUMA hint faults, because the system has no way to
+		track them.  This option enables opportunistic promotion
+		of pages that are accessed via syscall (e.g. read/write)
+		if multiple accesses occur in quick succession.
+
+		It may move data to a NUMA node that does not fall into
+		the cpuset of the allocating process which might be
+		construed to violate the guarantees of cpusets.  This
+		should not be enabled on systems which need strict cpuset
+		location guarantees.

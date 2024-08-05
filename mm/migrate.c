@@ -44,6 +44,8 @@
 #include <linux/sched/sysctl.h>
 #include <linux/memory-tiers.h>
 #include <linux/pagewalk.h>
+#include <linux/sched/numa_balancing.h>
+#include <linux/task_work.h>
 
 #include <asm/tlbflush.h>
 
@@ -2762,5 +2764,59 @@ int migrate_misplaced_folio_batch(struct list_head *folio_list, int node)
 	BUG_ON(!list_empty(folio_list));
 	return nr_remaining ? -EAGAIN : 0;
 }
+
+/**
+ * promotion_candidate: report a promotion candidate folio
+ * @folio: The folio to report as a promotion candidate.
+ *
+ * The folio will be isolated from LRU if selected, and task_work will
+ * putback the folio on promotion failure.
+ *
+ * Candidates may not be promoted and may be returned to the LRU.
+ *
+ * Takes a folio reference that will be released in task work.
+ */
+void promotion_candidate(struct folio *folio)
+{
+	struct task_struct *task = current;
+	struct list_head *promo_list= &task->promo_list;
+	struct callback_head *work = &task->numa_promo_work;
+	int nid = folio_nid(folio);
+	int flags, last_cpupid;
+
+	/* do not migrate toptier folios or in kernel context */
+	if (node_is_toptier(nid) || task->flags & PF_KTHREAD)
+		return;
+
+	/*
+	 * Limit per-syscall migration rate to balancing rate limit. This avoids
+	 * excessive work during large reads knowing that task work is likely to
+	 * hit the rate limit and put excess folios back on the LRU anyway.
+	 */
+	if (task->promo_count >= sysctl_numa_balancing_promote_rate_limit)
+		return;
+
+	/* Isolate the folio to prepare for migration */
+	nid = numa_migrate_check(folio, NULL, 0, &flags, folio_test_dirty(folio),
+				 &last_cpupid);
+	if (nid == NUMA_NO_NODE)
+		return;
+
+	if (migrate_misplaced_folio_prepare(folio, NULL, nid))
+		return;
+
+	/*
+	 * If work is pending, add this folio to the list. Otherwise, ensure
+	 * the task will execute the work, otherwise we can leak folios.
+	 */
+	if (list_empty(promo_list) && task_work_add(task, work, TWA_RESUME)) {
+		folio_putback_lru(folio);
+		return;
+	}
+	list_add_tail(&folio->lru, promo_list);
+	task->promo_count += folio_nr_pages(folio);
+	return;
+}
+EXPORT_SYMBOL(promotion_candidate);
 #endif /* CONFIG_NUMA_BALANCING */
 #endif /* CONFIG_NUMA */

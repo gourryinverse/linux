@@ -935,6 +935,7 @@ static int __init memory_tier_init(void)
 subsys_initcall(memory_tier_init);
 
 bool numa_demotion_enabled = false;
+bool numa_pagecache_promotion_enabled = false;
 
 #ifdef CONFIG_MIGRATION
 #ifdef CONFIG_SYSFS
@@ -957,11 +958,37 @@ static ssize_t demotion_enabled_store(struct kobject *kobj,
 	return count;
 }
 
+static ssize_t pagecache_promotion_enabled_show(struct kobject *kobj,
+						struct kobj_attribute *attr,
+						char *buf)
+{
+	return sysfs_emit(buf, "%s\n",
+			  numa_pagecache_promotion_enabled ? "true" : "false");
+}
+
+static ssize_t pagecache_promotion_enabled_store(struct kobject *kobj,
+						 struct kobj_attribute *attr,
+						 const char *buf, size_t count)
+{
+	ssize_t ret;
+
+	ret = kstrtobool(buf, &numa_pagecache_promotion_enabled);
+	if (ret)
+		return ret;
+
+	return count;
+}
+
+
 static struct kobj_attribute numa_demotion_enabled_attr =
 	__ATTR_RW(demotion_enabled);
 
+static struct kobj_attribute numa_pagecache_promotion_enabled_attr =
+	__ATTR_RW(pagecache_promotion_enabled);
+
 static struct attribute *numa_attrs[] = {
 	&numa_demotion_enabled_attr.attr,
+	&numa_pagecache_promotion_enabled_attr.attr,
 	NULL,
 };
 
