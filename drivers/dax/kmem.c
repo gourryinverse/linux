@@ -28,7 +28,8 @@ static const char *kmem_name;
 /* Set if any memory will remain added when the driver will be unloaded. */
 static bool any_hotremove_failed;
 
-static int dax_kmem_range(struct dev_dax *dev_dax, int i, struct range *r)
+static int dax_kmem_range(struct dev_dax *dev_dax, int i, struct range *r,
+			  unsigned long *truncated)
 {
 	struct dev_dax_range *dax_range = &dev_dax->ranges[i];
 	struct range *range = &dax_range->range;
@@ -41,6 +42,9 @@ static int dax_kmem_range(struct dev_dax *dev_dax, int i, struct range *r)
 		r->end = range->end;
 		return -ENOSPC;
 	}
+
+	if (truncated && (r->start != range->start || r->end != range->end))
+		*truncated = (r->start - range->start) + (range->end - r->end);
 	return 0;
 }
 
@@ -75,6 +79,7 @@ static int dev_dax_kmem_probe(struct dev_dax *dev_dax)
 	mhp_t mhp_flags;
 	int numa_node;
 	int adist = MEMTIER_DEFAULT_DAX_ADISTANCE;
+	unsigned long ttl_trunc = 0;
 
 	/*
 	 * Ensure good NUMA information for the persistent memory.
@@ -97,7 +102,7 @@ static int dev_dax_kmem_probe(struct dev_dax *dev_dax)
 	for (i = 0; i < dev_dax->nr_range; i++) {
 		struct range range;
 
-		rc = dax_kmem_range(dev_dax, i, &range);
+		rc = dax_kmem_range(dev_dax, i, &range, NULL);
 		if (rc) {
 			dev_info(dev, "mapping%d: %#llx-%#llx too small after alignment\n",
 					i, range.start, range.end);
@@ -130,8 +135,9 @@ static int dev_dax_kmem_probe(struct dev_dax *dev_dax)
 	for (i = 0; i < dev_dax->nr_range; i++) {
 		struct resource *res;
 		struct range range;
+		unsigned long truncated = 0;
 
-		rc = dax_kmem_range(dev_dax, i, &range);
+		rc = dax_kmem_range(dev_dax, i, &range, &truncated);
 		if (rc)
 			continue;
 
@@ -180,8 +186,12 @@ static int dev_dax_kmem_probe(struct dev_dax *dev_dax)
 				continue;
 			goto err_request_mem;
 		}
+
+		ttl_trunc += truncated;
 		mapped++;
 	}
+	if (ttl_trunc)
+		dev_warn(dev, "dax region truncated %ld bytes - alignment\n", ttl_trunc);
 
 	dev_set_drvdata(dev, data);
 
@@ -216,7 +226,7 @@ static void dev_dax_kmem_remove(struct dev_dax *dev_dax)
 		struct range range;
 		int rc;
 
-		rc = dax_kmem_range(dev_dax, i, &range);
+		rc = dax_kmem_range(dev_dax, i, &range, NULL);
 		if (rc)
 			continue;
 
