@@ -4181,10 +4181,20 @@ bool cpuset_node_allowed(struct cgroup *cgroup, int nid)
 	if (!css)
 		return true;
 
+	/*
+	 * Normally, accessing effective_mems would require the cpuset_mutex
+	 * or RCU read lock - but node_isset is atomic and the reference
+	 * taken via cgroup_get_e_css is sufficient to protect css.
+	 *
+	 * Since this interface is intended for use by migration paths, we
+	 * relax locking here to avoid taking global locks - while accepting
+	 * there may be rare scenarios where the result may be innaccurate.
+	 *
+	 * Reclaim and migration are subject to these same race conditions, and
+	 * cannot make strong isolation guarantees, so this is acceptable.
+	 */
 	cs = container_of(css, struct cpuset, css);
-	rcu_read_lock();
 	allowed = node_isset(nid, cs->effective_mems);
-	rcu_read_unlock();
 	css_put(css);
 	return allowed;
 }
