@@ -172,6 +172,7 @@ bool hugetlbfs_pagecache_present(struct hstate *h,
 
 struct address_space *hugetlb_folio_mapping_lock_write(struct folio *folio);
 
+extern int hugepages_treat_as_movable;
 extern int sysctl_hugetlb_shm_group;
 extern struct list_head huge_boot_pages[MAX_NUMNODES];
 
@@ -926,7 +927,8 @@ static inline gfp_t htlb_alloc_mask(struct hstate *h)
 {
 	gfp_t gfp = __GFP_COMP | __GFP_NOWARN;
 
-	gfp |= hugepage_movable_supported(h) ? GFP_HIGHUSER_MOVABLE : GFP_HIGHUSER;
+	gfp |= (hugepage_movable_supported(h) || hugepages_treat_as_movable) ?
+	       GFP_HIGHUSER_MOVABLE : GFP_HIGHUSER;
 
 	return gfp;
 }

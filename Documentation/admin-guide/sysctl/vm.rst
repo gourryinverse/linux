@@ -40,6 +40,7 @@ Currently, these files are in /proc/sys/vm:
 - enable_soft_offline
 - extfrag_threshold
 - highmem_is_dirtyable
+- hugepages_treat_as_movable
 - hugetlb_shm_group
 - laptop_mode
 - legacy_va_layout
@@ -354,6 +355,36 @@ storage more effectively. Note this also comes with a risk of pre-mature
 OOM killer because some writers (e.g. direct block device writes) can
 only use the low memory and they can fill it up with dirty data without
 any throttling.
+
+
+hugepages_treat_as_movable
+==========================
+
+This parameter controls whether otherwise immovable hugepages (e.g. 1GB
+gigantic pages) may be allocated from from ZONE_MOVABLE. If set to non-zero,
+gigantic hugepages can be allocated from ZONE_MOVABLE. ZONE_MOVABLE memory
+may be created via the kernel boot parameter `kernelcore` or via memory
+hotplug as discussed in Documentation/admin-guide/mm/memory-hotplug.rst.
+
+Support may depend on specific architecture and/or the hugepage size. If
+a hugepage supports migration, allocation from ZONE_MOVABLE is always
+enabled (for example 2MB on x86) for the hugepage regardless of the value
+of this parameter. IOW, this parameter affects only non-migratable hugepages.
+
+Assuming that hugepages are not migratable in your system, one usecase of
+this parameter is that users can make hugepage pool more extensible by
+enabling the allocation from ZONE_MOVABLE. This is because on ZONE_MOVABLE
+page reclaim/migration/compaction work more and you can get contiguous
+memory more likely. Note that using ZONE_MOVABLE for non-migratable
+hugepages can do harm to other features like memory hotremove (because
+memory hotremove expects that memory blocks on ZONE_MOVABLE are always
+removable,) so it's a trade-off responsible for the users.
+
+One common use-case of this feature is allocate 1GB gigantic pages for
+virtual machines from otherwise not-hotplugged memory which has been
+isolated from kernel allocations by being onlined into ZONE_MOVABLE.
+These pages tend to be allocated and released more explicitly, and so
+hotplug can still be achieved with appropriate orchestration.
 
 
 hugetlb_shm_group
