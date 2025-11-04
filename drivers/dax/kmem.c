@@ -89,6 +89,15 @@ static int dev_dax_kmem_probe(struct dev_dax *dev_dax)
 		return -EINVAL;
 	}
 
+	/*
+	 * If this memory is intended for a private node, set the
+	 * node private now.  If it can't be done, fail before hotplug
+	 */
+	if (dev_dax->private_node && node_mark_private(numa_node, true)) {
+		dev_warn(dev, "failed to mark node private\n");
+		return rc;
+	}
+
 	mt_calc_adistance(numa_node, &adist);
 	mtype = kmem_find_alloc_memory_type(adist);
 	if (IS_ERR(mtype))
@@ -240,6 +249,14 @@ static void dev_dax_kmem_remove(struct dev_dax *dev_dax)
 			"mapping%d: %#llx-%#llx cannot be hotremoved until the next reboot\n",
 				i, range.start, range.end);
 	}
+	/*
+	 * If this memory is intended for a private node, set the
+	 * node private now.  If it can't be done, fail before hotplug
+	 * if this fails, there may just be additional dax device.
+	 */
+	if (!any_hotremove_failed && dev_dax->private_node &&
+	    node_mark_private(dev_dax->target_node, false))
+	    dev_info(dev, "failed to unmark private node\n");
 
 	if (success >= dev_dax->nr_range) {
 		memory_group_unregister(data->mgid);
