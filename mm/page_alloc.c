@@ -3781,10 +3781,15 @@ retry:
 		struct page *page;
 		unsigned long mark;
 
-		if (cpusets_enabled() &&
-			(alloc_flags & ALLOC_CPUSET) &&
-			!__cpuset_zone_allowed(zone, gfp_mask))
+		if (cpusets_enabled() && (alloc_flags & ALLOC_CPUSET)) {
+			if (!__cpuset_zone_allowed(zone, gfp_mask))
 				continue;
+		} else if ((gfp_mask & __GFP_THISNODE) ||
+			    node_isset(zone_to_nid(zone),
+				       node_states[N_MEMORY])) {
+			/* access of SPM node memory required THISNODE */
+			continue;
+		}
 		/*
 		 * When allocating a page cache page for writing, we
 		 * want to get it from a node that is within its dirty
@@ -4585,10 +4590,15 @@ should_reclaim_retry(gfp_t gfp_mask, unsigned order,
 		unsigned long min_wmark = min_wmark_pages(zone);
 		bool wmark;
 
-		if (cpusets_enabled() &&
-			(alloc_flags & ALLOC_CPUSET) &&
-			!__cpuset_zone_allowed(zone, gfp_mask))
+		if (cpusets_enabled() && (alloc_flags & ALLOC_CPUSET)) {
+			if (!__cpuset_zone_allowed(zone, gfp_mask))
 				continue;
+		} else if ((gfp_mask & __GFP_THISNODE) ||
+			    node_isset(zone_to_nid(zone),
+				       node_states[N_MEMORY])) {
+			/* access of SPM node memory required THISNODE */
+			continue;
+		}
 
 		available = reclaimable = zone_reclaimable_pages(zone);
 		available += zone_page_state_snapshot(zone, NR_FREE_PAGES);
@@ -5084,8 +5094,13 @@ unsigned long alloc_pages_bulk_noprof(gfp_t gfp, int preferred_nid,
 	for_next_zone_zonelist_nodemask(zone, z, ac.highest_zoneidx, ac.nodemask) {
 		unsigned long mark;
 
-		if (cpusets_enabled() && (alloc_flags & ALLOC_CPUSET) &&
-		    !__cpuset_zone_allowed(zone, gfp)) {
+		if (cpusets_enabled() && (alloc_flags & ALLOC_CPUSET)) {
+			if (!__cpuset_zone_allowed(zone, gfp))
+				continue;
+		} else if ((gfp & __GFP_THISNODE) ||
+			    node_isset(zone_to_nid(zone),
+				       node_states[N_MEMORY])) {
+			/* access of SPM node memory required THISNODE */
 			continue;
 		}
 

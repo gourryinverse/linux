@@ -2829,10 +2829,15 @@ enum compact_result try_to_compact_pages(gfp_t gfp_mask, unsigned int order,
 					ac->highest_zoneidx, ac->nodemask) {
 		enum compact_result status;
 
-		if (cpusets_enabled() &&
-			(alloc_flags & ALLOC_CPUSET) &&
-			!__cpuset_zone_allowed(zone, gfp_mask))
+		if (cpusets_enabled() && (alloc_flags & ALLOC_CPUSET)) {
+			if (!__cpuset_zone_allowed(zone, gfp_mask))
 				continue;
+		} else if ((gfp_mask & __GFP_THISNODE) ||
+			   node_isset(zone_to_nid(zone),
+				      node_states[N_MEMORY])) {
+			/* access of SPM node memory required THISNODE */
+			continue;
+		}
 
 		if (prio > MIN_COMPACT_PRIORITY
 					&& compaction_deferred(zone, order)) {
