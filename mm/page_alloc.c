@@ -3999,7 +3999,7 @@ void warn_alloc(gfp_t gfp_mask, const nodemask_t *nodemask, const char *fmt, ...
 			nodemask_pr_args(nodemask));
 	va_end(args);
 
-	cpuset_print_current_mems_allowed();
+	cpuset_print_current_sysram_nodes();
 	pr_cont("\n");
 	dump_stack();
 	warn_alloc_show_mem(gfp_mask, nodemask);
@@ -4640,7 +4640,7 @@ static inline bool
 check_retry_cpuset(int cpuset_mems_cookie, struct alloc_context *ac)
 {
 	/*
-	 * It's possible that cpuset's mems_allowed and the nodemask from
+	 * It's possible that cpuset's sysram_nodes and the nodemask from
 	 * mempolicy don't intersect. This should be normally dealt with by
 	 * policy_nodemask(), but it's possible to race with cpuset update in
 	 * such a way the check therein was true, and then it became false
@@ -4651,13 +4651,13 @@ check_retry_cpuset(int cpuset_mems_cookie, struct alloc_context *ac)
 	 * caller can deal with a violated nodemask.
 	 */
 	if (cpusets_enabled() && ac->nodemask &&
-			!cpuset_nodemask_valid_mems_allowed(ac->nodemask)) {
+	    !cpuset_nodemask_valid_sysram_nodes(ac->nodemask)) {
 		ac->nodemask = NULL;
 		return true;
 	}
 
 	/*
-	 * When updating a task's mems_allowed or mempolicy nodemask, it is
+	 * When updating a task's sysram_nodes or mempolicy nodemask, it is
 	 * possible to race with parallel threads in such a way that our
 	 * allocation can fail while the mask is being updated. If we are about
 	 * to fail, check if the cpuset changed during allocation and if so,
@@ -4736,7 +4736,7 @@ restart:
 	if (cpusets_insane_config() && (gfp_mask & __GFP_HARDWALL)) {
 		struct zoneref *z = first_zones_zonelist(ac->zonelist,
 					ac->highest_zoneidx,
-					&cpuset_current_mems_allowed);
+					&cpuset_current_sysram_nodes);
 		if (!zonelist_zone(z))
 			goto nopage;
 	}
@@ -4980,7 +4980,7 @@ static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
 		 * to the current task context. It means that any node ok.
 		 */
 		if (in_task() && !ac->nodemask)
-			ac->nodemask = &cpuset_current_mems_allowed;
+			ac->nodemask = &cpuset_current_sysram_nodes;
 		else
 			*alloc_flags |= ALLOC_CPUSET;
 	}
@@ -5854,7 +5854,7 @@ build_all_zonelists_init(void)
 		per_cpu_pages_init(&per_cpu(boot_pageset, cpu), &per_cpu(boot_zonestats, cpu));
 
 	mminit_verify_zonelist();
-	cpuset_init_current_mems_allowed();
+	cpuset_init_current_sysram_nodes();
 }
 
 /*
