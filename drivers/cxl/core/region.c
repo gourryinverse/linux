@@ -15,6 +15,7 @@
 #include <cxlmem.h>
 #include <cxl.h>
 #include "core.h"
+#include "private_region/private_region.h"
 
 /**
  * DOC: cxl core region
@@ -37,8 +38,6 @@
  * been updated by the CXL memory hotplug notifier.
  */
 static nodemask_t nodemask_region_seen = NODE_MASK_NONE;
-
-static struct cxl_region *to_cxl_region(struct device *dev);
 
 #define __ACCESS_ATTR_RO(_level, _name) {				\
 	.attr	= { .name = __stringify(_name), .mode = 0444 },		\
@@ -258,6 +257,10 @@ static void cxl_region_decode_reset(struct cxl_region *cxlr, int count)
 	 */
 	cxl_region_invalidate_memregion(cxlr);
 
+	/* Unregister private region before teardown */
+	if (cxlr->mode == CXL_PARTMODE_PRIVATE)
+		cxl_unregister_private_region(cxlr);
+
 	for (i = count - 1; i >= 0; i--) {
 		struct cxl_endpoint_decoder *cxled = p->targets[i];
 		struct cxl_memdev *cxlmd = cxled_to_memdev(cxled);
@@ -397,9 +400,23 @@ static int __commit(struct cxl_region *cxlr)
 	if (rc)
 		return rc;
 
+	/*
+	 * Manage any special private region logic at commit time,
+	 * but prior to the rest of the commit logic.  At a minimum,
+	 * the NUMA node must be set to private before commit continues.
+	 */
+	if (cxlr->mode == CXL_PARTMODE_PRIVATE) {
+		rc = cxl_register_private_region(cxlr);
+		if (rc)
+			return rc;
+	}
+
 	rc = cxl_region_decode_commit(cxlr);
-	if (rc)
+	if (rc) {
+		if (cxlr->mode == CXL_PARTMODE_PRIVATE)
+			cxl_unregister_private_region(cxlr);
 		return rc;
+	}
 
 	p->state = CXL_CONFIG_COMMIT;
 
@@ -615,12 +632,20 @@ static ssize_t mode_show(struct device *dev, struct device_attribute *attr,
 	struct cxl_region *cxlr = to_cxl_region(dev);
 	const char *desc;
 
-	if (cxlr->mode == CXL_PARTMODE_RAM)
+	switch (cxlr->mode) {
+	case CXL_PARTMODE_RAM:
 		desc = "ram";
-	else if (cxlr->mode == CXL_PARTMODE_PMEM)
+		break;
+	case CXL_PARTMODE_PMEM:
 		desc = "pmem";
-	else
+		break;
+	case CXL_PARTMODE_PRIVATE:
+		desc = "private";
+		break;
+	default:
 		desc = "";
+		break;
+	}
 
 	return sysfs_emit(buf, "%s\n", desc);
 }
@@ -771,6 +796,7 @@ static struct attribute *cxl_region_attrs[] = {
 	&dev_attr_resource.attr,
 	&dev_attr_size.attr,
 	&dev_attr_mode.attr,
+	&dev_attr_private_type.attr,
 	&dev_attr_extended_linear_cache_size.attr,
 	NULL,
 };
@@ -787,6 +813,11 @@ static umode_t cxl_region_visible(struct kobject *kobj, struct attribute *a,
 	 */
 	if (a == &dev_attr_uuid.attr && cxlr->mode != CXL_PARTMODE_PMEM)
 		return 0444;
+
+	/* Only show private_type for private regions. */
+	if (a == &dev_attr_private_type.attr &&
+	    cxlr->mode != CXL_PARTMODE_PRIVATE)
+		return 0;
 
 	/*
 	 * Don't display extended linear cache attribute if there is no
@@ -2400,6 +2431,9 @@ static void cxl_region_release(struct device *dev)
 	struct cxl_region *cxlr = to_cxl_region(dev);
 	int id = atomic_read(&cxlrd->region_id);
 
+	/* Ensure private region is cleaned up if not already done */
+	cxl_unregister_private_region(cxlr);
+
 	/*
 	 * Try to reuse the recently idled id rather than the cached
 	 * next id to prevent the region id space from increasing
@@ -2429,7 +2463,7 @@ bool is_cxl_region(struct device *dev)
 }
 EXPORT_SYMBOL_NS_GPL(is_cxl_region, "CXL");
 
-static struct cxl_region *to_cxl_region(struct device *dev)
+struct cxl_region *to_cxl_region(struct device *dev)
 {
 	if (dev_WARN_ONCE(dev, dev->type != &cxl_region_type,
 			  "not a cxl_region device\n"))
@@ -2453,6 +2487,9 @@ static void unregister_region(void *_cxlr)
 	 */
 	for (i = 0; i < p->interleave_ways; i++)
 		detach_target(cxlr, i);
+
+	if (cxlr->mode == CXL_PARTMODE_PRIVATE)
+		cxl_unregister_private_region(cxlr);
 
 	cxl_region_iomem_release(cxlr);
 	put_device(&cxlr->dev);
@@ -2638,6 +2675,13 @@ static ssize_t create_ram_region_show(struct device *dev,
 	return __create_region_show(to_cxl_root_decoder(dev), buf);
 }
 
+static ssize_t create_private_region_show(struct device *dev,
+					  struct device_attribute *attr,
+					  char *buf)
+{
+	return __create_region_show(to_cxl_root_decoder(dev), buf);
+}
+
 static struct cxl_region *__create_region(struct cxl_root_decoder *cxlrd,
 					  enum cxl_partition_mode mode, int id)
 {
@@ -2646,6 +2690,7 @@ static struct cxl_region *__create_region(struct cxl_root_decoder *cxlrd,
 	switch (mode) {
 	case CXL_PARTMODE_RAM:
 	case CXL_PARTMODE_PMEM:
+	case CXL_PARTMODE_PRIVATE:
 		break;
 	default:
 		dev_err(&cxlrd->cxlsd.cxld.dev, "unsupported mode %d\n", mode);
@@ -2697,6 +2742,26 @@ static ssize_t create_ram_region_store(struct device *dev,
 	return create_region_store(dev, buf, len, CXL_PARTMODE_RAM);
 }
 DEVICE_ATTR_RW(create_ram_region);
+
+static ssize_t create_private_region_store(struct device *dev,
+					   struct device_attribute *attr,
+					   const char *buf, size_t len)
+{
+	struct cxl_root_decoder *cxlrd = to_cxl_root_decoder(dev);
+	struct cxl_region *cxlr;
+	int rc, id;
+
+	rc = sscanf(buf, "region%d\n", &id);
+	if (rc != 1)
+		return -EINVAL;
+
+	cxlr = __create_region(cxlrd, CXL_PARTMODE_PRIVATE, id);
+	if (IS_ERR(cxlr))
+		return PTR_ERR(cxlr);
+
+	return len;
+}
+DEVICE_ATTR_RW(create_private_region);
 
 static ssize_t region_show(struct device *dev, struct device_attribute *attr,
 			   char *buf)
@@ -3431,7 +3496,7 @@ static void cxlr_dax_unregister(void *_cxlr_dax)
 	device_unregister(&cxlr_dax->dev);
 }
 
-static int devm_cxl_add_dax_region(struct cxl_region *cxlr)
+int devm_cxl_add_dax_region(struct cxl_region *cxlr)
 {
 	struct cxl_dax_region *cxlr_dax;
 	struct device *dev;
@@ -3974,7 +4039,26 @@ static int cxl_region_probe(struct device *dev)
 					p->res->start, p->res->end, cxlr,
 					is_system_ram) > 0)
 			return 0;
+
 		return devm_cxl_add_dax_region(cxlr);
+	case CXL_PARTMODE_PRIVATE:
+		rc = devm_cxl_region_edac_register(cxlr);
+		if (rc)
+			dev_dbg(&cxlr->dev, "CXL EDAC registration for region_id=%d failed\n",
+				cxlr->id);
+
+		/*
+		 * The region can not be manged by CXL if any portion of
+		 * it is already online as 'System RAM'
+		 */
+		if (walk_iomem_res_desc(IORES_DESC_NONE,
+					IORESOURCE_SYSTEM_RAM | IORESOURCE_BUSY,
+					p->res->start, p->res->end, cxlr,
+					is_system_ram) > 0)
+			return 0;
+
+		/* DAX region creation will be handled during __commit */
+		return 0;
 	default:
 		dev_dbg(&cxlr->dev, "unsupported region mode: %d\n",
 			cxlr->mode);
