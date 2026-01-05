@@ -62,6 +62,43 @@ enum cache_mode {
 	NODE_CACHE_ADDR_MODE_EXTENDED_LINEAR,
 };
 
+enum private_memtype {
+	NODE_MEM_NOTYPE,
+	NODE_MEM_ZSWAP,
+	NODE_MEM_COMPRESSED,
+	NODE_MEM_ACCELERATOR,
+	NODE_MEM_DEMOTE_ONLY,
+	NODE_MAX_MEMTYPE,
+};
+
+/**
+ * struct private_node_ops - Callbacks for private node operations
+ * @list: List node for per-node ops list
+ * @res_start: Start physical address of the memory region
+ * @res_end: End physical address of the memory region (inclusive)
+ * @memtype: Private node memory type for this region
+ * @page_allocated: Called after a page is allocated from this region
+ *                  to validate that the page is safe to use. Returns 0
+ *                  on success, negative error code on failure. If this
+ *                  returns an error, the caller should free the page
+ *                  and try another node. May be NULL if no validation
+ *                  is needed.
+ * @data: Driver-private data passed to callbacks
+ *
+ * Multiple drivers may register ops for a single private node. Each
+ * registration covers a specific physical memory region. When a page
+ * is allocated, the appropriate ops structure is found by matching
+ * the page's physical address against the registered regions.
+ */
+struct private_node_ops {
+	struct list_head list;
+	resource_size_t res_start;
+	resource_size_t res_end;
+	enum private_memtype memtype;
+	int (*page_allocated)(int nid, struct page *page, void *data);
+	void *data;
+};
+
 /**
  * struct node_cache_attrs - system memory caching attributes
  *
@@ -87,6 +124,9 @@ void node_set_perf_attrs(unsigned int nid, struct access_coordinate *coord,
 			 enum access_coordinate_class access);
 void node_update_perf_attrs(unsigned int nid, struct access_coordinate *coord,
 			    enum access_coordinate_class access);
+int node_register_private(int nid, struct private_node_ops *ops);
+void node_unregister_private(int nid, struct private_node_ops *ops);
+int node_private_allocate(int nid, struct page *page);
 #else
 static inline void node_add_cache(unsigned int nid,
 				  struct node_cache_attrs *cache_attrs)
@@ -103,6 +143,18 @@ static inline void node_update_perf_attrs(unsigned int nid,
 					  struct access_coordinate *coord,
 					  enum access_coordinate_class access)
 {
+}
+static inline int node_register_private(int nid, struct private_node_ops *ops)
+{
+	return -ENODEV;
+}
+static inline void node_unregister_private(int nid,
+					   struct private_node_ops *ops)
+{
+}
+static inline int node_private_allocate(int nid, struct page *page)
+{
+	return -ENXIO;
 }
 #endif
 
