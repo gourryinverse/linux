@@ -1346,7 +1346,9 @@ static int check_hotplug_memory_range(u64 start, u64 size)
 
 static int online_memory_block(struct memory_block *mem, void *arg)
 {
-	mem->online_type = mhp_get_default_online_type();
+	mem->online_type = mem->movable_only ?
+			   MMOP_ONLINE_MOVABLE :
+			   mhp_get_default_online_type();
 	return device_online(&mem->dev);
 }
 
@@ -1449,6 +1451,7 @@ static int create_altmaps_and_memory_blocks(int nid, struct memory_group *group,
 	unsigned long memblock_size = memory_block_size_bytes();
 	u64 cur_start;
 	int ret;
+	bool movable_only = mhp_flags & MHP_MOVABLE_ONLY;
 
 	for (cur_start = start; cur_start < start + size;
 	     cur_start += memblock_size) {
@@ -1478,7 +1481,8 @@ static int create_altmaps_and_memory_blocks(int nid, struct memory_group *group,
 
 		/* create memory block devices after memory was added */
 		ret = create_memory_block_devices(cur_start, memblock_size, nid,
-						  params.altmap, group);
+						  params.altmap, group,
+						  movable_only);
 		if (ret) {
 			arch_remove_memory(cur_start, memblock_size, NULL);
 			kfree(params.altmap);
@@ -1506,6 +1510,7 @@ int add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags)
 	struct memory_group *group = NULL;
 	u64 start, size;
 	bool new_node = false;
+	bool movable_only = mhp_flags & MHP_MOVABLE_ONLY;
 	int ret;
 
 	start = res->start;
@@ -1564,7 +1569,8 @@ int add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags)
 			goto error;
 
 		/* create memory block devices after memory was added */
-		ret = create_memory_block_devices(start, size, nid, NULL, group);
+		ret = create_memory_block_devices(start, size, nid, NULL, group,
+						  movable_only);
 		if (ret) {
 			arch_remove_memory(start, size, params.altmap);
 			goto error;

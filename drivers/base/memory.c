@@ -374,6 +374,8 @@ static int memory_block_change_state(struct memory_block *mem,
 
 	if (to_state == MEM_OFFLINE)
 		mem->state = MEM_GOING_OFFLINE;
+	else if (mem->movable_only && to_state != MMOP_ONLINE_MOVABLE)
+		return -EINVAL;
 
 	ret = memory_block_action(mem, to_state);
 	mem->state = ret ? from_state_req : to_state;
@@ -811,7 +813,8 @@ void memory_block_add_nid_early(struct memory_block *mem, int nid)
 
 static int add_memory_block(unsigned long block_id, int nid, unsigned long state,
 			    struct vmem_altmap *altmap,
-			    struct memory_group *group)
+			    struct memory_group *group,
+			    bool movable_only)
 {
 	struct memory_block *mem;
 	int ret = 0;
@@ -829,6 +832,7 @@ static int add_memory_block(unsigned long block_id, int nid, unsigned long state
 	mem->state = state;
 	mem->nid = nid;
 	mem->altmap = altmap;
+	mem->movable_only = movable_only;
 	INIT_LIST_HEAD(&mem->group_next);
 
 #ifndef CONFIG_NUMA
@@ -880,7 +884,8 @@ static void remove_memory_block(struct memory_block *memory)
  */
 int create_memory_block_devices(unsigned long start, unsigned long size,
 				int nid, struct vmem_altmap *altmap,
-				struct memory_group *group)
+				struct memory_group *group,
+				bool movable_only)
 {
 	const unsigned long start_block_id = pfn_to_block_id(PFN_DOWN(start));
 	unsigned long end_block_id = pfn_to_block_id(PFN_DOWN(start + size));
@@ -893,7 +898,8 @@ int create_memory_block_devices(unsigned long start, unsigned long size,
 		return -EINVAL;
 
 	for (block_id = start_block_id; block_id != end_block_id; block_id++) {
-		ret = add_memory_block(block_id, nid, MEM_OFFLINE, altmap, group);
+		ret = add_memory_block(block_id, nid, MEM_OFFLINE, altmap, group,
+				       movable_only);
 		if (ret)
 			break;
 	}
@@ -998,7 +1004,8 @@ void __init memory_dev_init(void)
 			continue;
 
 		block_id = memory_block_id(nr);
-		ret = add_memory_block(block_id, NUMA_NO_NODE, MEM_ONLINE, NULL, NULL);
+		ret = add_memory_block(block_id, NUMA_NO_NODE, MEM_ONLINE, NULL, NULL,
+				       false);
 		if (ret) {
 			panic("%s() failed to add memory block: %d\n",
 			      __func__, ret);

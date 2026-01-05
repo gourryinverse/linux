@@ -80,6 +80,7 @@ struct memory_block {
 	struct vmem_altmap *altmap;
 	struct memory_group *group;	/* group (if any) for this block */
 	struct list_head group_next;	/* next block inside memory group */
+	bool movable_only;		/* If set, only ZONE_MOVABLE is valid */
 #if defined(CONFIG_MEMORY_FAILURE) && defined(CONFIG_MEMORY_HOTPLUG)
 	atomic_long_t nr_hwpoison;
 #endif
@@ -160,7 +161,8 @@ extern int register_memory_notifier(struct notifier_block *nb);
 extern void unregister_memory_notifier(struct notifier_block *nb);
 int create_memory_block_devices(unsigned long start, unsigned long size,
 				int nid, struct vmem_altmap *altmap,
-				struct memory_group *group);
+				struct memory_group *group,
+				bool movable_only);
 void remove_memory_block_devices(unsigned long start, unsigned long size);
 extern void memory_dev_init(void);
 extern int memory_notify(unsigned long val, void *v);

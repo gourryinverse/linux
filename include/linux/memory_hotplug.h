@@ -76,6 +76,19 @@ typedef int __bitwise mhp_t;
 #define MHP_OFFLINE_INACCESSIBLE	((__force mhp_t)BIT(3))
 
 /*
+ * Restrict hotplugged memory blocks to ZONE_MOVABLE only.
+ *
+ * During offlining of hotplugged memory which was originally onlined
+ * as ZONE_MOVABLE, userland services may detect blocks going offline
+ * and automatically re-online them into ZONE_NORMAL or lower.  When
+ * this happens it may become permanently incapable of being removed.
+ *
+ * Allow driver-managed memory sources to restrict memory blocks to
+ * ZONE_MOVABLE only, so that the truly degenerate case can be mitigated.
+ */
+#define MHP_MOVABLE_ONLY		((__force mhp_t)BIT(4))
+
+/*
  * Extended parameters for memory hotplug:
  * altmap: alternative allocator for memmap array (optional)
  * pgprot: page protection flags to apply to newly created page tables
