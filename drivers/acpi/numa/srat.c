@@ -20,6 +20,7 @@
 #include <linux/topology.h>
 #include <linux/numa_memblks.h>
 #include <linux/string_choices.h>
+#include <linux/efi.h>
 
 static nodemask_t nodes_found_map = NODE_MASK_NONE;
 
@@ -363,6 +364,7 @@ acpi_parse_memory_affinity(union acpi_subtable_headers *header,
 	u64 start, end;
 	u32 hotpluggable;
 	int node, pxm;
+	int rc;
 
 	ma = (struct acpi_srat_mem_affinity *)header;
 
@@ -392,7 +394,12 @@ acpi_parse_memory_affinity(union acpi_subtable_headers *header,
 		goto out_err_bad_srat;
 	}
 
-	if (numa_add_memblk(node, start, end) < 0) {
+	if (efi_mem_attributes(start) & EFI_MEMORY_SP)
+		rc = numa_add_spm_memblk(node, start, end);
+	else
+		rc = numa_add_memblk(node, start, end);
+
+	if (rc < 0) {
 		pr_err("SRAT: Failed to add memblk to node %u [mem %#010Lx-%#010Lx]\n",
 		       node, (unsigned long long) start,
 		       (unsigned long long) end - 1);
