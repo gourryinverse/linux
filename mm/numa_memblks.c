@@ -131,7 +131,8 @@ int __node_distance(int from, int to)
 EXPORT_SYMBOL(__node_distance);
 
 static int __init numa_add_memblk_to(int nid, u64 start, u64 end,
-				     struct numa_meminfo *mi)
+				     struct numa_meminfo *mi,
+				     bool is_spm)
 {
 	/* ignore zero length blks */
 	if (start == end)
@@ -152,6 +153,7 @@ static int __init numa_add_memblk_to(int nid, u64 start, u64 end,
 	mi->blk[mi->nr_blks].start = start;
 	mi->blk[mi->nr_blks].end = end;
 	mi->blk[mi->nr_blks].nid = nid;
+	mi->blk[mi->nr_blks].spm = is_spm;
 	mi->nr_blks++;
 	return 0;
 }
@@ -197,7 +199,42 @@ static void __init numa_move_tail_memblk(struct numa_meminfo *dst, int idx,
  */
 int __init numa_add_memblk(int nid, u64 start, u64 end)
 {
-	return numa_add_memblk_to(nid, start, end, &numa_meminfo);
+	return numa_add_memblk_to(nid, start, end, &numa_meminfo, false);
+}
+
+/**
+ * numa_add_memblk - Add one Specific Purpose numa_memblk to numa_meminfo
+ * @nid: NUMA node ID of the new memblk
+ * @start: Start address of the new memblk
+ * @end: End address of the new memblk
+ *
+ * Add a new specific purpose memblk to the default numa_meminfo.
+ *
+ * RETURNS:
+ * 0 on success, -errno on failure.
+ */
+int __init numa_add_spm_memblk(int nid, u64 start, u64 end)
+{
+	return numa_add_memblk_to(nid, start, end, &numa_meminfo, true);
+}
+
+/**
+ * numa_has_normal_memblk - Returns whether a node has a non-SPM block
+ * @nid: NUMA node ID
+ *
+ * RETURNS:
+ * true if non-SPM block is present on the node
+ */
+bool __init numa_has_normal_memblk(int nid)
+{
+	int i;
+
+	for (i = 0; i < numa_meminfo.nr_blks; i++) {
+		struct numa_memblk *mb = numa_meminfo.blk + i;
+		if (mb->nid == nid && !mb->spm)
+			return true;
+	}
+	return false;
 }
 
 /**
@@ -219,7 +256,8 @@ int __init numa_add_memblk(int nid, u64 start, u64 end)
  */
 int __init numa_add_reserved_memblk(int nid, u64 start, u64 end)
 {
-	return numa_add_memblk_to(nid, start, end, &numa_reserved_meminfo);
+	return numa_add_memblk_to(nid, start, end, &numa_reserved_meminfo,
+				  false);
 }
 
 /**
@@ -255,7 +293,8 @@ int __init numa_cleanup_meminfo(struct numa_meminfo *mi)
 		/* preserve info for non-RAM areas above 'max_pfn': */
 		if (bi->end > high) {
 			numa_add_memblk_to(bi->nid, high, bi->end,
-					   &numa_reserved_meminfo);
+					   &numa_reserved_meminfo,
+					   false);
 			bi->end = high;
 		}
 

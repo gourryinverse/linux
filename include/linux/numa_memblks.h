@@ -14,6 +14,7 @@ struct numa_memblk {
 	u64			start;
 	u64			end;
 	int			nid;
+	bool			spm;
 };
 
 struct numa_meminfo {
@@ -22,6 +23,8 @@ struct numa_meminfo {
 };
 
 int __init numa_add_memblk(int nodeid, u64 start, u64 end);
+int __init numa_add_spm_memblk(int nid, u64 start, u64 end);
+bool __init numa_has_normal_memblk(int nid);
 int __init numa_add_reserved_memblk(int nid, u64 start, u64 end);
 void __init numa_remove_memblk_from(int idx, struct numa_meminfo *mi);
 
