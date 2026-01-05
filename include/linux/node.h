@@ -87,6 +87,7 @@ void node_set_perf_attrs(unsigned int nid, struct access_coordinate *coord,
 			 enum access_coordinate_class access);
 void node_update_perf_attrs(unsigned int nid, struct access_coordinate *coord,
 			    enum access_coordinate_class access);
+int node_mark_private(int nid, bool enable);
 #else
 static inline void node_add_cache(unsigned int nid,
 				  struct node_cache_attrs *cache_attrs)
@@ -104,6 +105,7 @@ static inline void node_update_perf_attrs(unsigned int nid,
 					  enum access_coordinate_class access)
 {
 }
+static inline int node_mark_private(int nid, bool enable) { return -ENODEV }
 #endif
 
 struct node {

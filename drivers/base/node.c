@@ -286,6 +286,42 @@ void node_update_perf_attrs(unsigned int nid, struct access_coordinate *coord,
 }
 EXPORT_SYMBOL_GPL(node_update_perf_attrs);
 
+int node_mark_private(int nid, bool enable)
+{
+	int rc = 0;
+
+	/* If private nodes are forced, this is a no-op */
+	if (IS_ENABLED(CONFIG_NUMA_FORCE_PRIVATE_NODES))
+		return 0;
+
+	if (!node_possible(nid))
+		return -EINVAL;
+
+	/* hotplug lock must be held while checking online/node state */
+	mem_hotplug_begin();
+
+	/*
+	 * If enabling and already online, fail if not already private.
+	 * If disabling and still online, return -EBUSY (may not be fatal).
+	 * Otherwise enable/disable accordingly.
+	 */
+	if (enable) {
+		if (node_online(nid) && !node_state(nid, N_PRIVATE)) {
+			rc = -EBUSY;
+			goto out;
+		}
+		node_set_state(nid, N_PRIVATE);
+	} else if (node_online(nid)) {
+		rc = -EBUSY;
+		goto out;
+	} else
+		node_clear_state(nid, N_PRIVATE);
+out:
+	mem_hotplug_done();
+	return rc;
+}
+EXPORT_SYMBOL_GPL(node_mark_private);
+
 /**
  * struct node_cache_info - Internal tracking for memory node caches
  * @dev:	Device represeting the cache level
@@ -959,6 +995,7 @@ static struct node_attr node_state_attr[] = {
 	[N_HIGH_MEMORY] = _NODE_ATTR(has_high_memory, N_HIGH_MEMORY),
 #endif
 	[N_MEMORY] = _NODE_ATTR(has_memory, N_MEMORY),
+	[N_PRIVATE] = _NODE_ATTR(has_private_memory, N_PRIVATE),
 	[N_CPU] = _NODE_ATTR(has_cpu, N_CPU),
 	[N_GENERIC_INITIATOR] = _NODE_ATTR(has_generic_initiator,
 					   N_GENERIC_INITIATOR),
@@ -972,6 +1009,7 @@ static struct attribute *node_state_attrs[] = {
 	&node_state_attr[N_HIGH_MEMORY].attr.attr,
 #endif
 	&node_state_attr[N_MEMORY].attr.attr,
+	&node_state_attr[N_PRIVATE].attr.attr,
 	&node_state_attr[N_CPU].attr.attr,
 	&node_state_attr[N_GENERIC_INITIATOR].attr.attr,
 	NULL

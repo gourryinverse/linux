@@ -1441,6 +1441,24 @@ config NUMA_EMU
 	  into virtual nodes when booted with "numa=fake=N", where N is the
 	  number of nodes. This is only useful for debugging.
 
+config NUMA_FORCE_PRIVATE_MEMORY_NODES
+	bool "Force dedicated SPM and Reserved memory nodes to be Private"
+	default n
+	depends on NUMA_MEMBLKS
+	help
+	  When memory is hotplugged onto a NUMA node which has no normal
+	  System RAM, that NUMA node will not be added as a default target
+	  for the page allocator (i.e. it is excluded from N_MEMORY).
+
+	  This option forces all nodes with only SP/Reserved memory to be
+	  private nodes.  This prevents onlining that memory as normal SysRAM.
+
+	  Nodes with any amount of Normal memory cannot be treated as private.
+
+	  To retain existing behavior, where hotplugged driver managed memory
+	  is always added to N_MEMORY, this defaults to off.
+
+
 config ARCH_HAS_USER_SHADOW_STACK
 	bool
 	help
