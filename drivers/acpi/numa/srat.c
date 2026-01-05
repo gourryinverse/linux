@@ -20,6 +20,7 @@
 #include <linux/topology.h>
 #include <linux/numa_memblks.h>
 #include <linux/string_choices.h>
+#include <linux/efi.h>
 
 static nodemask_t nodes_found_map = NODE_MASK_NONE;
 
@@ -356,13 +357,15 @@ static int __init acpi_parse_slit(struct acpi_table_header *table)
 static int parsed_numa_memblks __initdata;
 
 static int __init
-acpi_parse_memory_affinity(union acpi_subtable_headers *header,
-			   const unsigned long table_end)
+_acpi_parse_memory_affinity(union acpi_subtable_headers *header,
+			    const unsigned long table_end,
+			    bool parse_spm)
 {
 	struct acpi_srat_mem_affinity *ma;
 	u64 start, end;
 	u32 hotpluggable;
 	int node, pxm;
+	int rc;
 
 	ma = (struct acpi_srat_mem_affinity *)header;
 
@@ -386,13 +389,33 @@ acpi_parse_memory_affinity(union acpi_subtable_headers *header,
 	if (acpi_srat_revision <= 1)
 		pxm &= 0xff;
 
+	/*
+	 * Defer parsing SPM memory regions to after doing non-SPM regions
+	 *
+	 * We need to do this because we don't know what nodes are possible until
+	 * we are done parsing the list, and we may want to add additional nodes
+	 * after the fact to host the SPM memory.
+	 */
+	if ((efi_mem_attributes(start) & EFI_MEMORY_SP) != parse_spm)
+		return 0;
+
 	node = acpi_map_pxm_to_node(pxm);
 	if (node == NUMA_NO_NODE) {
 		pr_err("SRAT: Too many proximity domains.\n");
 		goto out_err_bad_srat;
 	}
 
-	if (numa_add_memblk(node, start, end) < 0) {
+	if (parse_spm) {
+		bool exclusive_spm = numa_has_normal_memblk(node);
+		/* We want to encoursage SPM to have dedicated nodes */
+		WARN_ON_ONCE(exclusive_spm);
+		rc = numa_add_spm_memblk(node, start, end);
+		if (exclusive_spm)
+			NODE_DATA(node)->is_spm = true;
+	} else
+		rc = numa_add_memblk(node, start, end);
+
+	if (rc < 0) {
 		pr_err("SRAT: Failed to add memblk to node %u [mem %#010Lx-%#010Lx]\n",
 		       node, (unsigned long long) start,
 		       (unsigned long long) end - 1);
@@ -423,6 +446,20 @@ out_err_bad_srat:
 	bad_srat();
 
 	return 0;
+}
+
+static int __init
+acpi_parse_memory_affinity(union acpi_subtable_headers *header,
+			   const unsigned long table_end)
+{
+	return _acpi_parse_memory_affinity(header, table_end, false);
+}
+
+static int __init
+acpi_parse_spm_affinity(union acpi_subtable_headers *header,
+			const unsigned long table_end)
+{
+	return _acpi_parse_memory_affinity(header, table_end, true);
 }
 
 static int __init acpi_parse_cfmws(union acpi_subtable_headers *header,
@@ -635,6 +672,8 @@ int __init acpi_numa_init(void)
 
 		cnt = acpi_table_parse_srat(ACPI_SRAT_TYPE_MEMORY_AFFINITY,
 					    acpi_parse_memory_affinity, 0);
+		cnt = acpi_table_parse_srat(ACPI_SRAT_TYPE_MEMORY_AFFINITY,
+					    acpi_parse_spm_affinity, 0);
 	}
 
 	/* SLIT: System Locality Information Table */
