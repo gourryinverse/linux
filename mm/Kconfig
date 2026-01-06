@@ -559,6 +559,11 @@ config MHP_MEMMAP_ON_MEMORY
 	depends on MEMORY_HOTPLUG && SPARSEMEM_VMEMMAP
 	depends on ARCH_MHP_MEMMAP_ON_MEMORY_ENABLE
 
+config MHP_SPM_EXCLUSIVE_NODES
+	bool "Allow Exclusive Specific Purpose Memory Nodes"
+	def_bool n
+	depends on MEMORY_HOTPLUG
+
 endif # MEMORY_HOTPLUG
 
 config ARCH_MHP_MEMMAP_ON_MEMORY_ENABLE

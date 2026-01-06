@@ -1207,8 +1207,13 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 	online_pages_range(pfn, nr_pages);
 	adjust_present_page_count(pfn_to_page(pfn), group, nr_pages);
 
-	if (node_arg.nid >= 0)
-		node_set_state(nid, N_MEMORY);
+	if (node_arg.nid >= 0) {
+		if (IS_ENABLED(MHP_SPM_EXCLUSIVE_NODES) &&
+		    NODE_DATA(nid)->is_spm)
+			node_set_state(nid, N_SPM);
+		else
+			node_set_state(nid, N_MEMORY);
+	}
 	if (need_zonelists_rebuild)
 		build_all_zonelists(NULL);
 
@@ -2059,8 +2064,13 @@ int offline_pages(unsigned long start_pfn, unsigned long nr_pages,
 	 * Make sure to mark the node as memory-less before rebuilding the zone
 	 * list. Otherwise this node would still appear in the fallback lists.
 	 */
-	if (node_arg.nid >= 0)
-		node_clear_state(node, N_MEMORY);
+	if (node_arg.nid >= 0) {
+		if (IS_ENABLED(MHP_SPM_EXCLUSIVE_NODES) &&
+		    NODE_DATA(node)->is_spm)
+			node_clear_state(node, N_SPM);
+		else
+			node_clear_state(node, N_MEMORY);
+	}
 	if (!populated_zone(zone)) {
 		zone_pcp_reset(zone);
 		build_all_zonelists(NULL);
