@@ -624,3 +624,22 @@ Description:
 		The count is persistent across power loss and wraps back to 0
 		upon overflow. If this file is not present, the device does not
 		have the necessary support for dirty tracking.
+
+What:		/sys/bus/cxl/devices/regionZ/region_driver
+Date:		Jan, 2026
+KernelVersion:	v6.21
+Contact:	linux-cxl@vger.kernel.org
+Description:
+		(RW) Selects the driver used by the region after probe.
+		Only RAM regions have mutable region_drivers, all PMEM regions
+		default to the 'pmem' driver.
+
+		RAM regions may be one of [none,dax].
+
+		'none' indicates the region is not configured if unprobed, or
+		if probed implies this is region was onlined as SysRAM by BIOS.
+
+		'dax' indicates the region's control is handed to the dax
+		subsystem, a dax_region and dax device will be created for it.
+
+		'pmem' indicates the region will utilize an nvdimm bridge.

@@ -502,6 +502,20 @@ enum cxl_partition_mode {
 	CXL_PARTMODE_PMEM,
 };
 
+
+/**
+ * enum cxl_region_driver - driver user to manage regions after probe
+ * @CXL_REGION_DRIVER_NONE: no driver, limited controler after probe
+ * @CXL_REGION_DRIVER_DAX: dax driver, spawns dax_region and hands control
+ * to the dax subsystem
+ * @CXL_REGION_DRIVER_PMEM: pmem driver, creates bridge with nvdimm subsystem
+ */
+enum cxl_region_driver {
+	CXL_REGION_DRIVER_NONE,
+	CXL_REGION_DRIVER_DAX,
+	CXL_REGION_DRIVER_PMEM,
+};
+
 /*
  * Indicate whether this region has been assembled by autodetection or
  * userspace assembly. Prevent endpoint decoders outside of automatic
@@ -530,6 +544,7 @@ enum cxl_partition_mode {
  * @dev: This region's device
  * @id: This region's id. Id is globally unique across all regions
  * @mode: Operational mode of the mapped capacity
+ * @driver: Region driver that manages the region after probe
  * @type: Endpoint decoder target type
  * @cxl_nvb: nvdimm bridge for coordinating @cxlr_pmem setup / shutdown
  * @cxlr_pmem: (for pmem regions) cached copy of the nvdimm bridge
@@ -543,6 +558,7 @@ struct cxl_region {
 	struct device dev;
 	int id;
 	enum cxl_partition_mode mode;
+	enum cxl_region_driver driver;
 	enum cxl_decoder_type type;
 	struct cxl_nvdimm_bridge *cxl_nvb;
 	struct cxl_pmem_region *cxlr_pmem;
