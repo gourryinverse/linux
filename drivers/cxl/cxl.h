@@ -502,6 +502,19 @@ enum cxl_partition_mode {
 	CXL_PARTMODE_PMEM,
 };
 
+
+/*
+ * Memory Controller modes:
+ *   None - No controller selected
+ *   Auto - either BIOS-configured as SysRAM, or default to DAX
+ *   DAX  - creates a dax_region controller for the cxl_region
+ */
+enum cxl_memctrl_mode {
+	CXL_MEMCTRL_NONE,
+	CXL_MEMCTRL_AUTO,
+	CXL_MEMCTRL_DAX,
+};
+
 /*
  * Indicate whether this region has been assembled by autodetection or
  * userspace assembly. Prevent endpoint decoders outside of automatic
@@ -543,6 +556,7 @@ struct cxl_region {
 	struct device dev;
 	int id;
 	enum cxl_partition_mode mode;
+	enum cxl_memctrl_mode memctrl;
 	enum cxl_decoder_type type;
 	struct cxl_nvdimm_bridge *cxl_nvb;
 	struct cxl_pmem_region *cxlr_pmem;

@@ -626,6 +626,50 @@ static ssize_t mode_show(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_RO(mode);
 
+static ssize_t ctrl_show(struct device *dev, struct device_attribute *attr,
+			 char *buf)
+{
+	struct cxl_region *cxlr = to_cxl_region(dev);
+	const char *desc;
+
+	switch (cxlr->memctrl) {
+	case CXL_MEMCTRL_AUTO:
+		desc = "auto";
+		break;
+	case CXL_MEMCTRL_DAX:
+		desc = "dax";
+		break;
+	default:
+		desc = "";
+		break;
+	}
+
+	return sysfs_emit(buf, "%s\n", desc);
+}
+
+static ssize_t ctrl_store(struct device *dev, struct device_attribute *attr,
+			  const char *buf, size_t len)
+{
+	struct cxl_region *cxlr = to_cxl_region(dev);
+	struct cxl_region_params *p = &cxlr->params;
+	int rc;
+
+	ACQUIRE(rwsem_write_kill, rwsem)(&cxl_rwsem.region);
+	if ((rc = ACQUIRE_ERR(rwsem_write_kill, &rwsem)))
+		return rc;
+
+	if (p->state >= CXL_CONFIG_COMMIT)
+		return -EBUSY;
+
+	if (sysfs_streq(buf, "dax"))
+		cxlr->memctrl = CXL_MEMCTRL_DAX;
+	else
+		return -EINVAL;
+
+	return len;
+}
+static DEVICE_ATTR_RW(ctrl);
+
 static int alloc_hpa(struct cxl_region *cxlr, resource_size_t size)
 {
 	struct cxl_root_decoder *cxlrd = to_cxl_root_decoder(cxlr->dev.parent);
@@ -772,6 +816,7 @@ static struct attribute *cxl_region_attrs[] = {
 	&dev_attr_size.attr,
 	&dev_attr_mode.attr,
 	&dev_attr_extended_linear_cache_size.attr,
+	&dev_attr_ctrl.attr,
 	NULL,
 };
 
@@ -2598,6 +2643,7 @@ static struct cxl_region *devm_cxl_add_region(struct cxl_root_decoder *cxlrd,
 		return cxlr;
 	cxlr->mode = mode;
 	cxlr->type = type;
+	cxlr->memctrl = CXL_MEMCTRL_NONE;
 
 	dev = &cxlr->dev;
 	rc = dev_set_name(dev, "region%d", id);
@@ -3307,37 +3353,6 @@ struct cxl_dax_region *to_cxl_dax_region(struct device *dev)
 }
 EXPORT_SYMBOL_NS_GPL(to_cxl_dax_region, "CXL");
 
-static struct lock_class_key cxl_dax_region_key;
-
-static struct cxl_dax_region *cxl_dax_region_alloc(struct cxl_region *cxlr)
-{
-	struct cxl_region_params *p = &cxlr->params;
-	struct cxl_dax_region *cxlr_dax;
-	struct device *dev;
-
-	guard(rwsem_read)(&cxl_rwsem.region);
-	if (p->state != CXL_CONFIG_COMMIT)
-		return ERR_PTR(-ENXIO);
-
-	cxlr_dax = kzalloc(sizeof(*cxlr_dax), GFP_KERNEL);
-	if (!cxlr_dax)
-		return ERR_PTR(-ENOMEM);
-
-	cxlr_dax->hpa_range.start = p->res->start;
-	cxlr_dax->hpa_range.end = p->res->end;
-
-	dev = &cxlr_dax->dev;
-	cxlr_dax->cxlr = cxlr;
-	device_initialize(dev);
-	lockdep_set_class(&dev->mutex, &cxl_dax_region_key);
-	device_set_pm_not_required(dev);
-	dev->parent = &cxlr->dev;
-	dev->bus = &cxl_bus_type;
-	dev->type = &cxl_dax_region_type;
-
-	return cxlr_dax;
-}
-
 static void cxlr_pmem_unregister(void *_cxlr_pmem)
 {
 	struct cxl_pmem_region *cxlr_pmem = _cxlr_pmem;
@@ -3421,42 +3436,6 @@ err:
 err_bridge:
 	put_device(&cxl_nvb->dev);
 	cxlr->cxl_nvb = NULL;
-	return rc;
-}
-
-static void cxlr_dax_unregister(void *_cxlr_dax)
-{
-	struct cxl_dax_region *cxlr_dax = _cxlr_dax;
-
-	device_unregister(&cxlr_dax->dev);
-}
-
-static int devm_cxl_add_dax_region(struct cxl_region *cxlr)
-{
-	struct cxl_dax_region *cxlr_dax;
-	struct device *dev;
-	int rc;
-
-	cxlr_dax = cxl_dax_region_alloc(cxlr);
-	if (IS_ERR(cxlr_dax))
-		return PTR_ERR(cxlr_dax);
-
-	dev = &cxlr_dax->dev;
-	rc = dev_set_name(dev, "dax_region%d", cxlr->id);
-	if (rc)
-		goto err;
-
-	rc = device_add(dev);
-	if (rc)
-		goto err;
-
-	dev_dbg(&cxlr->dev, "%s: register %s\n", dev_name(dev->parent),
-		dev_name(dev));
-
-	return devm_add_action_or_reset(&cxlr->dev, cxlr_dax_unregister,
-					cxlr_dax);
-err:
-	put_device(dev);
 	return rc;
 }
 
@@ -3578,6 +3557,9 @@ static int __construct_region(struct cxl_region *cxlr,
 	}
 
 	set_bit(CXL_REGION_F_AUTO, &cxlr->flags);
+
+	/* Auto-regions will either be static sysram (onlined by BIOS) or DAX */
+	cxlr->memctrl = CXL_MEMCTRL_AUTO;
 
 	res = kmalloc(sizeof(*res), GFP_KERNEL);
 	if (!res)
@@ -3754,15 +3736,6 @@ u64 cxl_port_get_spa_cache_alias(struct cxl_port *endpoint, u64 spa)
 	return ~0ULL;
 }
 EXPORT_SYMBOL_NS_GPL(cxl_port_get_spa_cache_alias, "CXL");
-
-static int is_system_ram(struct resource *res, void *arg)
-{
-	struct cxl_region *cxlr = arg;
-	struct cxl_region_params *p = &cxlr->params;
-
-	dev_dbg(&cxlr->dev, "%pr has System RAM: %pr\n", p->res, res);
-	return 1;
-}
 
 static void shutdown_notifiers(void *_cxlr)
 {
@@ -3965,16 +3938,7 @@ static int cxl_region_probe(struct device *dev)
 			dev_dbg(&cxlr->dev, "CXL EDAC registration for region_id=%d failed\n",
 				cxlr->id);
 
-		/*
-		 * The region can not be manged by CXL if any portion of
-		 * it is already online as 'System RAM'
-		 */
-		if (walk_iomem_res_desc(IORES_DESC_NONE,
-					IORESOURCE_SYSTEM_RAM | IORESOURCE_BUSY,
-					p->res->start, p->res->end, cxlr,
-					is_system_ram) > 0)
-			return 0;
-		return devm_cxl_add_dax_region(cxlr);
+		return cxl_enable_memctrl(cxlr);
 	default:
 		dev_dbg(&cxlr->dev, "unsupported region mode: %d\n",
 			cxlr->mode);
