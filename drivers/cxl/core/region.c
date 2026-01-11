@@ -639,6 +639,9 @@ static ssize_t ctrl_show(struct device *dev, struct device_attribute *attr,
 	case CXL_MEMCTRL_DAX:
 		desc = "dax";
 		break;
+	case CXL_MEMCTRL_SYSRAM:
+		desc = "sysram";
+		break;
 	default:
 		desc = "";
 		break;
@@ -663,6 +666,8 @@ static ssize_t ctrl_store(struct device *dev, struct device_attribute *attr,
 
 	if (sysfs_streq(buf, "dax"))
 		cxlr->memctrl = CXL_MEMCTRL_DAX;
+	else if (sysfs_streq(buf, "sysram"))
+		cxlr->memctrl = CXL_MEMCTRL_SYSRAM;
 	else
 		return -EINVAL;
 
