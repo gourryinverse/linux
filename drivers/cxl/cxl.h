@@ -509,12 +509,14 @@ enum cxl_partition_mode {
  *   Auto   - either BIOS-configured as SysRAM, or default to DAX
  *   DAX    - creates a dax_region controller for the cxl_region
  *   SYSRAM - hotplugs the region directly as System RAM
+ *   PMEM   - persistent memory controller (nvdimm)
  */
 enum cxl_memctrl_mode {
 	CXL_MEMCTRL_NONE,
 	CXL_MEMCTRL_AUTO,
 	CXL_MEMCTRL_DAX,
 	CXL_MEMCTRL_SYSRAM,
+	CXL_MEMCTRL_PMEM,
 };
 
 /*

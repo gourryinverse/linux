@@ -46,6 +46,7 @@ u64 cxl_dpa_to_hpa(struct cxl_region *cxlr, const struct cxl_memdev *cxlmd,
 		   u64 dpa);
 int cxl_enable_memctrl(struct cxl_region *cxlr);
 int devm_cxl_add_dax_region(struct cxl_region *cxlr);
+int devm_cxl_add_pmem_region(struct cxl_region *cxlr);
 
 #else
 static inline u64 cxl_dpa_to_hpa(struct cxl_region *cxlr,

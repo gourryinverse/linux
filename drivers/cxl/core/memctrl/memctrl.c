@@ -36,6 +36,8 @@ int cxl_enable_memctrl(struct cxl_region *cxlr)
 		return devm_cxl_add_dax_region(cxlr);
 	case CXL_MEMCTRL_SYSRAM:
 		return devm_cxl_add_sysram_region(cxlr);
+	case CXL_MEMCTRL_PMEM:
+		return devm_cxl_add_pmem_region(cxlr);
 	default:
 		return -EINVAL;
 	}
