@@ -211,6 +211,38 @@ config CXL_REGION
 
 	  If unsure say 'y'
 
+choice
+	prompt "CXL Region Auto Control Mode"
+	depends on CXL_REGION
+	default CXL_REGION_CTRL_AUTO_DAX
+	help
+	  Select the default controller for CXL regions when ctrl mode is
+	  set to 'auto'. This determines how CXL memory regions are exposed
+	  to the system when no explicit control mode is specified.
+
+config CXL_REGION_CTRL_AUTO_DAX
+	bool "DAX"
+	help
+	  When a CXL region's control mode is 'auto', create a DAX region
+	  controller. This allows fine-grained control over the memory region
+	  through the DAX subsystem, and the region can later be converted to
+	  System RAM via daxctl.
+
+	  This is the default and recommended option for most use cases.
+
+config CXL_REGION_CTRL_AUTO_SYSRAM
+	bool "System RAM"
+	help
+	  When a CXL region's control mode is 'auto', hotplug the region
+	  directly as System RAM. This makes the CXL memory immediately
+	  available to the kernel's memory allocator without requiring
+	  additional userspace configuration.
+
+	  Select this if you want CXL memory to be automatically available
+	  as regular system memory.
+
+endchoice
+
 config CXL_REGION_INVALIDATION_TEST
 	bool "CXL: Region Cache Management Bypass (TEST)"
 	depends on CXL_REGION

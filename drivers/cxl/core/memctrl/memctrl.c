@@ -31,6 +31,8 @@ int cxl_enable_memctrl(struct cxl_region *cxlr)
 					p->res->start, p->res->end, cxlr,
 					is_system_ram) > 0)
 			return 0;
+		if (IS_ENABLED(CONFIG_CXL_REGION_CTRL_AUTO_SYSRAM))
+			return devm_cxl_add_sysram_region(cxlr);
 		return devm_cxl_add_dax_region(cxlr);
 	case CXL_MEMCTRL_DAX:
 		return devm_cxl_add_dax_region(cxlr);
