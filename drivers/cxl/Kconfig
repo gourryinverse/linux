@@ -243,6 +243,46 @@ config CXL_REGION_CTRL_AUTO_SYSRAM
 
 endchoice
 
+choice
+	prompt "CXL SYSRAM Auto Online Mode"
+	depends on CXL_REGION
+	default CXL_REGION_SYSRAM_DEFAULT_OFFLINE
+	help
+	  Select whether CXL memory hotplugged as System RAM should be
+	  automatically onlined and in which zone. This applies when the
+	  region controller is set to SYSRAM (either explicitly or via
+	  the auto control mode).
+
+config CXL_REGION_SYSRAM_DEFAULT_OFFLINE
+	bool "Offline"
+	help
+	  Leave the memory offline after hotplug. The memory must be
+	  manually onlined via sysfs or other mechanisms before it can
+	  be used by the system.
+
+	  This is the default and most conservative option.
+
+config CXL_REGION_SYSRAM_DEFAULT_ONLINE
+	bool "Online (Movable)"
+	help
+	  Automatically online the memory as ZONE_MOVABLE after hotplug.
+	  ZONE_MOVABLE memory can be used for user pages and is eligible
+	  for memory hotremove, but cannot be used for kernel allocations.
+
+	  Select this for memory that may need to be hotremoved later.
+
+config CXL_REGION_SYSRAM_DEFAULT_ONLINE_NORMAL
+	bool "Online (Normal)"
+	help
+	  Automatically online the memory as ZONE_NORMAL after hotplug.
+	  ZONE_NORMAL memory can be used for all allocations including
+	  kernel allocations, but may not be hotremovable.
+
+	  Select this for maximum memory utilization when hotremove is
+	  not required.
+
+endchoice
+
 config CXL_REGION_INVALIDATION_TEST
 	bool "CXL: Region Cache Management Bypass (TEST)"
 	depends on CXL_REGION

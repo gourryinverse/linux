@@ -129,12 +129,69 @@ static int offline_memory_block_cb(struct memory_block *mem, void *arg)
 	return *rc;
 }
 
+static int cxl_sysram_online_memory(struct range *range, int online_type)
+{
+	struct online_memory_cb_arg cb_arg = {
+		.online_type = online_type,
+		.rc = 0,
+	};
+	int rc;
+
+	rc = walk_memory_blocks(range->start, range_len(range),
+				&cb_arg, online_memory_block_cb);
+	if (!rc)
+		rc = cb_arg.rc;
+
+	return rc;
+}
+
+static int cxl_sysram_offline_memory(struct range *range)
+{
+	int offline_rc = 0;
+	int rc;
+
+	rc = walk_memory_blocks(range->start, range_len(range),
+				&offline_rc, offline_memory_block_cb);
+	if (!rc)
+		rc = offline_rc;
+
+	return rc;
+}
+
+static int cxl_sysram_auto_online(struct device *dev, struct range *range)
+{
+	int online_type;
+	int rc;
+
+	if (IS_ENABLED(CONFIG_CXL_REGION_SYSRAM_DEFAULT_OFFLINE))
+		return 0;
+
+	if (IS_ENABLED(CONFIG_CXL_REGION_SYSRAM_DEFAULT_ONLINE))
+		online_type = MMOP_ONLINE_MOVABLE;
+	else if (IS_ENABLED(CONFIG_CXL_REGION_SYSRAM_DEFAULT_ONLINE_NORMAL))
+		online_type = MMOP_ONLINE_KERNEL;
+	else
+		online_type = MMOP_ONLINE_MOVABLE;
+
+	rc = lock_device_hotplug_sysfs();
+	if (rc)
+		return rc;
+
+	rc = cxl_sysram_online_memory(range, online_type);
+
+	unlock_device_hotplug();
+
+	if (rc)
+		dev_warn(dev, "auto-online failed: %d\n", rc);
+
+	return rc;
+}
+
 static ssize_t state_store(struct device *dev,
 			   struct device_attribute *attr,
 			   const char *buf, size_t len)
 {
 	struct cxl_region *cxlr = to_cxl_region(dev);
-	struct online_memory_cb_arg cb_arg;
 	struct range range;
 	int rc;
 
@@ -149,30 +206,14 @@ static ssize_t state_store(struct device *dev,
 	if (rc)
 		return rc;
 
-	if (sysfs_streq(buf, "online")) {
-		cb_arg.online_type = MMOP_ONLINE_MOVABLE;
-		cb_arg.rc = 0;
-		rc = walk_memory_blocks(range.start, range_len(&range),
-					&cb_arg, online_memory_block_cb);
-		if (!rc)
-			rc = cb_arg.rc;
-	} else if (sysfs_streq(buf, "online_normal")) {
-		cb_arg.online_type = MMOP_ONLINE;
-		cb_arg.rc = 0;
-		rc = walk_memory_blocks(range.start, range_len(&range),
-					&cb_arg, online_memory_block_cb);
-		if (!rc)
-			rc = cb_arg.rc;
-	} else if (sysfs_streq(buf, "offline")) {
-		int offline_rc = 0;
-
-		rc = walk_memory_blocks(range.start, range_len(&range),
-					&offline_rc, offline_memory_block_cb);
-		if (!rc)
-			rc = offline_rc;
-	} else {
+	if (sysfs_streq(buf, "online"))
+		rc = cxl_sysram_online_memory(&range, MMOP_ONLINE_MOVABLE);
+	else if (sysfs_streq(buf, "online_normal"))
+		rc = cxl_sysram_online_memory(&range, MMOP_ONLINE);
+	else if (sysfs_streq(buf, "offline"))
+		rc = cxl_sysram_offline_memory(&range);
+	else
 		rc = -EINVAL;
-	}
 
 	unlock_device_hotplug();
 
@@ -332,6 +373,10 @@ int devm_cxl_add_sysram_region(struct cxl_region *cxlr)
 	dev_dbg(dev, "%s: added %llu bytes as System RAM\n", dev_name(dev),
 		(unsigned long long)total_len);
 
+	rc = cxl_sysram_auto_online(dev, &range);
+	if (rc)
+		goto err_auto_online;
+
 	dev_set_drvdata(dev, data);
 	rc = devm_device_add_group(dev, &cxl_sysram_region_group);
 	if (rc)
@@ -341,6 +386,7 @@ int devm_cxl_add_sysram_region(struct cxl_region *cxlr)
 
 err_add_group:
 	dev_set_drvdata(dev, NULL);
+err_auto_online:
 	/* if this fails, memory cannot be removed from the system until reboot */
 	remove_memory(range.start, range_len(&range));
 err_add_memory:
