@@ -2,6 +2,7 @@
 /* Copyright(c) 2026 Meta Inc. All rights reserved. */
 #include <linux/memremap.h>
 #include <linux/memory.h>
+#include <linux/mmzone.h>
 #include <linux/module.h>
 #include <linux/device.h>
 #include <linux/slab.h>
@@ -23,6 +24,14 @@ struct cxl_sysram_data {
 	const char *res_name;
 	int mgid;
 	struct resource *res;
+	struct range range;
+	struct notifier_block memory_notifier;
+	/*
+	 * Last online type requested by user via state sysfs or auto-online.
+	 * Used to enforce zone consistency when memory blocks are onlined.
+	 * MMOP_OFFLINE means no online preference has been set yet.
+	 */
+	int last_online_type;
 };
 
 static DEFINE_MUTEX(cxl_memory_type_lock);
@@ -158,7 +167,58 @@ static int cxl_sysram_offline_memory(struct range *range)
 	return rc;
 }
 
-static int cxl_sysram_auto_online(struct device *dev, struct range *range)
+/*
+ * Memory notifier callback to enforce zone consistency.
+ *
+ * When the user (or auto-online) requests memory to be onlined into
+ * ZONE_MOVABLE, reject any subsequent attempts to online memory blocks
+ * from this region into a different zone (e.g., ZONE_NORMAL). This prevents
+ * accidental zone mixing which could lead to memory fragmentation and
+ * offlining failures.
+ */
+static int cxl_sysram_memory_notify_cb(struct notifier_block *nb,
+				       unsigned long action, void *arg)
+{
+	struct cxl_sysram_data *data = container_of(nb, struct cxl_sysram_data,
+						    memory_notifier);
+	struct memory_notify *mhp = arg;
+	unsigned long start_phys = PFN_PHYS(mhp->start_pfn);
+	unsigned long size = PFN_PHYS(mhp->nr_pages);
+	struct page *page;
+
+	if (action != MEM_GOING_ONLINE)
+		return NOTIFY_DONE;
+
+	/* Check if this memory block overlaps with our region */
+	if (start_phys + size <= data->range.start ||
+	    start_phys > data->range.end)
+		return NOTIFY_DONE;
+
+	/*
+	 * If no online preference has been set (MMOP_OFFLINE), allow any zone.
+	 * Also allow if the preference wasn't for ZONE_MOVABLE.
+	 */
+	if (data->last_online_type != MMOP_ONLINE_MOVABLE)
+		return NOTIFY_DONE;
+
+	/*
+	 * The zone has already been assigned to the pages at this point
+	 * via move_pfn_range_to_zone() before MEM_GOING_ONLINE is sent.
+	 * Check if it's ZONE_MOVABLE as expected.
+	 */
+	page = pfn_to_page(mhp->start_pfn);
+
+	if (!is_zone_movable_page(page)) {
+		pr_warn("CXL sysram: rejecting online to non-movable zone for range %#lx-%#lx (expected ZONE_MOVABLE)\n",
+			start_phys, start_phys + size - 1);
+		return NOTIFY_BAD;
+	}
+
+	return NOTIFY_OK;
+}
+
+static int cxl_sysram_auto_online(struct device *dev, struct range *range,
+				  struct cxl_sysram_data *data)
 {
 	int online_type;
 	int rc;
@@ -172,6 +232,9 @@ static int cxl_sysram_auto_online(struct device *dev, struct range *range)
 		online_type = MMOP_ONLINE_KERNEL;
 	else
 		online_type = MMOP_ONLINE_MOVABLE;
+
+	/* Record the auto-online type for zone enforcement */
+	data->last_online_type = online_type;
 
 	rc = lock_device_hotplug_sysfs();
 	if (rc)
@@ -187,15 +250,41 @@ static int cxl_sysram_auto_online(struct device *dev, struct range *range)
 	return rc;
 }
 
+static ssize_t state_show(struct device *dev,
+			  struct device_attribute *attr, char *buf)
+{
+	struct cxl_sysram_data *data;
+
+	data = dev_get_drvdata(dev);
+	if (!data)
+		return -ENODEV;
+
+	switch (data->last_online_type) {
+	case MMOP_ONLINE_MOVABLE:
+		return sysfs_emit(buf, "online\n");
+	case MMOP_ONLINE_KERNEL:
+		return sysfs_emit(buf, "online_normal\n");
+	case MMOP_OFFLINE:
+	default:
+		return sysfs_emit(buf, "offline\n");
+	}
+}
+
 static ssize_t state_store(struct device *dev,
 			   struct device_attribute *attr,
 			   const char *buf, size_t len)
 {
 	struct cxl_region *cxlr = to_cxl_region(dev);
+	struct cxl_sysram_data *data;
 	struct range range;
+	int online_type = MMOP_OFFLINE;
 	int rc;
 
 	if (!cxlr)
+		return -ENODEV;
+
+	data = dev_get_drvdata(dev);
+	if (!data)
 		return -ENODEV;
 
 	rc = cxl_sysram_range(cxlr, &range);
@@ -206,23 +295,30 @@ static ssize_t state_store(struct device *dev,
 	if (rc)
 		return rc;
 
-	if (sysfs_streq(buf, "online"))
-		rc = cxl_sysram_online_memory(&range, MMOP_ONLINE_MOVABLE);
-	else if (sysfs_streq(buf, "online_normal"))
-		rc = cxl_sysram_online_memory(&range, MMOP_ONLINE);
-	else if (sysfs_streq(buf, "offline"))
+	if (sysfs_streq(buf, "online")) {
+		online_type = MMOP_ONLINE_MOVABLE;
+		rc = cxl_sysram_online_memory(&range, online_type);
+	} else if (sysfs_streq(buf, "online_normal")) {
+		online_type = MMOP_ONLINE;
+		rc = cxl_sysram_online_memory(&range, online_type);
+	} else if (sysfs_streq(buf, "offline")) {
 		rc = cxl_sysram_offline_memory(&range);
-	else
+	} else {
 		rc = -EINVAL;
+	}
 
 	unlock_device_hotplug();
 
 	if (rc)
 		return rc;
 
+	/* Record the online type for zone enforcement on success */
+	if (online_type != MMOP_OFFLINE)
+		data->last_online_type = online_type;
+
 	return len;
 }
-static DEVICE_ATTR_WO(state);
+static DEVICE_ATTR_RW(state);
 
 static ssize_t hotplug_store(struct device *dev,
 			     struct device_attribute *attr,
@@ -273,6 +369,11 @@ static void cxl_sysram_unregister(void *_data)
 		.start = data->res->start,
 		.end = data->res->end
 	};
+
+	unregister_memory_notifier(&data->memory_notifier);
+
+	range.start = data->res->start;
+	range.end = data->res->end;
 
 	/* We have one shot for removal, otherwise it's stuck til reboot */
 	if (!offline_and_remove_memory(range.start, range_len(&range))) {
@@ -334,6 +435,10 @@ int devm_cxl_add_sysram_region(struct cxl_region *cxlr)
 		goto err_data;
 	}
 
+	/* Initialize range and online type tracking */
+	data->range = range;
+	data->last_online_type = MMOP_OFFLINE;
+
 	data->res_name = kstrdup(dev_name(dev), GFP_KERNEL);
 	if (!data->res_name) {
 		rc = -ENOMEM;
@@ -373,11 +478,20 @@ int devm_cxl_add_sysram_region(struct cxl_region *cxlr)
 	dev_dbg(dev, "%s: added %llu bytes as System RAM\n", dev_name(dev),
 		(unsigned long long)total_len);
 
-	rc = cxl_sysram_auto_online(dev, &range);
+	/* Set drvdata early so auto_online can access it */
+	dev_set_drvdata(dev, data);
+
+	/* Register memory notifier for zone enforcement */
+	data->memory_notifier.notifier_call = cxl_sysram_memory_notify_cb;
+	data->memory_notifier.priority = CXL_CALLBACK_PRI;
+	rc = register_memory_notifier(&data->memory_notifier);
+	if (rc)
+		goto err_notifier;
+
+	rc = cxl_sysram_auto_online(dev, &range, data);
 	if (rc)
 		goto err_auto_online;
 
-	dev_set_drvdata(dev, data);
 	rc = devm_device_add_group(dev, &cxl_sysram_region_group);
 	if (rc)
 		goto err_add_group;
@@ -385,9 +499,11 @@ int devm_cxl_add_sysram_region(struct cxl_region *cxlr)
 	return devm_add_action_or_reset(dev, cxl_sysram_unregister, data);
 
 err_add_group:
-	dev_set_drvdata(dev, NULL);
 err_auto_online:
 	/* if this fails, memory cannot be removed from the system until reboot */
+	unregister_memory_notifier(&data->memory_notifier);
+err_notifier:
+	dev_set_drvdata(dev, NULL);
 	remove_memory(range.start, range_len(&range));
 err_add_memory:
 	remove_resource(res);
