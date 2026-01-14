@@ -44,9 +44,15 @@ static int dax_kmem_range(struct dev_dax *dev_dax, int i, struct range *r)
 	return 0;
 }
 
+#define DAX_KMEM_UNPLUGGED	(-1)
+
 struct dax_kmem_data {
 	const char *res_name;
 	int mgid;
+	int numa_node;
+	struct dev_dax *dev_dax;
+	int state;
+	struct mutex lock; /* protects hotplug state transitions */
 	struct resource *res[];
 };
 
@@ -69,13 +75,15 @@ static void kmem_put_memory_types(void)
  * dax_kmem_do_hotplug - hotplug memory for dax kmem device
  * @dev_dax: the dev_dax instance
  * @data: the dax_kmem_data structure with resource tracking
+ * @online_type: MMOP_OFFLINE, MMOP_ONLINE, or MMOP_ONLINE_MOVABLE
  *
- * Hotplugs all ranges in the dev_dax region as system memory.
+ * Hotplugs all ranges in the dev_dax region as system memory using
+ * the specified online type.
  *
  * Returns the number of successfully mapped ranges, or negative error.
  */
 static int dax_kmem_do_hotplug(struct dev_dax *dev_dax,
-			       struct dax_kmem_data *data)
+			       struct dax_kmem_data *data, int online_type)
 {
 	struct device *dev = &dev_dax->dev;
 	int i, rc, mapped = 0;
@@ -124,10 +132,14 @@ static int dax_kmem_do_hotplug(struct dev_dax *dev_dax,
 		/*
 		 * Ensure that future kexec'd kernels will not treat
 		 * this as RAM automatically.
+		 *
+		 * Use add_memory_driver_managed() with explicit online_type
+		 * to control the online state and avoid surprises from
+		 * system auto-online policy.
 		 */
 		rc = add_memory_driver_managed(data->mgid, range.start,
 					       range_len(&range), kmem_name,
-					       mhp_flags, MMOP_SYSTEM_DEFAULT);
+					       mhp_flags, online_type);
 
 		if (rc < 0) {
 			dev_warn(dev, "mapping%d: %#llx-%#llx memory add failed\n",
@@ -151,14 +163,13 @@ static int dax_kmem_do_hotplug(struct dev_dax *dev_dax,
  * @dev_dax: the dev_dax instance
  * @data: the dax_kmem_data structure with resource tracking
  *
- * Removes all ranges in the dev_dax region.
+ * Offlines and removes all ranges in the dev_dax region.
  *
- * Returns the number of successfully removed ranges.
+ * Returns the number of successfully removed ranges, or negative error.
  */
 static int dax_kmem_do_hotremove(struct dev_dax *dev_dax,
 				 struct dax_kmem_data *data)
 {
-	struct device *dev = &dev_dax->dev;
 	int i, success = 0;
 
 	for (i = 0; i < dev_dax->nr_range; i++) {
@@ -173,7 +184,7 @@ static int dax_kmem_do_hotremove(struct dev_dax *dev_dax,
 		if (!data->res[i])
 			continue;
 
-		rc = remove_memory(range.start, range_len(&range));
+		rc = offline_and_remove_memory(range.start, range_len(&range));
 		if (rc == 0) {
 			remove_resource(data->res[i]);
 			kfree(data->res[i]);
@@ -182,11 +193,18 @@ static int dax_kmem_do_hotremove(struct dev_dax *dev_dax,
 			continue;
 		}
 		any_hotremove_failed = true;
-		dev_err(dev, "mapping%d: %#llx-%#llx offline failed\n",
+		dev_err(&dev_dax->dev,
+			"mapping%d: %#llx-%#llx offline and remove failed\n",
 			i, range.start, range.end);
 	}
 
 	return success;
+}
+#else
+static int dax_kmem_do_hotremove(struct dev_dax *dev_dax,
+				 struct dax_kmem_data *data)
+{
+	return -ENODEV;
 }
 #endif /* CONFIG_MEMORY_HOTREMOVE */
 
@@ -288,10 +306,116 @@ rollback:
 			continue;
 
 		/* Best effort rollback - ignore failures */
-		online_memory_range(range.start, range_len(&range), MMOP_ONLINE);
+		online_memory_range(range.start, range_len(&range), data->state);
 	}
 	return rc;
 }
+
+static int dax_kmem_parse_state(const char *buf)
+{
+	if (sysfs_streq(buf, "unplug"))
+		return DAX_KMEM_UNPLUGGED;
+	if (sysfs_streq(buf, "offline"))
+		return MMOP_OFFLINE;
+	if (sysfs_streq(buf, "online"))
+		return MMOP_ONLINE;
+	if (sysfs_streq(buf, "online_movable"))
+		return MMOP_ONLINE_MOVABLE;
+	return -EINVAL;
+}
+
+static ssize_t hotplug_show(struct device *dev,
+			    struct device_attribute *attr, char *buf)
+{
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+	const char *state_str;
+
+	if (!data)
+		return -ENXIO;
+
+	switch (data->state) {
+	case DAX_KMEM_UNPLUGGED:
+		state_str = "unplugged";
+		break;
+	case MMOP_OFFLINE:
+		state_str = "offline";
+		break;
+	case MMOP_ONLINE:
+		state_str = "online";
+		break;
+	case MMOP_ONLINE_MOVABLE:
+		state_str = "online_movable";
+		break;
+	default:
+		state_str = "unknown";
+		break;
+	}
+
+	return sysfs_emit(buf, "%s\n", state_str);
+}
+
+static ssize_t hotplug_store(struct device *dev, struct device_attribute *attr,
+			     const char *buf, size_t len)
+{
+	struct dev_dax *dev_dax = to_dev_dax(dev);
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+	int online_type;
+	int rc;
+
+	if (!data)
+		return -ENXIO;
+
+	online_type = dax_kmem_parse_state(buf);
+	if (online_type < DAX_KMEM_UNPLUGGED)
+		return online_type;
+
+	guard(mutex)(&data->lock);
+
+	/* Already in requested state */
+	if (data->state == online_type)
+		return len;
+
+	if (online_type == DAX_KMEM_UNPLUGGED) {
+		rc = dax_kmem_do_hotremove(dev_dax, data);
+		if (rc < 0) {
+			dev_warn(dev, "hotplug state is inconsistent\n");
+			return rc;
+		}
+		data->state = DAX_KMEM_UNPLUGGED;
+		return len;
+	}
+
+	if (online_type == MMOP_OFFLINE) {
+		/* Can only offline from an online state */
+		if (data->state != MMOP_ONLINE && data->state != MMOP_ONLINE_MOVABLE)
+			return -EINVAL;
+		rc = dax_kmem_do_offline(dev_dax, data);
+		if (rc < 0) {
+			dev_warn(dev, "hotplug state is inconsistent\n");
+			return rc;
+		}
+		data->state = MMOP_OFFLINE;
+		return len;
+	}
+
+	/* online_type is MMOP_ONLINE or MMOP_ONLINE_MOVABLE */
+
+	/* Cannot switch between online types without offlining first */
+	if (data->state == MMOP_ONLINE || data->state == MMOP_ONLINE_MOVABLE)
+		return -EBUSY;
+
+	if (data->state == MMOP_OFFLINE)
+		rc = dax_kmem_do_online(dev_dax, data, online_type);
+	else
+		rc = dax_kmem_do_hotplug(dev_dax, data, online_type);
+
+	if (rc < 0)
+		return rc;
+
+	data->state = online_type;
+	return len;
+}
+static DEVICE_ATTR_RW(hotplug);
 
 static int dev_dax_kmem_probe(struct dev_dax *dev_dax)
 {
@@ -360,12 +484,29 @@ static int dev_dax_kmem_probe(struct dev_dax *dev_dax)
 	if (rc < 0)
 		goto err_reg_mgid;
 	data->mgid = rc;
+	data->numa_node = numa_node;
+	data->dev_dax = dev_dax;
+	mutex_init(&data->lock);
 
 	dev_set_drvdata(dev, data);
 
-	rc = dax_kmem_do_hotplug(dev_dax, data);
+	/*
+	 * Hotplug the memory using the system default online policy.
+	 * This preserves backwards compatibility for existing users who
+	 * rely on auto-online behavior.
+	 */
+	rc = dax_kmem_do_hotplug(dev_dax, data, MMOP_SYSTEM_DEFAULT);
 	if (rc < 0)
 		goto err_hotplug;
+	/*
+	 * dax_kmem_do_hotplug returns the count of mapped ranges on success.
+	 * Query the system default to determine the actual memory state.
+	 */
+	data->state = mhp_get_default_online_type();
+
+	rc = device_create_file(dev, &dev_attr_hotplug);
+	if (rc)
+		dev_warn(dev, "failed to create hotplug sysfs entry\n");
 
 	return 0;
 
@@ -388,6 +529,8 @@ static void dev_dax_kmem_remove(struct dev_dax *dev_dax)
 	int node = dev_dax->target_node;
 	struct device *dev = &dev_dax->dev;
 	struct dax_kmem_data *data = dev_get_drvdata(dev);
+
+	device_remove_file(dev, &dev_attr_hotplug);
 
 	/*
 	 * We have one shot for removing memory, if some memory blocks were not
@@ -417,6 +560,10 @@ static void dev_dax_kmem_remove(struct dev_dax *dev_dax)
 #else
 static void dev_dax_kmem_remove(struct dev_dax *dev_dax)
 {
+	struct device *dev = &dev_dax->dev;
+
+	device_remove_file(dev, &dev_attr_hotplug);
+
 	/*
 	 * Without hotremove purposely leak the request_mem_region() for the
 	 * device-dax range and return '0' to ->remove() attempts. The removal
