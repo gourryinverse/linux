@@ -1343,6 +1343,34 @@ static int online_memory_block(struct memory_block *mem, void *arg)
 	return device_online(&mem->dev);
 }
 
+/**
+ * online_memory_range - online memory blocks in a range
+ * @start: physical start address of memory region
+ * @size: size of memory region
+ * @online_type: MMOP_ONLINE, MMOP_ONLINE_KERNEL, or MMOP_ONLINE_MOVABLE
+ *
+ * Online all memory blocks in the specified range with the given online type.
+ * The memory must have already been added to the system.
+ *
+ * Returns 0 on success, negative error code on failure.
+ */
+int online_memory_range(u64 start, u64 size, int online_type)
+{
+	int rc;
+
+	if (online_type == MMOP_OFFLINE ||
+	    online_type > MMOP_ONLINE_MOVABLE)
+		return -EINVAL;
+
+	lock_device_hotplug();
+	rc = walk_memory_blocks(start, size, &online_type,
+				online_memory_block);
+	unlock_device_hotplug();
+
+	return rc;
+}
+EXPORT_SYMBOL_GPL(online_memory_range);
+
 #ifndef arch_supports_memmap_on_memory
 static inline bool arch_supports_memmap_on_memory(unsigned long vmemmap_size)
 {
@@ -1656,9 +1684,16 @@ EXPORT_SYMBOL_GPL(add_memory);
  *
  * The resource_name (visible via /proc/iomem) has to have the format
  * "System RAM ($DRIVER)".
+ *
+ * @online_type specifies the online behavior: MMOP_ONLINE, MMOP_ONLINE_KERNEL,
+ * MMOP_ONLINE_MOVABLE to online with that type, MMOP_OFFLINE to leave offline,
+ * or MMOP_SYSTEM_DEFAULT to use the system default policy.
+ *
+ * Returns 0 on success, negative error code on failure.
  */
 int add_memory_driver_managed(int nid, u64 start, u64 size,
-			      const char *resource_name, mhp_t mhp_flags)
+			      const char *resource_name, mhp_t mhp_flags,
+			      int online_type)
 {
 	struct resource *res;
 	int rc;
@@ -1666,6 +1701,13 @@ int add_memory_driver_managed(int nid, u64 start, u64 size,
 	if (!resource_name ||
 	    strstr(resource_name, "System RAM (") != resource_name ||
 	    resource_name[strlen(resource_name) - 1] != ')')
+		return -EINVAL;
+
+	/* Convert system default to actual online type */
+	if (online_type == MMOP_SYSTEM_DEFAULT)
+		online_type = mhp_get_default_online_type();
+
+	if (online_type < 0 || online_type > MMOP_ONLINE_MOVABLE)
 		return -EINVAL;
 
 	lock_device_hotplug();
@@ -1676,7 +1718,7 @@ int add_memory_driver_managed(int nid, u64 start, u64 size,
 		goto out_unlock;
 	}
 
-	rc = add_memory_resource(nid, res, mhp_flags);
+	rc = __add_memory_resource(nid, res, mhp_flags, online_type);
 	if (rc < 0)
 		release_memory_resource(res);
 
@@ -2411,6 +2453,23 @@ static int __offline_memory(u64 start, u64 size)
 	kfree(online_types);
 	return rc;
 }
+
+/*
+ * Try to offline a memory range. Might take a long time to finish in case
+ * memory is still in use. In case of failure, already offlined memory blocks
+ * will be re-onlined.
+ */
+int offline_memory(u64 start, u64 size)
+{
+	int rc;
+
+	lock_device_hotplug();
+	rc = __offline_memory(start, size);
+	unlock_device_hotplug();
+
+	return rc;
+}
+EXPORT_SYMBOL_GPL(offline_memory);
 
 /*
  * Try to offline and remove memory. Might take a long time to finish in case
