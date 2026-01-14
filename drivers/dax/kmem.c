@@ -190,6 +190,109 @@ static int dax_kmem_do_hotremove(struct dev_dax *dev_dax,
 }
 #endif /* CONFIG_MEMORY_HOTREMOVE */
 
+/**
+ * dax_kmem_do_online - online memory blocks for dax kmem device
+ * @dev_dax: the dev_dax instance
+ * @data: the dax_kmem_data structure with resource tracking
+ * @online_type: MMOP_ONLINE or MMOP_ONLINE_MOVABLE
+ *
+ * Onlines all ranges in the dev_dax region with the specified online type.
+ * On partial failure, previously onlined ranges are rolled back to offline.
+ *
+ * Returns 0 on success, negative error code on failure.
+ */
+static int dax_kmem_do_online(struct dev_dax *dev_dax,
+			      struct dax_kmem_data *data, int online_type)
+{
+	int i, j, rc;
+
+	for (i = 0; i < dev_dax->nr_range; i++) {
+		struct range range;
+
+		rc = dax_kmem_range(dev_dax, i, &range);
+		if (rc)
+			continue;
+
+		if (!data->res[i])
+			continue;
+
+		rc = online_memory_range(range.start, range_len(&range),
+					 online_type);
+		if (rc)
+			goto rollback;
+	}
+
+	return 0;
+
+rollback:
+	/* Rollback previously onlined ranges */
+	for (j = 0; j < i; j++) {
+		struct range range;
+
+		if (dax_kmem_range(dev_dax, j, &range))
+			continue;
+
+		if (!data->res[j])
+			continue;
+
+		/* Best effort rollback - ignore failures */
+		offline_memory(range.start, range_len(&range));
+	}
+	return rc;
+}
+
+/**
+ * dax_kmem_do_offline - offline memory blocks for dax kmem device
+ * @dev_dax: the dev_dax instance
+ * @data: the dax_kmem_data structure with resource tracking
+ *
+ * Offlines all ranges in the dev_dax region.
+ * On partial failure, previously offlined ranges are rolled back to online.
+ *
+ * Returns 0 on success, negative error code on failure.
+ */
+static int dax_kmem_do_offline(struct dev_dax *dev_dax,
+			       struct dax_kmem_data *data)
+{
+	int i, j, rc;
+
+	for (i = 0; i < dev_dax->nr_range; i++) {
+		struct range range;
+
+		rc = dax_kmem_range(dev_dax, i, &range);
+		if (rc)
+			continue;
+
+		if (!data->res[i])
+			continue;
+
+		rc = offline_memory(range.start, range_len(&range));
+		if (rc)
+			goto rollback;
+	}
+
+	return 0;
+
+rollback:
+	/*
+	 * Rollback previously offlined ranges. Use MMOP_ONLINE as a safe
+	 * default - the original online type is not tracked per-range.
+	 */
+	for (j = 0; j < i; j++) {
+		struct range range;
+
+		if (dax_kmem_range(dev_dax, j, &range))
+			continue;
+
+		if (!data->res[j])
+			continue;
+
+		/* Best effort rollback - ignore failures */
+		online_memory_range(range.start, range_len(&range), MMOP_ONLINE);
+	}
+	return rc;
+}
+
 static int dev_dax_kmem_probe(struct dev_dax *dev_dax)
 {
 	struct device *dev = &dev_dax->dev;
