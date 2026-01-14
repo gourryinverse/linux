@@ -178,7 +178,7 @@ static int dev_dax_kmem_probe(struct dev_dax *dev_dax)
 				range_len(&range), kmem_name, mhp_flags,
 				MMOP_SYSTEM_DEFAULT);
 
-		if (rc) {
+		if (rc < 0) {
 			dev_warn(dev, "mapping%d: %#llx-%#llx memory add failed\n",
 					i, range.start, range.end);
 			remove_resource(res);

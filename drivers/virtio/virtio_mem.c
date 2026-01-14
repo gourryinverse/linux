@@ -656,15 +656,16 @@ static int virtio_mem_add_memory(struct virtio_mem *vm, uint64_t addr,
 	rc = add_memory_driver_managed(vm->mgid, addr, size, vm->resource_name,
 				       MHP_MERGE_RESOURCE | MHP_NID_IS_MGID,
 				       MMOP_SYSTEM_DEFAULT);
-	if (rc) {
+	if (rc < 0) {
 		atomic64_sub(size, &vm->offline_size);
 		dev_warn(&vm->vdev->dev, "adding memory failed: %d\n", rc);
 		/*
 		 * TODO: Linux MM does not properly clean up yet in all cases
 		 * where adding of memory failed - especially on -ENOMEM.
 		 */
+		return rc;
 	}
-	return rc;
+	return 0;
 }
 
 /*

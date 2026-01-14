@@ -1689,7 +1689,7 @@ EXPORT_SYMBOL_GPL(add_memory);
  * MMOP_ONLINE_MOVABLE to online with that type, MMOP_OFFLINE to leave offline,
  * or MMOP_SYSTEM_DEFAULT to use the system default policy.
  *
- * Returns 0 on success, negative error code on failure.
+ * Returns the online type (MMOP_*) on success, negative error code on failure.
  */
 int add_memory_driver_managed(int nid, u64 start, u64 size,
 			      const char *resource_name, mhp_t mhp_flags,
@@ -1721,6 +1721,8 @@ int add_memory_driver_managed(int nid, u64 start, u64 size,
 	rc = __add_memory_resource(nid, res, mhp_flags, online_type);
 	if (rc < 0)
 		release_memory_resource(res);
+	else
+		rc = online_type;
 
 out_unlock:
 	unlock_device_hotplug();
