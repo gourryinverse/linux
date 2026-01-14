@@ -29,6 +29,8 @@ enum {
 	MMOP_ONLINE_KERNEL,
 	/* Online the memory to ZONE_MOVABLE. */
 	MMOP_ONLINE_MOVABLE,
+	/* Use system default online type from mhp_get_default_online_type(). */
+	MMOP_SYSTEM_DEFAULT,
 };
 
 /* Flags for add_memory() and friends to specify memory hotplug details. */

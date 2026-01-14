@@ -1490,7 +1490,8 @@ out:
  *
  * we are OK calling __meminit stuff here - we have CONFIG_MEMORY_HOTPLUG
  */
-int add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags)
+static int __add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags,
+				 int online_type)
 {
 	struct mhp_params params = { .pgprot = pgprot_mhp(PAGE_KERNEL) };
 	enum memblock_flags memblock_flags = MEMBLOCK_NONE;
@@ -1498,6 +1499,10 @@ int add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags)
 	u64 start, size;
 	bool new_node = false;
 	int ret;
+
+	/* Convert system default to actual online type */
+	if (online_type == MMOP_SYSTEM_DEFAULT)
+		online_type = mhp_get_default_online_type();
 
 	start = res->start;
 	size = resource_size(res);
@@ -1580,12 +1585,9 @@ int add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags)
 		merge_system_ram_resource(res);
 
 	/* online pages if requested */
-	if (mhp_get_default_online_type() != MMOP_OFFLINE) {
-		int online_type = mhp_get_default_online_type();
-
+	if (online_type != MMOP_OFFLINE)
 		walk_memory_blocks(start, size, &online_type,
 				   online_memory_block);
-	}
 
 	return ret;
 error:
@@ -1601,7 +1603,12 @@ error_mem_hotplug_end:
 	return ret;
 }
 
-/* requires device_hotplug_lock, see add_memory_resource() */
+int add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags)
+{
+	return __add_memory_resource(nid, res, mhp_flags, MMOP_SYSTEM_DEFAULT);
+}
+
+/* requires device_hotplug_lock, see __add_memory_resource() */
 int __add_memory(int nid, u64 start, u64 size, mhp_t mhp_flags)
 {
 	struct resource *res;
@@ -2357,12 +2364,12 @@ static int try_reonline_memory_block(struct memory_block *mem, void *arg)
 }
 
 /*
- * Try to offline and remove memory. Might take a long time to finish in case
- * memory is still in use. Primarily useful for memory devices that logically
- * unplugged all memory (so it's no longer in use) and want to offline + remove
- * that memory.
+ * Offline a memory range. In case of failure, already offlined memory blocks
+ * will be re-onlined.
+ *
+ * Caller must hold device hotplug lock.
  */
-int offline_and_remove_memory(u64 start, u64 size)
+static int __offline_memory(u64 start, u64 size)
 {
 	const unsigned long mb_count = size / memory_block_size_bytes();
 	uint8_t *online_types, *tmp;
@@ -2388,10 +2395,36 @@ int offline_and_remove_memory(u64 start, u64 size)
 	 */
 	memset(online_types, MMOP_OFFLINE, mb_count);
 
-	lock_device_hotplug();
-
 	tmp = online_types;
 	rc = walk_memory_blocks(start, size, &tmp, try_offline_memory_block);
+
+	/*
+	 * Rollback what we did. While memory onlining might theoretically fail
+	 * (nacked by a notifier), it barely ever happens.
+	 */
+	if (rc) {
+		tmp = online_types;
+		walk_memory_blocks(start, size, &tmp,
+				   try_reonline_memory_block);
+	}
+
+	kfree(online_types);
+	return rc;
+}
+
+/*
+ * Try to offline and remove memory. Might take a long time to finish in case
+ * memory is still in use. Primarily useful for memory devices that logically
+ * unplugged all memory (so it's no longer in use) and want to offline + remove
+ * that memory.
+ */
+int offline_and_remove_memory(u64 start, u64 size)
+{
+	int rc;
+
+	lock_device_hotplug();
+
+	rc = __offline_memory(start, size);
 
 	/*
 	 * In case we succeeded to offline all memory, remove it.
@@ -2403,18 +2436,8 @@ int offline_and_remove_memory(u64 start, u64 size)
 			pr_err("%s: Failed to remove memory: %d", __func__, rc);
 	}
 
-	/*
-	 * Rollback what we did. While memory onlining might theoretically fail
-	 * (nacked by a notifier), it barely ever happens.
-	 */
-	if (rc) {
-		tmp = online_types;
-		walk_memory_blocks(start, size, &tmp,
-				   try_reonline_memory_block);
-	}
 	unlock_device_hotplug();
 
-	kfree(online_types);
 	return rc;
 }
 EXPORT_SYMBOL_GPL(offline_and_remove_memory);
