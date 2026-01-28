@@ -12,6 +12,7 @@
 #include <linux/node.h>
 #include <linux/io.h>
 #include <linux/range.h>
+#include <linux/dax.h>
 
 extern const struct nvdimm_security_ops *cxl_security_ops;
 
@@ -592,6 +593,7 @@ struct cxl_dax_region {
 	struct cxl_region *cxlr;
 	struct range hpa_range;
 	int online_type; /* MMOP_ value for kmem driver */
+	enum dax_driver_type dax_driver;
 };
 
 /**

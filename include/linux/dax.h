@@ -19,6 +19,11 @@ enum dax_access_mode {
 	DAX_RECOVERY_WRITE,
 };
 
+enum dax_driver_type {
+	DAXDRV_KMEM_TYPE,
+	DAXDRV_DEVICE_TYPE,
+};
+
 struct dax_operations {
 	/*
 	 * direct_access: translate a device-relative
