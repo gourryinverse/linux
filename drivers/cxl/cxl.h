@@ -597,6 +597,25 @@ struct cxl_dax_region {
 };
 
 /**
+ * struct cxl_sysram_region - CXL RAM region for system memory hotplug
+ * @dev: device for this sysram_region
+ * @cxlr: parent cxl_region
+ * @hpa_range: Host physical address range for the region
+ * @online_type: Memory online type (MMOP_* 0-3, or -1 if not configured)
+ *
+ * Intermediate device that allows configuration of memory hotplug
+ * parameters before the underlying dax_region is created. The device
+ * starts with online_type=-1 which prevents the cxl_dax_kmem_region
+ * driver from binding until the user explicitly sets online_type.
+ */
+struct cxl_sysram_region {
+	struct device dev;
+	struct cxl_region *cxlr;
+	struct range hpa_range;
+	int online_type;
+};
+
+/**
  * struct cxl_port - logical collection of upstream port devices and
  *		     downstream port devices to construct a CXL memory
  *		     decode hierarchy.
@@ -890,6 +909,7 @@ void cxl_driver_unregister(struct cxl_driver *cxl_drv);
 #define CXL_DEVICE_PMEM_REGION		7
 #define CXL_DEVICE_DAX_REGION		8
 #define CXL_DEVICE_PMU			9
+#define CXL_DEVICE_SYSRAM_REGION	10
 
 #define MODULE_ALIAS_CXL(type) MODULE_ALIAS("cxl:t" __stringify(type) "*")
 #define CXL_MODALIAS_FMT "cxl:t%d"
@@ -907,6 +927,7 @@ bool is_cxl_pmem_region(struct device *dev);
 struct cxl_pmem_region *to_cxl_pmem_region(struct device *dev);
 int cxl_add_to_region(struct cxl_endpoint_decoder *cxled);
 struct cxl_dax_region *to_cxl_dax_region(struct device *dev);
+struct cxl_sysram_region *to_cxl_sysram_region(struct device *dev);
 u64 cxl_port_get_spa_cache_alias(struct cxl_port *endpoint, u64 spa);
 #else
 static inline bool is_cxl_pmem_region(struct device *dev)
@@ -922,6 +943,10 @@ static inline int cxl_add_to_region(struct cxl_endpoint_decoder *cxled)
 	return 0;
 }
 static inline struct cxl_dax_region *to_cxl_dax_region(struct device *dev)
+{
+	return NULL;
+}
+static inline struct cxl_sysram_region *to_cxl_sysram_region(struct device *dev)
 {
 	return NULL;
 }

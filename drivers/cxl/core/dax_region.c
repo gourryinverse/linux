@@ -127,3 +127,53 @@ struct cxl_driver cxl_devdax_region_driver = {
 	.probe = cxl_devdax_region_driver_probe,
 	.id = CXL_DEVICE_REGION,
 };
+
+static int cxl_dax_kmem_region_driver_probe(struct device *dev)
+{
+	struct cxl_sysram_region *cxlr_sysram = to_cxl_sysram_region(dev);
+	struct cxl_dax_region *cxlr_dax;
+	struct cxl_region *cxlr;
+	int rc;
+
+	if (!cxlr_sysram)
+		return -ENODEV;
+
+	/* Require explicit online_type configuration before binding */
+	if (cxlr_sysram->online_type == -1)
+		return -ENODEV;
+
+	cxlr = cxlr_sysram->cxlr;
+
+	cxlr_dax = cxl_dax_region_alloc(cxlr);
+	if (IS_ERR(cxlr_dax))
+		return PTR_ERR(cxlr_dax);
+
+	/* Inherit online_type from parent sysram_region */
+	cxlr_dax->online_type = cxlr_sysram->online_type;
+	cxlr_dax->dax_driver = DAXDRV_KMEM_TYPE;
+
+	/* Parent is the sysram_region device */
+	cxlr_dax->dev.parent = dev;
+
+	rc = dev_set_name(&cxlr_dax->dev, "dax_region%d", cxlr->id);
+	if (rc)
+		goto err;
+
+	rc = device_add(&cxlr_dax->dev);
+	if (rc)
+		goto err;
+
+	dev_dbg(dev, "%s: register %s\n", dev_name(dev),
+		dev_name(&cxlr_dax->dev));
+
+	return devm_add_action_or_reset(dev, cxlr_dax_unregister, cxlr_dax);
+err:
+	put_device(&cxlr_dax->dev);
+	return rc;
+}
+
+struct cxl_driver cxl_dax_kmem_region_driver = {
+	.name = "cxl_dax_kmem_region",
+	.probe = cxl_dax_kmem_region_driver_probe,
+	.id = CXL_DEVICE_SYSRAM_REGION,
+};

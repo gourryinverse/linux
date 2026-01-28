@@ -624,3 +624,24 @@ Description:
 		The count is persistent across power loss and wraps back to 0
 		upon overflow. If this file is not present, the device does not
 		have the necessary support for dirty tracking.
+
+
+What:		/sys/bus/cxl/devices/sysram_regionZ/online_type
+Date:		January, 2026
+KernelVersion:	v7.1
+Contact:	linux-cxl@vger.kernel.org
+Description:
+		(RW) This attribute allows users to configure the memory online
+		type before the underlying dax_region engages in hotplug.
+
+		Valid values:
+		  'invalid': Not configured (default). Blocks probe.
+		  'offline': Memory will not be onlined automatically.
+		  'online' : Memory will be onlined in ZONE_NORMAL.
+		  'online_movable': Memory will be onlined in ZONE_MOVABLE.
+
+		The device initializes with online_type='invalid' which prevents
+		the cxl_dax_kmem_region driver from binding until the user
+		explicitly configures a valid online_type. This enables a
+		two-step binding process that gives users control over memory
+		hotplug policy before memory is added to the system.

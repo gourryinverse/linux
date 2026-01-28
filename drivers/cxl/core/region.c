@@ -3734,8 +3734,20 @@ int cxl_region_init(void)
 	if (rc)
 		goto err_dax;
 
+	rc = cxl_driver_register(&cxl_sysram_region_driver);
+	if (rc)
+		goto err_sysram;
+
+	rc = cxl_driver_register(&cxl_dax_kmem_region_driver);
+	if (rc)
+		goto err_dax_kmem;
+
 	return 0;
 
+err_dax_kmem:
+	cxl_driver_unregister(&cxl_sysram_region_driver);
+err_sysram:
+	cxl_driver_unregister(&cxl_devdax_region_driver);
 err_dax:
 	cxl_driver_unregister(&cxl_region_driver);
 	return rc;
@@ -3743,6 +3755,8 @@ err_dax:
 
 void cxl_region_exit(void)
 {
+	cxl_driver_unregister(&cxl_dax_kmem_region_driver);
+	cxl_driver_unregister(&cxl_sysram_region_driver);
 	cxl_driver_unregister(&cxl_devdax_region_driver);
 	cxl_driver_unregister(&cxl_region_driver);
 }
