@@ -591,6 +591,7 @@ struct cxl_dax_region {
 	struct device dev;
 	struct cxl_region *cxlr;
 	struct range hpa_range;
+	int online_type; /* MMOP_ value for kmem driver */
 };
 
 /**

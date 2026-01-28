@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright(c) 2022 Intel Corporation. All rights reserved. */
 #include <linux/memregion.h>
+#include <linux/memory_hotplug.h>
 #include <linux/genalloc.h>
 #include <linux/debugfs.h>
 #include <linux/device.h>
@@ -3459,6 +3460,7 @@ static int devm_cxl_add_dax_region(struct cxl_region *cxlr)
 	if (IS_ERR(cxlr_dax))
 		return PTR_ERR(cxlr_dax);
 
+	cxlr_dax->online_type = mhp_get_default_online_type();
 	dev = &cxlr_dax->dev;
 	rc = dev_set_name(dev, "dax_region%d", cxlr->id);
 	if (rc)
