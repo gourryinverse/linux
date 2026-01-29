@@ -35,6 +35,8 @@
 #include <linux/compaction.h>
 #include <linux/rmap.h>
 #include <linux/module.h>
+#include <linux/node.h>
+#include <linux/node_private.h>
 
 #include <asm/tlbflush.h>
 
@@ -720,8 +722,11 @@ static void node_states_set_node(int node, struct memory_notify *arg)
 	if (arg->status_change_nid_normal >= 0)
 		node_set_state(node, N_NORMAL_MEMORY);
 
-	if (arg->status_change_nid >= 0)
+	if (arg->status_change_nid >= 0) {
+		if (rcu_access_pointer(NODE_DATA(node)->private))
+			node_set_state(node, N_MEMORY_PRIVATE);
 		node_set_state(node, N_MEMORY);
+	}
 }
 
 static void __meminit resize_zone_range(struct zone *zone, unsigned long start_pfn,
@@ -1243,8 +1248,14 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 	/* reinitialise watermarks and update pcp limits */
 	init_per_zone_wmark_min();
 
-	kswapd_run(nid);
-	kcompactd_run(nid);
+	/*
+	 * Don't start reclaim/compaction daemons for private nodes.
+	 * Private node services will decide whether to start these services.
+	 */
+	if (!node_is_private(nid)) {
+		kswapd_run(nid);
+		kcompactd_run(nid);
+	}
 
 	writeback_set_ratelimit();
 
@@ -1504,7 +1515,7 @@ out:
  * we are OK calling __meminit stuff here - we have CONFIG_MEMORY_HOTPLUG
  */
 static int __add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags,
-				 enum mmop online_type)
+				 enum mmop online_type, void *np)
 {
 	struct mhp_params params = { .pgprot = pgprot_mhp(PAGE_KERNEL) };
 	enum memblock_flags memblock_flags = MEMBLOCK_NONE;
@@ -1531,6 +1542,14 @@ static int __add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags,
 		WARN(1, "node %d was absent from the node_possible_map\n", nid);
 		return -EINVAL;
 	}
+
+	/* private memory and normal memory are mutually exclusive */
+	if (np) {
+		ret = node_private_register(nid, np);
+		if (ret)
+			return ret;
+	} else if (node_is_private(nid))
+		return -EBUSY;
 
 	mem_hotplug_begin();
 
@@ -1608,13 +1627,15 @@ error:
 		memblock_remove(start, size);
 error_mem_hotplug_end:
 	mem_hotplug_done();
+	node_private_unregister(nid);
 	return ret;
 }
 
 int add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags)
 {
 	return __add_memory_resource(nid, res, mhp_flags,
-				     mhp_get_default_online_type());
+				     mhp_get_default_online_type(),
+				     NULL);
 }
 
 /* requires device_hotplug_lock, see __add_memory_resource() */
@@ -1653,6 +1674,7 @@ EXPORT_SYMBOL_GPL(add_memory);
  * @resource_name: Resource name in format "System RAM ($DRIVER)"
  * @mhp_flags: Memory hotplug flags
  * @online_type: Auto-Online behavior (offline, online, kernel, movable)
+ * @np: Optional node_private configuration for private nodes (or NULL)
  *
  * Add special, driver-managed memory to the system as system RAM. Such
  * memory is not exposed via the raw firmware-provided memmap as system
@@ -1661,6 +1683,7 @@ EXPORT_SYMBOL_GPL(add_memory);
  *
  * Reasons why this memory should not be used for the initial memmap of a
  * kexec kernel or for placing kexec images:
+ *
  * - The booting kernel is in charge of determining how this memory will be
  *   used (e.g., use persistent memory as system RAM)
  * - Coordination with a hypervisor is required before this memory
@@ -1678,7 +1701,7 @@ EXPORT_SYMBOL_GPL(add_memory);
  */
 int __add_memory_driver_managed(int nid, u64 start, u64 size,
 				const char *resource_name, mhp_t mhp_flags,
-				enum mmop online_type)
+				enum mmop online_type, void *np)
 {
 	struct resource *res;
 	int rc;
@@ -1699,7 +1722,7 @@ int __add_memory_driver_managed(int nid, u64 start, u64 size,
 		goto out_unlock;
 	}
 
-	rc = __add_memory_resource(nid, res, mhp_flags, online_type);
+	rc = __add_memory_resource(nid, res, mhp_flags, online_type, np);
 	if (rc < 0)
 		release_memory_resource(res);
 
@@ -1729,9 +1752,20 @@ int add_memory_driver_managed(int nid, u64 start, u64 size,
 {
 	return __add_memory_driver_managed(nid, start, size, resource_name,
 					   mhp_flags,
-					   mhp_get_default_online_type());
+					   mhp_get_default_online_type(),
+					   NULL);
 }
 EXPORT_SYMBOL_GPL(add_memory_driver_managed);
+
+int add_private_memory_driver_managed(int nid, u64 start, u64 size,
+				      const char *resource_name,
+				      mhp_t mhp_flags, enum mmop online_type,
+				      struct node_private *np)
+{
+	return __add_memory_driver_managed(nid, start, size, resource_name,
+					   mhp_flags, online_type, np);
+}
+EXPORT_SYMBOL_GPL(add_private_memory_driver_managed);
 
 /*
  * Platforms should define arch_get_mappable_range() that provides
@@ -1879,6 +1913,14 @@ static void do_migrate_range(unsigned long start_pfn, unsigned long end_pfn)
 			goto put_folio;
 		}
 
+		/* Private nodes w/o migration must ensure folios are offline */
+		if (!folio_managed_allows_migrate(folio)) {
+			WARN_ONCE(1, "hot-unplug on non-migratable node %d pfn %lx\n",
+				  folio_nid(folio), pfn);
+			pfn = folio_pfn(folio) + folio_nr_pages(folio) - 1;
+			goto put_folio;
+		}
+
 		if (!isolate_folio_to_list(folio, &source)) {
 			if (__ratelimit(&migrate_rs)) {
 				pr_warn("failed to isolate pfn %lx\n",
@@ -1979,8 +2021,10 @@ static void node_states_clear_node(int node, struct memory_notify *arg)
 	if (arg->status_change_nid_normal >= 0)
 		node_clear_state(node, N_NORMAL_MEMORY);
 
-	if (arg->status_change_nid >= 0)
+	if (arg->status_change_nid >= 0) {
+		node_clear_state(node, N_MEMORY_PRIVATE);
 		node_clear_state(node, N_MEMORY);
+	}
 }
 
 static int count_system_ram_pages_cb(unsigned long start_pfn,
@@ -2341,8 +2385,10 @@ static int try_remove_memory(u64 start, u64 size)
 
 	release_mem_region_adjustable(start, size);
 
-	if (nid != NUMA_NO_NODE)
+	if (nid != NUMA_NO_NODE) {
 		try_offline_node(nid);
+		node_private_unregister(nid);
+	}
 
 	mem_hotplug_done();
 	return 0;
@@ -2493,4 +2539,13 @@ int offline_and_remove_memory(u64 start, u64 size)
 	return rc;
 }
 EXPORT_SYMBOL_GPL(offline_and_remove_memory);
+
+int offline_and_remove_private_memory(int nid, u64 start, u64 size)
+{
+	if (!node_is_private(nid))
+		return -EINVAL;
+
+	return offline_and_remove_memory(start, size);
+}
+EXPORT_SYMBOL_GPL(offline_and_remove_private_memory);
 #endif /* CONFIG_MEMORY_HOTREMOVE */
