@@ -2,6 +2,7 @@
 /* Copyright(c) 2016 - 2018 Intel Corporation. All rights reserved. */
 #ifndef __DAX_BUS_H__
 #define __DAX_BUS_H__
+#include <linux/dax.h>
 #include <linux/device.h>
 #include <linux/memory_hotplug.h>
 #include <linux/range.h>
@@ -29,11 +30,6 @@ struct dev_dax_data {
 };
 
 struct dev_dax *devm_create_dev_dax(struct dev_dax_data *data);
-
-enum dax_driver_type {
-	DAXDRV_KMEM_TYPE,
-	DAXDRV_DEVICE_TYPE,
-};
 
 struct dax_device_driver {
 	struct device_driver drv;

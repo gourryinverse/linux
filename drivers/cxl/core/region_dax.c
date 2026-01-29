@@ -80,7 +80,8 @@ static void cxlr_dax_unregister(void *_cxlr_dax)
 	device_unregister(&cxlr_dax->dev);
 }
 
-int devm_cxl_add_dax_region(struct cxl_region *cxlr)
+int devm_cxl_add_dax_region(struct cxl_region *cxlr,
+			    enum dax_driver_type dax_driver)
 {
 	struct cxl_dax_region *cxlr_dax __free(put_cxl_dax_region) = NULL;
 	int rc;
@@ -90,6 +91,7 @@ int devm_cxl_add_dax_region(struct cxl_region *cxlr)
 		return PTR_ERR(cxlr_dax);
 
 	cxlr_dax->online_type = mhp_get_default_online_type();
+	cxlr_dax->dax_driver = dax_driver;
 
 	rc = dev_set_name(&cxlr_dax->dev, "dax_region%d", cxlr->id);
 	if (rc)

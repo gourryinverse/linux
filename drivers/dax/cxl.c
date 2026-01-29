@@ -11,14 +11,18 @@ static int cxl_dax_region_probe(struct device *dev)
 	struct cxl_dax_region *cxlr_dax = to_cxl_dax_region(dev);
 	int nid = phys_to_target_node(cxlr_dax->hpa_range.start);
 	struct cxl_region *cxlr = cxlr_dax->cxlr;
+	unsigned long flags = 0;
 	struct dax_region *dax_region;
 	struct dev_dax_data data;
+
+	if (cxlr_dax->dax_driver == DAXDRV_KMEM_TYPE)
+		flags |= IORESOURCE_DAX_KMEM;
 
 	if (nid == NUMA_NO_NODE)
 		nid = memory_add_physaddr_to_nid(cxlr_dax->hpa_range.start);
 
 	dax_region = alloc_dax_region(dev, cxlr->id, &cxlr_dax->hpa_range, nid,
-				      PMD_SIZE, IORESOURCE_DAX_KMEM);
+				      PMD_SIZE, flags);
 	if (!dax_region)
 		return -ENOMEM;
 
