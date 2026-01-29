@@ -3,6 +3,7 @@
  * Copyright(c) 2022 Intel Corporation. All rights reserved.
  * Copyright(c) 2026 Meta Technologies Inc. All rights reserved.
  */
+#include <linux/memory_hotplug.h>
 #include <linux/device.h>
 #include <linux/slab.h>
 #include <cxlmem.h>
@@ -87,6 +88,8 @@ int devm_cxl_add_dax_region(struct cxl_region *cxlr)
 	cxlr_dax = cxl_dax_region_alloc(cxlr);
 	if (IS_ERR(cxlr_dax))
 		return PTR_ERR(cxlr_dax);
+
+	cxlr_dax->online_type = mhp_get_default_online_type();
 
 	rc = dev_set_name(&cxlr_dax->dev, "dax_region%d", cxlr->id);
 	if (rc)

@@ -602,6 +602,7 @@ struct cxl_dax_region {
 	struct device dev;
 	struct cxl_region *cxlr;
 	struct range hpa_range;
+	enum mmop online_type;
 };
 
 /**
