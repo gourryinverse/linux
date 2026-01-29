@@ -445,6 +445,49 @@ for more details. ::
     dax0.0      devtype  modalias   uevent
     dax_region  driver   subsystem
 
+DAX regions are created when a CXL RAM region is bound to one of the
+following drivers:
+
+* :code:`cxl_devdax_region` - Creates a dax_region for device_dax mode.
+  The resulting DAX device provides direct userspace access via
+  :code:`/dev/daxN.Y`.
+
+* :code:`cxl_dax_kmem_region` - Creates a dax_region for kmem mode via a
+  sysram_region intermediate device.  See `Sysram Region`_ below.
+
+Sysram Region
+~~~~~~~~~~~~~
+A `Sysram Region` is an intermediate device between a CXL `Memory Region`
+and a `DAX Region` for kmem mode.  It is created when a CXL RAM region is
+bound to the :code:`cxl_sysram_region` driver.
+
+The sysram_region device provides an interposition point where users can
+configure memory hotplug policy before the underlying dax_region is created
+and memory is hotplugged to the system.
+
+The device hierarchy for kmem mode is::
+
+  regionX -> sysram_regionX -> dax_regionX -> daxX.Y
+
+The sysram_region exposes an :code:`online_type` attribute that controls
+how memory will be onlined when the dax_kmem driver binds:
+
+* :code:`invalid` - Not configured (default). Blocks driver binding.
+* :code:`offline` - Memory will not be onlined automatically.
+* :code:`online` - Memory will be onlined in ZONE_NORMAL.
+* :code:`online_movable` - Memory will be onlined in ZONE_MOVABLE.
+
+Example two-stage binding process::
+
+  # Bind region to sysram_region driver
+  echo region0 > /sys/bus/cxl/drivers/cxl_sysram_region/bind
+
+  # Configure memory online type
+  echo online_movable > /sys/bus/cxl/devices/sysram_region0/online_type
+
+  # Bind sysram_region to dax_kmem_region driver
+  echo sysram_region0 > /sys/bus/cxl/drivers/cxl_dax_kmem_region/bind
+
 Mailbox Interfaces
 ------------------
 A mailbox command interface for each device is exposed in ::

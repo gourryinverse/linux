@@ -17,6 +17,35 @@ The DAX subsystem exposes this ability through the `cxl_dax_region` driver.
 A `dax_region` provides the translation between a CXL `memory_region` and
 a `DAX Device`.
 
+CXL DAX Region Drivers
+======================
+CXL provides multiple drivers for creating DAX regions, each suited for
+different use cases:
+
+cxl_devdax_region
+-----------------
+The :code:`cxl_devdax_region` driver creates a dax_region configured for
+device_dax mode.  When a CXL RAM region is bound to this driver, the
+resulting DAX device provides direct userspace access via :code:`/dev/daxN.Y`.
+
+Device hierarchy::
+
+  regionX -> dax_regionX -> daxX.Y
+
+This is the simplest path for applications that want to manage CXL memory
+directly from userspace.
+
+cxl_dax_kmem_region
+-------------------
+For kmem mode, CXL provides a two-stage binding process that allows users
+to configure memory hotplug policy before memory is added to the system.
+
+The :code:`cxl_dax_kmem_region` driver then binds a sysram_region
+device and creates a dax_region configured for kmem mode.
+
+The :code:`online_type` policy will be passed from sysram_region to
+the dax kmem driver for use when hotplugging the memory.
+
 DAX Device
 ==========
 A `DAX Device` is a file-like interface exposed in :code:`/dev/daxN.Y`. A
