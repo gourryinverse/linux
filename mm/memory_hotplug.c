@@ -36,6 +36,7 @@
 #include <linux/rmap.h>
 #include <linux/module.h>
 #include <linux/node.h>
+#include <linux/node_private.h>
 
 #include <asm/tlbflush.h>
 
@@ -1208,8 +1209,11 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 	online_pages_range(pfn, nr_pages);
 	adjust_present_page_count(pfn_to_page(pfn), group, nr_pages);
 
-	if (node_arg.nid >= 0)
+	if (node_arg.nid >= 0) {
+		if (node_is_private(nid))
+			node_set_state(nid, N_MEMORY_PRIVATE);
 		node_set_state(nid, N_MEMORY);
+	}
 	if (need_zonelists_rebuild)
 		build_all_zonelists(NULL);
 
@@ -1227,8 +1231,14 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 	/* reinitialise watermarks and update pcp limits */
 	init_per_zone_wmark_min();
 
-	kswapd_run(nid);
-	kcompactd_run(nid);
+	/*
+	 * Don't start reclaim/compaction daemons for private nodes.
+	 * Private node services will decide whether to start these services.
+	 */
+	if (!node_is_private(nid)) {
+		kswapd_run(nid);
+		kcompactd_run(nid);
+	}
 
 	if (node_arg.nid >= 0)
 		/* First memory added successfully. Notify consumers. */
@@ -1492,7 +1502,7 @@ out:
  * we are OK calling __meminit stuff here - we have CONFIG_MEMORY_HOTPLUG
  */
 static int __add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags,
-				 enum mmop online_type)
+				 enum mmop online_type, void *np)
 {
 	struct mhp_params params = { .pgprot = pgprot_mhp(PAGE_KERNEL) };
 	enum memblock_flags memblock_flags = MEMBLOCK_NONE;
@@ -1519,6 +1529,14 @@ static int __add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags,
 		WARN(1, "node %d was absent from the node_possible_map\n", nid);
 		return -EINVAL;
 	}
+
+	/* private memory and normal memory are mutually exclusive */
+	if (np) {
+		ret = node_private_register(nid, np);
+		if (ret)
+			return ret;
+	} else if (node_is_private(nid))
+		return -EBUSY;
 
 	mem_hotplug_begin();
 
@@ -1597,13 +1615,15 @@ error_memblock_remove:
 		memblock_remove(start, size);
 error_mem_hotplug_end:
 	mem_hotplug_done();
+	node_private_unregister(nid);
 	return ret;
 }
 
 int add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags)
 {
 	return __add_memory_resource(nid, res, mhp_flags,
-				     mhp_get_default_online_type());
+				     mhp_get_default_online_type(),
+				     NULL);
 }
 
 /* requires device_hotplug_lock, see __add_memory_resource() */
@@ -1667,7 +1687,7 @@ EXPORT_SYMBOL_GPL(add_memory);
  */
 int __add_memory_driver_managed(int nid, u64 start, u64 size,
 				const char *resource_name, mhp_t mhp_flags,
-				enum mmop online_type)
+				enum mmop online_type, void *np)
 {
 	struct resource *res;
 	int rc;
@@ -1688,7 +1708,7 @@ int __add_memory_driver_managed(int nid, u64 start, u64 size,
 		goto out_unlock;
 	}
 
-	rc = __add_memory_resource(nid, res, mhp_flags, online_type);
+	rc = __add_memory_resource(nid, res, mhp_flags, online_type, np);
 	if (rc < 0)
 		release_memory_resource(res);
 
@@ -1718,7 +1738,8 @@ int add_memory_driver_managed(int nid, u64 start, u64 size,
 {
 	return __add_memory_driver_managed(nid, start, size, resource_name,
 					   mhp_flags,
-					   mhp_get_default_online_type());
+					   mhp_get_default_online_type(),
+					   NULL);
 }
 EXPORT_SYMBOL_GPL(add_memory_driver_managed);
 
@@ -1869,6 +1890,14 @@ static void do_migrate_range(unsigned long start_pfn, unsigned long end_pfn)
 				folio_unlock(folio);
 			}
 
+			goto put_folio;
+		}
+
+		/* Private nodes w/o migration must ensure folios are offline */
+		if (!folio_managed_allows_migrate(folio)) {
+			WARN_ONCE(1, "hot-unplug on non-migratable node %d pfn %lx\n",
+				  folio_nid(folio), pfn);
+			pfn = folio_pfn(folio) + folio_nr_pages(folio) - 1;
 			goto put_folio;
 		}
 
@@ -2108,8 +2137,10 @@ int offline_pages(unsigned long start_pfn, unsigned long nr_pages,
 	 * Make sure to mark the node as memory-less before rebuilding the zone
 	 * list. Otherwise this node would still appear in the fallback lists.
 	 */
-	if (node_arg.nid >= 0)
+	if (node_arg.nid >= 0) {
+		node_clear_state(node, N_MEMORY_PRIVATE);
 		node_clear_state(node, N_MEMORY);
+	}
 	if (!populated_zone(zone)) {
 		zone_pcp_reset(zone);
 		build_all_zonelists(NULL);
@@ -2309,8 +2340,10 @@ static int try_remove_memory(u64 start, u64 size)
 
 	release_mem_region_adjustable(start, size);
 
-	if (nid != NUMA_NO_NODE)
+	if (nid != NUMA_NO_NODE) {
 		try_offline_node(nid);
+		node_private_unregister(nid);
+	}
 
 	mem_hotplug_done();
 	return 0;
