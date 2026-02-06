@@ -46,20 +46,19 @@ static struct lock_class_key cxl_dax_region_key;
 
 static struct cxl_dax_region *cxl_dax_region_alloc(struct cxl_region *cxlr)
 {
-	struct cxl_region_params *p = &cxlr->params;
 	struct cxl_dax_region *cxlr_dax;
 	struct device *dev;
-
-	guard(rwsem_read)(&cxl_rwsem.region);
-	if (p->state != CXL_CONFIG_COMMIT)
-		return ERR_PTR(-ENXIO);
+	int rc;
 
 	cxlr_dax = kzalloc(sizeof(*cxlr_dax), GFP_KERNEL);
 	if (!cxlr_dax)
 		return ERR_PTR(-ENOMEM);
 
-	cxlr_dax->hpa_range.start = p->res->start;
-	cxlr_dax->hpa_range.end = p->res->end;
+	rc = cxl_region_get_hpa_range(cxlr, &cxlr_dax->hpa_range);
+	if (rc) {
+		kfree(cxlr_dax);
+		return ERR_PTR(rc);
+	}
 
 	dev = &cxlr_dax->dev;
 	cxlr_dax->cxlr = cxlr;
