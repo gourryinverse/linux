@@ -211,6 +211,42 @@ config CXL_REGION
 
 	  If unsure say 'y'
 
+choice
+	prompt "CXL RAM region default online type"
+	depends on CXL_REGION
+	default CXL_SYSRAM_ONLINE_TYPE_SYSTEM_DEFAULT
+	help
+	  Select the default memory online behavior for CXL RAM regions.
+	  This determines how memory is handled when a CXL RAM region is
+	  probed.
+
+config CXL_SYSRAM_ONLINE_TYPE_SYSTEM_DEFAULT
+	bool "system default"
+	help
+	  Use the system-wide memory hotplug default online type. This follows
+	  the kernel's CONFIG_MEMORY_HOTPLUG_DEFAULT_ONLINE setting.
+
+config CXL_SYSRAM_ONLINE_TYPE_OFFLINE
+	bool "offline"
+	help
+	  Memory blocks are not added automatically on probe. The user must
+	  explicitly online the memory blocks after they are added.
+
+config CXL_SYSRAM_ONLINE_TYPE_NORMAL
+	bool "online"
+	help
+	  Memory is automatically added and onlined to ZONE_NORMAL when the
+	  CXL RAM region is probed.
+
+config CXL_SYSRAM_ONLINE_TYPE_MOVABLE
+	bool "online_movable"
+	help
+	  Memory is automatically added and onlined to ZONE_MOVABLE when the
+	  CXL RAM region is probed. This is recommended for CXL memory as it
+	  allows the memory to be hot-removed later.
+
+endchoice
+
 config CXL_REGION_INVALIDATION_TEST
 	bool "CXL: Region Cache Management Bypass (TEST)"
 	depends on CXL_REGION
