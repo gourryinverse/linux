@@ -44,6 +44,17 @@ EXPORT_SYMBOL_NS_GPL(to_cxl_dax_region, "CXL");
 
 static struct lock_class_key cxl_dax_region_key;
 
+static enum mmop cxl_dax_get_default_online_type(void)
+{
+	if (IS_ENABLED(CONFIG_CXL_SYSRAM_ONLINE_TYPE_SYSTEM_DEFAULT))
+		return mhp_get_default_online_type();
+	if (IS_ENABLED(CONFIG_CXL_SYSRAM_ONLINE_TYPE_MOVABLE))
+		return MMOP_ONLINE_MOVABLE;
+	if (IS_ENABLED(CONFIG_CXL_SYSRAM_ONLINE_TYPE_NORMAL))
+		return MMOP_ONLINE;
+	return MMOP_OFFLINE;
+}
+
 static struct cxl_dax_region *cxl_dax_region_alloc(struct cxl_region *cxlr)
 {
 	struct cxl_dax_region *cxlr_dax;
@@ -89,7 +100,7 @@ int devm_cxl_add_dax_region(struct cxl_region *cxlr,
 	if (IS_ERR(cxlr_dax))
 		return PTR_ERR(cxlr_dax);
 
-	cxlr_dax->online_type = mhp_get_default_online_type();
+	cxlr_dax->online_type = cxl_dax_get_default_online_type();
 	cxlr_dax->dax_driver = dax_driver;
 
 	rc = dev_set_name(&cxlr_dax->dev, "dax_region%d", cxlr->id);
