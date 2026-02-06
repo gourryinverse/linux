@@ -40,6 +40,25 @@ static nodemask_t nodemask_region_seen = NODE_MASK_NONE;
 
 static struct cxl_region *to_cxl_region(struct device *dev);
 
+/**
+ * cxl_region_get_hpa_range - get the HPA range of a committed region
+ * @cxlr: the region to query
+ * @range: output parameter for the HPA range
+ *
+ * Returns 0 on success, -ENXIO if the region is not committed.
+ */
+int cxl_region_get_hpa_range(struct cxl_region *cxlr, struct range *range)
+{
+	struct cxl_region_params *p = &cxlr->params;
+
+	guard(rwsem_read)(&cxl_rwsem.region);
+	if (p->state != CXL_CONFIG_COMMIT)
+		return -ENXIO;
+	range->start = p->res->start;
+	range->end = p->res->end;
+	return 0;
+}
+
 #define __ACCESS_ATTR_RO(_level, _name) {				\
 	.attr	= { .name = __stringify(_name), .mode = 0444 },		\
 	.show	= _name##_access##_level##_show,			\

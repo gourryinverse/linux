@@ -137,6 +137,8 @@ struct cxl_rwsem {
 
 extern struct cxl_rwsem cxl_rwsem;
 
+int cxl_region_get_hpa_range(struct cxl_region *cxlr, struct range *range);
+
 int cxl_memdev_init(void);
 void cxl_memdev_exit(void);
 void cxl_mbox_init(void);
