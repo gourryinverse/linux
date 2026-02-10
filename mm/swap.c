@@ -37,6 +37,7 @@
 #include <linux/page_idle.h>
 #include <linux/local_lock.h>
 #include <linux/buffer_head.h>
+#include <linux/node_private.h>
 
 #include "internal.h"
 
@@ -96,10 +97,9 @@ static void page_cache_release(struct folio *folio)
 
 void __folio_put(struct folio *folio)
 {
-	if (unlikely(folio_is_zone_device(folio))) {
-		free_zone_device_folio(folio);
-		return;
-	}
+	if (unlikely(folio_is_private_managed(folio)))
+		if (folio_managed_on_free(folio))
+			return;
 
 	if (folio_test_hugetlb(folio)) {
 		free_huge_folio(folio);
@@ -961,18 +961,17 @@ void folios_put_refs(struct folio_batch *folios, unsigned int *refs)
 		if (is_huge_zero_folio(folio))
 			continue;
 
-		if (folio_is_zone_device(folio)) {
+		if (!folio_ref_sub_and_test(folio, nr_refs))
+			continue;
+
+		if (unlikely(folio_is_private_managed(folio))) {
 			if (lruvec) {
 				unlock_page_lruvec_irqrestore(lruvec, flags);
 				lruvec = NULL;
 			}
-			if (folio_ref_sub_and_test(folio, nr_refs))
-				free_zone_device_folio(folio);
-			continue;
+			if (folio_managed_on_free(folio))
+				continue;
 		}
-
-		if (!folio_ref_sub_and_test(folio, nr_refs))
-			continue;
 
 		/* hugetlb has its own memcg */
 		if (folio_test_hugetlb(folio)) {
