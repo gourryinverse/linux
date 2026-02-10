@@ -15,6 +15,24 @@ struct vm_area_struct;
 struct vm_fault;
 
 /**
+ * struct node_reclaim_policy - Reclaim policy overrides for private nodes
+ * @active: set by node_private_reclaim_policy() when a callback was invoked
+ * @may_swap: allow swap writeback during boosted reclaim
+ * @may_writepage: allow writepage during boosted reclaim
+ * @managed_watermarks: service owns watermark_boost lifecycle; kswapd must
+ *                      not clear it after boosted reclaim
+ *
+ * Passed to the reclaim_policy callback so each private node service can
+ * inject its own reclaim policy before kswapd runs boosted reclaim.
+ */
+struct node_reclaim_policy {
+	bool active;
+	bool may_swap;
+	bool may_writepage;
+	bool managed_watermarks;
+};
+
+/**
  * struct node_private_ops - Callbacks for private node services
  *
  * Services register these callbacks to intercept MM operations that affect
@@ -88,6 +106,13 @@ struct vm_fault;
  *
  *   Returns: vm_fault_t result (0, VM_FAULT_RETRY, etc.)
  *
+ * @reclaim_policy: Configure reclaim policy for boosted reclaim.
+ *   [called hodling rcu_read_lock, MUST NOT sleep]
+ *   Called by kswapd before boosted reclaim to let the service override
+ *   may_swap / may_writepage.  If provided, the service also owns the
+ *   watermark_boost lifecycle (kswapd will not clear it).
+ *   If NULL, normal boost policy applies.
+ *
  * @flags: Operation exclusion flags (NP_OPS_* constants).
  *
  */
@@ -101,6 +126,7 @@ struct node_private_ops {
 	void (*folio_migrate)(struct folio *src, struct folio *dst);
 	vm_fault_t (*handle_fault)(struct folio *folio, struct vm_fault *vmf,
 				   enum pgtable_level level);
+	void (*reclaim_policy)(int nid, struct node_reclaim_policy *policy);
 	unsigned long flags;
 };
 
@@ -112,6 +138,8 @@ struct node_private_ops {
 #define NP_OPS_DEMOTION			BIT(2)
 /* Prevent mprotect/NUMA from upgrading PTEs to writable on this node */
 #define NP_OPS_PROTECT_WRITE		BIT(3)
+/* Kernel reclaim (kswapd, direct reclaim, OOM) operates on this node */
+#define NP_OPS_RECLAIM			BIT(4)
 
 /**
  * struct node_private - Per-node container for N_MEMORY_PRIVATE nodes
