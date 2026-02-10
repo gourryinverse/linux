@@ -444,21 +444,32 @@ static void guarantee_active_cpus(struct task_struct *tsk,
 }
 
 /*
- * Return in *pmask the portion of a cpusets's mems_allowed that
+ * Return in *pmask the portion of a cpuset's mems_allowed that
  * are online, with memory.  If none are online with memory, walk
  * up the cpuset hierarchy until we find one that does have some
  * online mems.  The top cpuset always has some mems online.
  *
  * One way or another, we guarantee to return some non-empty subset
- * of node_states[N_MEMORY].
+ * of node_states[N_MEMORY].  N_MEMORY_PRIVATE nodes from the
+ * original cpuset are preserved, but only N_MEMORY nodes are
+ * pulled from ancestors.
  *
  * Call with callback_lock or cpuset_mutex held.
  */
 static void guarantee_online_mems(struct cpuset *cs, nodemask_t *pmask)
 {
+	struct cpuset *orig_cs = cs;
+	int nid;
+
 	while (!nodes_intersects(cs->effective_mems, node_states[N_MEMORY]))
 		cs = parent_cs(cs);
+
 	nodes_and(*pmask, cs->effective_mems, node_states[N_MEMORY]);
+
+	for_each_node_state(nid, N_MEMORY_PRIVATE) {
+		if (node_isset(nid, orig_cs->effective_mems))
+			node_set(nid, *pmask);
+	}
 }
 
 /**
@@ -4075,7 +4086,9 @@ static void cpuset_handle_hotplug(void)
 
 	/* fetch the available cpus/mems and find out which changed how */
 	cpumask_copy(&new_cpus, cpu_active_mask);
-	new_mems = node_states[N_MEMORY];
+
+	/* Include N_MEMORY_PRIVATE so cpuset controls access the same way */
+	nodes_or(new_mems, node_states[N_MEMORY], node_states[N_MEMORY_PRIVATE]);
 
 	/*
 	 * If subpartitions_cpus is populated, it is likely that the check
@@ -4488,10 +4501,21 @@ bool cpuset_node_allowed(struct cgroup *cgroup, int nid)
  * __alloc_pages() will include all nodes.  If the slab allocator
  * is passed an offline node, it will fall back to the local node.
  * See kmem_cache_alloc_node().
+ *
+ *
+ * Private nodes aren't eligible for these allocations, so skip them.
+ * guarantee_online_mems guaranttes at least one N_MEMORY node is set.
  */
 static int cpuset_spread_node(int *rotor)
 {
-	return *rotor = next_node_in(*rotor, current->mems_allowed);
+	int node;
+
+	do {
+		node = next_node_in(*rotor, current->mems_allowed);
+		*rotor = node;
+	} while (node_state(node, N_MEMORY_PRIVATE));
+
+	return node;
 }
 
 /**
