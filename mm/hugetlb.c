@@ -1353,7 +1353,7 @@ retry_cpuset:
 	for_each_zone_zonelist_nodemask(zone, z, zonelist, gfp_zone(gfp_mask), nmask) {
 		struct folio *folio;
 
-		if (!cpuset_zone_allowed(zone, gfp_mask))
+		if (!numa_zone_alloc_allowed(ALLOC_CPUSET, zone, gfp_mask))
 			continue;
 		/*
 		 * no need to ask again on the same node. Pool is node rather than
