@@ -603,6 +603,8 @@ acpi_table_parse_srat(enum acpi_srat_type id,
 int __init acpi_numa_init(void)
 {
 	int i, fake_pxm, cnt = 0;
+	nodemask_t cpu_nodes;
+	int nr_cpu_nodes = 0, nr_standby;
 
 	if (acpi_disabled)
 		return -EINVAL;
@@ -633,6 +635,15 @@ int __init acpi_numa_init(void)
 					sizeof(struct acpi_table_srat),
 					srat_proc, ARRAY_SIZE(srat_proc), 0);
 
+		/*
+		 * Count CPU nodes: nodes_found_map now has nodes from CPU
+		 * and generic initiator affinity entries.  Exclude GI-only
+		 * nodes to get the actual CPU node count.
+		 */
+		nodes_andnot(cpu_nodes, nodes_found_map,
+			     node_states[N_GENERIC_INITIATOR]);
+		nr_cpu_nodes = nodes_weight(cpu_nodes);
+
 		cnt = acpi_table_parse_srat(ACPI_SRAT_TYPE_MEMORY_AFFINITY,
 					    acpi_parse_memory_affinity, 0);
 	}
@@ -656,6 +667,30 @@ int __init acpi_numa_init(void)
 	fake_pxm++;
 	acpi_table_parse_cedt(ACPI_CEDT_TYPE_CFMWS, acpi_parse_cfmws,
 			      &fake_pxm);
+
+	/*
+	 * Reserve standby nodes scaled by the number of CPU nodes.
+	 * If CONFIG_ACPI_NUMA_STANDBY_NODES=N and there are C CPU
+	 * nodes in the SRAT, reserve N*C standby nodes.
+	 */
+	nr_standby = nr_cpu_nodes * CONFIG_ACPI_NUMA_STANDBY_NODES;
+	for (i = 0; i < nr_standby; i++) {
+		int node = acpi_map_pxm_to_node(fake_pxm);
+
+		if (node == NUMA_NO_NODE) {
+			pr_warn("ACPI NUMA: unable to reserve standby node %d of %d\n",
+				i, nr_standby);
+			break;
+		}
+		node_set(node, numa_nodes_parsed);
+		numa_register_exclusive_node(node);
+		fake_pxm++;
+	}
+
+	if (nr_standby)
+		pr_info("ACPI NUMA: reserved %d standby nodes (%d CPU nodes * %d per node)\n",
+			min(i, nr_standby), nr_cpu_nodes,
+			CONFIG_ACPI_NUMA_STANDBY_NODES);
 
 	if (cnt < 0)
 		return cnt;

@@ -440,6 +440,59 @@ static int __init numa_register_meminfo(struct numa_meminfo *mi)
 	return 0;
 }
 
+/**
+ * numa_rebuild_distance_table - Rebuild distance table for standby nodes
+ *
+ * Called during NUMA init after all node sources (SRAT, CFMWS, standby)
+ * have populated numa_nodes_parsed.  If nodes were added after SLIT
+ * parsing, the distance table is too small and must be rebuilt.
+ */
+static void __init numa_rebuild_distance_table(void)
+{
+	int i, j, max_node, old_cnt;
+	u8 *saved_dist = NULL;
+	size_t saved_size;
+
+	/*
+	 * If nodes were added to numa_nodes_parsed after the distance
+	 * table was allocated (CFMWS or standby nodes added after SLIT
+	 * parsing), the table is too small.  Rebuild it so that all
+	 * nodes have distance entries (new nodes get REMOTE_DISTANCE
+	 * by default from the reallocation fill).
+	 */
+	old_cnt = numa_distance_cnt;
+	if (!old_cnt)
+		return;
+
+	max_node = 0;
+	for_each_node_mask(i, numa_nodes_parsed)
+		max_node = i;
+
+	if (max_node < old_cnt)
+		return;
+
+	saved_size = old_cnt * old_cnt * sizeof(u8);
+	saved_dist = memblock_alloc(saved_size, PAGE_SIZE);
+	if (!saved_dist) {
+		pr_warn("NUMA: standby nodes will use default distances\n");
+		return;
+	}
+
+	for (i = 0; i < old_cnt; i++)
+		for (j = 0; j < old_cnt; j++)
+			saved_dist[i * old_cnt + j] = node_distance(i, j);
+
+	/* Reset triggers reallocation on next numa_set_distance() */
+	numa_reset_distance();
+
+	/* Restore, first call reallocates sized for new numa_nodes_parsed */
+	for (i = 0; i < old_cnt; i++)
+		for (j = 0; j < old_cnt; j++)
+			numa_set_distance(i, j, saved_dist[i * old_cnt + j]);
+
+	memblock_free(saved_dist, saved_size);
+}
+
 int __init numa_memblks_init(int (*init_func)(void),
 			     bool memblock_force_top_down)
 {
@@ -477,6 +530,7 @@ int __init numa_memblks_init(int (*init_func)(void),
 		return ret;
 
 	numa_emulation(&numa_meminfo, numa_distance_cnt);
+	numa_rebuild_distance_table();
 
 	return numa_register_meminfo(&numa_meminfo);
 }
@@ -564,6 +618,15 @@ static int meminfo_to_nid(struct numa_meminfo *mi, u64 start)
 			return mi->blk[i].nid;
 	return NUMA_NO_NODE;
 }
+
+/*
+ * These interfaces should only be used to acquire information about statically
+ * configured memory associations made at __init time.
+ *
+ * This interface should not be used to determine the node a struct page/folio
+ * lives in, as it is possible for memory hotplug to place those pages in
+ * different nodes than reported by this function.
+ */
 
 int phys_to_target_node(u64 start)
 {

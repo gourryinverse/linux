@@ -4,6 +4,8 @@
 #include <linux/printk.h>
 #include <linux/numa.h>
 #include <linux/numa_memblks.h>
+#include <linux/spinlock.h>
+#include <linux/export.h>
 
 struct pglist_data *node_data[MAX_NUMNODES];
 EXPORT_SYMBOL(node_data);
@@ -59,3 +61,73 @@ int phys_to_target_node(u64 start)
 }
 EXPORT_SYMBOL_GPL(phys_to_target_node);
 #endif
+
+/*
+ * Pool of exclusive NUMA nodes available for runtime claiming.
+ * Populated at boot by ACPI SRAT parsing based on the number of
+ * CPU nodes and CONFIG_ACPI_NUMA_STANDBY_NODES.
+ * Protected by exclusive_node_lock at runtime.
+ */
+static nodemask_t exclusive_nodes = NODE_MASK_NONE;
+static DEFINE_SPINLOCK(exclusive_node_lock);
+
+/**
+ * numa_register_exclusive_node - Add a node to the exclusive pool
+ * @node: Node ID to register as available for exclusive claiming
+ *
+ * Called during __init to populate the exclusive node pool with standby
+ * nodes that have no memory.  These nodes can later be claimed at runtime
+ * via numa_request_exclusive_node().
+ */
+void __init numa_register_exclusive_node(int node)
+{
+	node_set(node, exclusive_nodes);
+}
+
+/**
+ * numa_request_exclusive_node - Claim an available exclusive NUMA node
+ *
+ * Returns a NUMA node ID on success, NUMA_NO_NODE if none available.
+ *
+ * Exclusive nodes are empty NUMA nodes registered at boot, scaled by
+ * the number of CPU nodes (CONFIG_ACPI_NUMA_STANDBY_NODES per CPU node).
+ *
+ * The caller takes exclusive ownership of the returned node and must
+ * release it with numa_release_exclusive_node() when no longer needed.
+ */
+int numa_request_exclusive_node(void)
+{
+	int node;
+
+	spin_lock(&exclusive_node_lock);
+	node = first_node(exclusive_nodes);
+	if (node < MAX_NUMNODES)
+		node_clear(node, exclusive_nodes);
+	else
+		node = NUMA_NO_NODE;
+	spin_unlock(&exclusive_node_lock);
+
+	return node;
+}
+EXPORT_SYMBOL_GPL(numa_request_exclusive_node);
+
+/**
+ * numa_release_exclusive_node - Release a previously claimed exclusive node
+ * @node: Node ID previously returned by numa_request_exclusive_node()
+ *
+ * Returns the node to the exclusive pool.  Passing a node not originally
+ * obtained from numa_request_exclusive_node() is a bug.
+ */
+void numa_release_exclusive_node(int node)
+{
+	if (node == NUMA_NO_NODE)
+		return;
+
+	if (WARN_ON(node >= MAX_NUMNODES))
+		return;
+
+	spin_lock(&exclusive_node_lock);
+	node_set(node, exclusive_nodes);
+	spin_unlock(&exclusive_node_lock);
+}
+EXPORT_SYMBOL_GPL(numa_release_exclusive_node);

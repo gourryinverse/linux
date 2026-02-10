@@ -13,3 +13,23 @@ config ACPI_HMAT
 	 register memory initiators with their targets, and export
 	 performance attributes through the node's sysfs device if
 	 provided.
+
+config ACPI_NUMA_STANDBY_NODES
+	int "Standby NUMA nodes per CPU node for runtime claiming"
+	depends on ACPI_NUMA
+	range 0 16
+	default 0
+	help
+	  Number of standby NUMA nodes to reserve per CPU node at boot
+	  for runtime claiming via numa_request_exclusive_node().
+
+	  If set to N, and the SRAT describes C nodes with CPU
+	  affinity entries, then N*C empty standby nodes are reserved
+	  at boot.
+
+	  These nodes have no memory and no SRAT PXM association.
+	  Drivers (CXL, GPU, virtio-mem, etc.) can claim them to place
+	  hotplugged memory on distinct NUMA nodes for memory tiering
+	  or isolation purposes.
+
+	  Set to 0 (default) to disable.
