@@ -43,6 +43,7 @@
 #include <linux/sched/sysctl.h>
 #include <linux/memory-tiers.h>
 #include <linux/pagewalk.h>
+#include <linux/node_private.h>
 
 #include <asm/tlbflush.h>
 
@@ -1387,6 +1388,8 @@ static int migrate_folio_move(free_folio_t put_new_folio, unsigned long private,
 	if (old_page_state & PAGE_WAS_MLOCKED)
 		lru_add_drain();
 
+	folio_managed_migrate_notify(src, dst);
+
 	if (old_page_state & PAGE_WAS_MAPPED)
 		remove_migration_ptes(src, dst, 0);
 
@@ -2165,6 +2168,7 @@ out:
 
 	return rc_gather;
 }
+EXPORT_SYMBOL_GPL(migrate_pages);
 
 struct folio *alloc_migration_target(struct folio *src, unsigned long private)
 {
@@ -2204,6 +2208,31 @@ struct folio *alloc_migration_target(struct folio *src, unsigned long private)
 
 	return __folio_alloc(gfp_mask, order, nid, mtc->nmask);
 }
+EXPORT_SYMBOL_GPL(alloc_migration_target);
+
+static int __migrate_folios_to_node(struct list_head *folios, int nid,
+				    enum migrate_mode mode,
+				    enum migrate_reason reason)
+{
+	struct migration_target_control mtc = {
+		.nid = nid,
+		.gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_THISNODE,
+		.reason = reason,
+	};
+
+	return migrate_pages(folios, alloc_migration_target, NULL,
+			     (unsigned long)&mtc, mode, reason, NULL);
+}
+
+int migrate_folios_to_node(struct list_head *folios, int nid,
+			   enum migrate_mode mode,
+			   enum migrate_reason reason)
+{
+	if (node_is_private(nid))
+		return node_private_migrate_to(folios, nid, mode,
+					       reason, NULL);
+	return __migrate_folios_to_node(folios, nid, mode, reason);
+}
 
 #ifdef CONFIG_NUMA
 
@@ -2221,14 +2250,8 @@ static int store_status(int __user *status, int start, int value, int nr)
 static int do_move_pages_to_node(struct list_head *pagelist, int node)
 {
 	int err;
-	struct migration_target_control mtc = {
-		.nid = node,
-		.gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_THISNODE,
-		.reason = MR_SYSCALL,
-	};
 
-	err = migrate_pages(pagelist, alloc_migration_target, NULL,
-		(unsigned long)&mtc, MIGRATE_SYNC, MR_SYSCALL, NULL);
+	err = migrate_folios_to_node(pagelist, node, MIGRATE_SYNC, MR_SYSCALL);
 	if (err)
 		putback_movable_pages(pagelist);
 	return err;
@@ -2240,7 +2263,7 @@ static int __add_folio_for_migration(struct folio *folio, int node,
 	if (is_zero_folio(folio) || is_huge_zero_folio(folio))
 		return -EFAULT;
 
-	if (folio_is_zone_device(folio))
+	if (!folio_managed_allows_migrate(folio))
 		return -ENOENT;
 
 	if (folio_nid(folio) == node)
@@ -2449,8 +2472,8 @@ static void do_pages_stat_array(struct mm_struct *mm, unsigned long nr_pages,
 		if (folio) {
 			if (is_zero_folio(folio) || is_huge_zero_folio(folio))
 				err = -EFAULT;
-			else if (folio_is_zone_device(folio))
-				err = -ENOENT;
+			else if (unlikely(folio_is_private_managed(folio)))
+				err = folio_managed_allows_user_migrate(folio);
 			else
 				err = folio_nid(folio);
 			folio_walk_end(&fw, vma);
@@ -2659,6 +2682,9 @@ int migrate_misplaced_folio_prepare(struct folio *folio,
 {
 	int nr_pages = folio_nr_pages(folio);
 	pg_data_t *pgdat = NODE_DATA(node);
+
+	if (!folio_managed_allows_migrate(folio))
+		return -ENOENT;
 
 	if (folio_is_file_lru(folio)) {
 		/*
