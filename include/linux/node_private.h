@@ -134,6 +134,16 @@ static inline bool zone_private_flags(struct zone *z, unsigned long flag)
 	return node_private_flags(zone_to_nid(z)) & flag;
 }
 
+static inline bool zone_private_alloc_allowed(struct zone *zone, gfp_t gfp_mask)
+{
+	int nid = zone_to_nid(zone);
+
+	if (!node_is_private(nid))
+		return true;
+
+	return (gfp_mask & __GFP_PRIVATE);
+}
+
 #else /* !CONFIG_NUMA */
 
 static inline bool folio_is_private_node(struct folio *folio)
@@ -170,6 +180,11 @@ static inline bool node_private_has_flag(int nid, unsigned long flag)
 static inline bool zone_private_flags(struct zone *z, unsigned long flag)
 {
 	return false;
+}
+
+static inline bool zone_private_alloc_allowed(struct zone *zone, gfp_t gfp_mask)
+{
+	return true;
 }
 
 #endif /* CONFIG_NUMA */

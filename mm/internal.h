@@ -1169,6 +1169,8 @@ extern int node_reclaim_mode;
 
 extern int node_reclaim(struct pglist_data *, gfp_t, unsigned int);
 extern int find_next_best_node(int node, nodemask_t *used_node_mask);
+extern bool numa_zone_alloc_allowed(int alloc_flags, struct zone *zone,
+			      gfp_t gfp_mask);
 #else
 #define node_reclaim_mode 0
 
@@ -1180,6 +1182,11 @@ static inline int node_reclaim(struct pglist_data *pgdat, gfp_t mask,
 static inline int find_next_best_node(int node, nodemask_t *used_node_mask)
 {
 	return NUMA_NO_NODE;
+}
+static inline bool numa_zone_alloc_allowed(int alloc_flags, struct zone *zone,
+				     gfp_t gfp_mask)
+{
+	return true;
 }
 #endif
 

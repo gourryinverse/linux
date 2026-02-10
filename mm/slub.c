@@ -2951,7 +2951,8 @@ static struct slab *get_any_partial(struct kmem_cache *s,
 
 			n = get_node(s, zone_to_nid(zone));
 
-			if (n && cpuset_zone_allowed(zone, pc->flags) &&
+			if (n && numa_zone_alloc_allowed(ALLOC_CPUSET, zone,
+						   pc->flags) &&
 					n->nr_partial > s->min_partial) {
 				slab = get_partial_node(s, n, pc);
 				if (slab) {
