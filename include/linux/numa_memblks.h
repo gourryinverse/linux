@@ -32,6 +32,8 @@ int __init numa_memblks_init(int (*init_func)(void),
 
 extern int numa_distance_cnt;
 
+int __init numa_standby_cmdline(char *str);
+
 #ifdef CONFIG_NUMA_EMU
 extern int emu_nid_to_phys[MAX_NUMNODES];
 int numa_emu_cmdline(char *str);

@@ -6,6 +6,7 @@
 #include <linux/memblock.h>
 #include <linux/numa.h>
 #include <linux/numa_memblks.h>
+#include <linux/topology.h>
 
 int numa_distance_cnt;
 static u8 *numa_distance;
@@ -440,6 +441,93 @@ static int __init numa_register_meminfo(struct numa_meminfo *mi)
 	return 0;
 }
 
+static int numa_standby_nodes __initdata;
+
+int __init numa_standby_cmdline(char *str)
+{
+	int ret = kstrtoint(str, 0, &numa_standby_nodes);
+
+	if (ret || numa_standby_nodes < 0)
+		return -EINVAL;
+	numa_standby_nodes = min(numa_standby_nodes, 16);
+	return 0;
+}
+
+/**
+ * numa_init_standby_nodes - Register standby nodes and rebuild distance table
+ *
+ * Called during NUMA init after all other node sources (SRAT, CFMWS,
+ * Kconfig standby) have populated numa_nodes_parsed.  Creates empty
+ * standby nodes requested via the numa=standby=<N> boot parameter and
+ * rebuilds the NUMA distance table if it needs to grow to cover nodes
+ * added after SLIT parsing.
+ */
+static void __init numa_init_standby_nodes(void)
+{
+	nodemask_t available;
+	int i, j, max_node, old_cnt;
+	u8 *saved_dist = NULL;
+	size_t saved_size;
+	int registered = 0;
+
+	/* Add cmdline standby nodes to numa_nodes_parsed */
+	if (numa_standby_nodes) {
+		nodes_complement(available, numa_nodes_parsed);
+		for (i = 0; i < numa_standby_nodes; i++) {
+			int node = first_node(available);
+
+			if (node >= MAX_NUMNODES)
+				break;
+			node_clear(node, available);
+			node_set(node, numa_nodes_parsed);
+			numa_register_exclusive_node(node);
+			pr_info("NUMA: standby node %d reserved\n", node);
+			registered++;
+		}
+	}
+	if (registered != numa_standby_nodes)
+		pr_warn("NUMA: error registering standby nodes\n");
+
+	/*
+	 * If nodes were added to numa_nodes_parsed after the distance
+	 * table was allocated (CFMWS standby, Kconfig standby, or
+	 * cmdline standby nodes), the table is too small.  Rebuild it
+	 * so that all nodes have distance entries (standby nodes get
+	 * REMOTE_DISTANCE by default from the reallocation fill).
+	 */
+	old_cnt = numa_distance_cnt;
+	if (!old_cnt)
+		return;
+
+	max_node = 0;
+	for_each_node_mask(i, numa_nodes_parsed)
+		max_node = i;
+
+	if (max_node < old_cnt)
+		return;
+
+	saved_size = old_cnt * old_cnt * sizeof(u8);
+	saved_dist = memblock_alloc(saved_size, PAGE_SIZE);
+	if (!saved_dist) {
+		pr_warn("NUMA: standby nodes will use default distances\n");
+		return;
+	}
+
+	for (i = 0; i < old_cnt; i++)
+		for (j = 0; j < old_cnt; j++)
+			saved_dist[i * old_cnt + j] = node_distance(i, j);
+
+	/* Reset triggers reallocation on next numa_set_distance() */
+	numa_reset_distance();
+
+	/* Restore, first call reallocates sized for new numa_nodes_parsed */
+	for (i = 0; i < old_cnt; i++)
+		for (j = 0; j < old_cnt; j++)
+			numa_set_distance(i, j, saved_dist[i * old_cnt + j]);
+
+	memblock_free(saved_dist, saved_size);
+}
+
 int __init numa_memblks_init(int (*init_func)(void),
 			     bool memblock_force_top_down)
 {
@@ -477,6 +565,7 @@ int __init numa_memblks_init(int (*init_func)(void),
 		return ret;
 
 	numa_emulation(&numa_meminfo, numa_distance_cnt);
+	numa_init_standby_nodes();
 
 	return numa_register_meminfo(&numa_meminfo);
 }
@@ -564,6 +653,15 @@ static int meminfo_to_nid(struct numa_meminfo *mi, u64 start)
 			return mi->blk[i].nid;
 	return NUMA_NO_NODE;
 }
+
+/*
+ * These interfaces should only be used to acquire information about statically
+ * configured memory associations made at __init time.
+ *
+ * This interface should not be used to determine the node a struct page/folio
+ * lives in, as it is possible for memory hotplug to place those pages in
+ * different nodes than reported by this function.
+ */
 
 int phys_to_target_node(u64 start)
 {

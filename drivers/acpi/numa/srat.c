@@ -454,7 +454,7 @@ static int __init acpi_parse_cfmws(union acpi_subtable_headers *header,
 	 * window.
 	 */
 	if (!numa_fill_memblks(start, end))
-		return 0;
+		goto standby_nodes;
 
 	/* No SRAT description. Create a new node. */
 	node = acpi_map_pxm_to_node(*fake_pxm);
@@ -473,6 +473,18 @@ static int __init acpi_parse_cfmws(union acpi_subtable_headers *header,
 
 	/* Set the next available fake_pxm value */
 	(*fake_pxm)++;
+
+standby_nodes:
+	/* Create additional standby nodes for this CFMWS window */
+	for (int i = 0; i < CONFIG_ACPI_NUMA_ADD_CFMWS_NODES; i++) {
+		node = acpi_map_pxm_to_node(*fake_pxm);
+		if (node == NUMA_NO_NODE)
+			break;
+		node_set(node, numa_nodes_parsed);
+		numa_register_exclusive_node(node);
+		(*fake_pxm)++;
+	}
+
 	return 0;
 }
 
@@ -656,6 +668,20 @@ int __init acpi_numa_init(void)
 	fake_pxm++;
 	acpi_table_parse_cedt(ACPI_CEDT_TYPE_CFMWS, acpi_parse_cfmws,
 			      &fake_pxm);
+
+	/* Add general-use standby nodes independent of CFMWS */
+	for (i = 0; i < CONFIG_ACPI_NUMA_STANDBY_NODES; i++) {
+		int node = acpi_map_pxm_to_node(fake_pxm);
+
+		if (node == NUMA_NO_NODE) {
+			pr_warn("ACPI NUMA: unable to reserve standby node %d of %d\n",
+				i, CONFIG_ACPI_NUMA_STANDBY_NODES);
+			break;
+		}
+		node_set(node, numa_nodes_parsed);
+		numa_register_exclusive_node(node);
+		fake_pxm++;
+	}
 
 	if (cnt < 0)
 		return cnt;
