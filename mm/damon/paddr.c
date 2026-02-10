@@ -526,6 +526,9 @@ static unsigned long damon_pa_migrate(struct damon_region *r, struct damos *s,
 		else
 			*sz_filter_passed += folio_size(folio);
 
+		if (!folio_managed_allows_migrate(folio))
+			goto put_folio;
+
 		if (!folio_isolate_lru(folio))
 			goto put_folio;
 		list_add(&folio->lru, &folio_list);

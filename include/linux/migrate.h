@@ -79,6 +79,9 @@ void migration_entry_wait_on_locked(swp_entry_t entry, spinlock_t *ptl)
 void folio_migrate_flags(struct folio *newfolio, struct folio *folio);
 int folio_migrate_mapping(struct address_space *mapping,
 		struct folio *newfolio, struct folio *folio, int extra_count);
+int migrate_folios_to_node(struct list_head *folios, int nid,
+				    enum migrate_mode mode,
+				    enum migrate_reason reason);
 
 #else
 
@@ -97,6 +100,13 @@ static inline bool isolate_folio_to_list(struct folio *folio, struct list_head *
 
 static inline int migrate_huge_page_move_mapping(struct address_space *mapping,
 				  struct folio *dst, struct folio *src)
+{
+	return -ENOSYS;
+}
+static inline int migrate_folios_to_node(struct list_head *folios,
+						  int nid,
+						  enum migrate_mode mode,
+						  enum migrate_reason reason)
 {
 	return -ENOSYS;
 }

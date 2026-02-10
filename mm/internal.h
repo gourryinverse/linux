@@ -1396,6 +1396,30 @@ static inline bool folio_managed_on_free(struct folio *folio)
 	return false;
 }
 
+/**
+ * folio_managed_migrate_notify - Notify service that a folio changed location
+ * @src: the old folio (about to be freed)
+ * @dst: the new folio (data already copied, migration entries still in place)
+ *
+ * Called from migrate_folio_move() after data has been copied but before
+ * remove_migration_ptes() installs real PTEs pointing to @dst.  While
+ * migration entries are in place, faults block in migration_entry_wait(),
+ * so the service can safely update PFN-based metadata before any access
+ * through the page tables.  Both @src and @dst are locked.
+ */
+static inline void folio_managed_migrate_notify(struct folio *src,
+						struct folio *dst)
+{
+	const struct node_private_ops *ops;
+
+	if (!folio_is_private_node(src))
+		return;
+
+	ops = folio_node_private_ops(src);
+	if (ops && ops->folio_migrate)
+		ops->folio_migrate(src, dst);
+}
+
 struct vm_struct *__get_vm_area_node(unsigned long size,
 				     unsigned long align, unsigned long shift,
 				     unsigned long flags, unsigned long start,

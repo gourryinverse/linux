@@ -4,6 +4,7 @@
 
 #include <linux/completion.h>
 #include <linux/memremap.h>
+#include <linux/migrate_mode.h>
 #include <linux/mm.h>
 #include <linux/nodemask.h>
 #include <linux/rcupdate.h>
@@ -52,14 +53,39 @@ struct vm_fault;
  *     or NULL when called for the final (original) folio after all sub-folios
  *     have been split off.
  *
+ * @migrate_to: Migrate folios TO this node.
+ *	[refcounted callback]
+ *	Returns: 0 on full success, >0 = number of folios that failed to
+ *		 migrate, <0 = error.  Matches migrate_pages() semantics.
+ *		 @nr_succeeded is set to the number of successfully migrated
+ *		 folios (may be NULL if caller doesn't need it).
+ *
+ * @folio_migrate: Post-migration notification that a folio on this private node
+ *    changed physical location (on the same node or a different node).
+ *    [folio-referenced callback]
+ *     Called from migrate_folio_move() after data has been copied but before
+ *     migration entries are replaced with real PTEs.  Both @src and @dst are
+ *     locked.  Faults block in migration_entry_wait() until
+ *     remove_migration_ptes() runs, so the service can safely update
+ *     PFN-based metadata (compression tables, device page tables, DMA
+ *     mappings, etc.) before any access through the page tables.
+ *
  * @flags: Operation exclusion flags (NP_OPS_* constants).
  *
  */
 struct node_private_ops {
 	bool (*free_folio)(struct folio *folio);
 	void (*folio_split)(struct folio *folio, struct folio *new_folio);
+	int (*migrate_to)(struct list_head *folios, int nid,
+				  enum migrate_mode mode,
+				  enum migrate_reason reason,
+				  unsigned int *nr_succeeded);
+	void (*folio_migrate)(struct folio *src, struct folio *dst);
 	unsigned long flags;
 };
+
+/* Allow user/kernel migration; requires migrate_to and folio_migrate */
+#define NP_OPS_MIGRATION		BIT(0)
 
 /**
  * struct node_private - Per-node container for private nodes
@@ -184,6 +210,81 @@ static inline void folio_managed_split_cb(struct folio *original_folio,
 	node_private_split_cb(original_folio, new_folio);
 }
 
+#ifdef CONFIG_MEMORY_HOTPLUG
+static inline int folio_managed_allows_user_migrate(struct folio *folio)
+{
+	if (folio_is_zone_device(folio))
+		return -ENOENT;
+	return node_private_has_flag(folio_nid(folio), NP_OPS_MIGRATION) ?
+	       folio_nid(folio) : -ENOENT;
+}
+
+/**
+ * folio_managed_allows_migrate - Check if a managed folio supports migration
+ * @folio: The folio to check
+ *
+ * Returns true if the folio can be migrated.  For zone_device folios, only
+ * device_private and device_coherent support migration.  For private node
+ * folios, migration requires NP_OPS_MIGRATION.  Normal folios always
+ * return true.
+ */
+static inline bool folio_managed_allows_migrate(struct folio *folio)
+{
+	if (folio_is_zone_device(folio))
+		return folio_is_device_private(folio) ||
+		       folio_is_device_coherent(folio);
+	if (folio_is_private_node(folio))
+		return folio_private_flags(folio, NP_OPS_MIGRATION);
+	return true;
+}
+
+/**
+ * node_private_migrate_to - Attempt service-specific migration to a private node
+ * @folios: list of folios to migrate (may sleep)
+ * @nid: target node
+ * @mode: migration mode (MIGRATE_ASYNC, MIGRATE_SYNC, etc.)
+ * @reason: migration reason (MR_DEMOTION, MR_SYSCALL, etc.)
+ * @nr_succeeded: optional output for number of successfully migrated folios
+ *
+ * If @nid is a private node with a migrate_to callback,
+ * invokes the callback and returns the result with migrate_pages()
+ * semantics (0 = full success, >0 = failure count, <0 = error).
+ * Returns -ENODEV if the node is not private or the service is being
+ * torn down.
+ *
+ * The source folios are on other nodes, so they do not pin the target
+ * node's node_private.  A temporary refcount is taken under rcu_read_lock
+ * to keep node_private (and the service module) alive across the callback.
+ */
+static inline int node_private_migrate_to(struct list_head *folios, int nid,
+					  enum migrate_mode mode,
+					  enum migrate_reason reason,
+					  unsigned int *nr_succeeded)
+{
+	int (*fn)(struct list_head *, int, enum migrate_mode,
+		  enum migrate_reason, unsigned int *);
+	struct node_private *np;
+	int ret;
+
+	rcu_read_lock();
+	np = rcu_dereference(NODE_DATA(nid)->private);
+	if (!np || !np->ops || !np->ops->migrate_to ||
+	    !refcount_inc_not_zero(&np->refcount)) {
+		rcu_read_unlock();
+		return -ENODEV;
+	}
+	fn = np->ops->migrate_to;
+	rcu_read_unlock();
+
+	ret = fn(folios, nid, mode, reason, nr_succeeded);
+
+	if (refcount_dec_and_test(&np->refcount))
+		complete(&np->released);
+
+	return ret;
+}
+#endif /* CONFIG_MEMORY_HOTPLUG */
+
 #else /* !CONFIG_NUMA */
 
 static inline bool folio_is_private_node(struct folio *folio)
@@ -251,6 +352,27 @@ int node_private_set_ops(int nid, const struct node_private_ops *ops);
 int node_private_clear_ops(int nid, const struct node_private_ops *ops);
 
 #else /* !CONFIG_NUMA || !CONFIG_MEMORY_HOTPLUG */
+
+static inline int folio_managed_allows_user_migrate(struct folio *folio)
+{
+	return -ENOENT;
+}
+
+static inline bool folio_managed_allows_migrate(struct folio *folio)
+{
+	if (folio_is_zone_device(folio))
+		return folio_is_device_private(folio) ||
+		       folio_is_device_coherent(folio);
+	return true;
+}
+
+static inline int node_private_migrate_to(struct list_head *folios, int nid,
+					  enum migrate_mode mode,
+					  enum migrate_reason reason,
+					  unsigned int *nr_succeeded)
+{
+	return -ENODEV;
+}
 
 static inline int node_private_register(int nid, struct node_private *np)
 {

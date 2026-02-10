@@ -72,6 +72,7 @@
 #include <linux/backing-dev.h>
 #include <linux/page_idle.h>
 #include <linux/memremap.h>
+#include <linux/node_private.h>
 #include <linux/userfaultfd_k.h>
 #include <linux/mm_inline.h>
 #include <linux/oom.h>
@@ -2602,8 +2603,7 @@ void try_to_migrate(struct folio *folio, enum ttu_flags flags)
 					TTU_SYNC | TTU_BATCH_FLUSH)))
 		return;
 
-	if (folio_is_zone_device(folio) &&
-	    (!folio_is_device_private(folio) && !folio_is_device_coherent(folio)))
+	if (!folio_managed_allows_migrate(folio))
 		return;
 
 	/*
