@@ -39,10 +39,16 @@ struct vm_fault;
  *   callback to prevent node_private from being freed.
  *   These callbacks MUST NOT sleep.
  *
+ * @free_folio: Called when a folio refcount drops to 0
+ *   [folio-referenced callback]
+ *   Returns: true if handled (skip return to buddy)
+ *            false if no op (return to buddy)
+ *
  * @flags: Operation exclusion flags (NP_OPS_* constants).
  *
  */
 struct node_private_ops {
+	bool (*free_folio)(struct folio *folio);
 	unsigned long flags;
 };
 

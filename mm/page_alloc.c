@@ -2997,6 +2997,10 @@ void free_unref_folios(struct folio_batch *folios)
 		unsigned long pfn = folio_pfn(folio);
 		unsigned int order = folio_order(folio);
 
+		if (unlikely(folio_is_private_managed(folio)))
+			if (folio_managed_on_free(folio))
+				continue;
+
 		if (!free_pages_prepare(&folio->page, order))
 			continue;
 		/*
