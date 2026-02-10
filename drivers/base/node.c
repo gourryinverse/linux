@@ -22,6 +22,7 @@
 #include <linux/swap.h>
 #include <linux/slab.h>
 #include <linux/memblock.h>
+#include <linux/node_private.h>
 
 static const struct bus_type node_subsys = {
 	.name = "node",
@@ -861,6 +862,198 @@ void register_memory_blocks_under_node_hotplug(int nid, unsigned long start_pfn,
 			   (void *)&nid, register_mem_block_under_node_hotplug);
 	return;
 }
+
+static DEFINE_MUTEX(node_private_lock);
+static bool node_private_initialized;
+
+/**
+ * node_private_register - Register a private node
+ * @nid: Node identifier
+ * @np: The node_private structure (driver-allocated, driver-owned)
+ *
+ * Register a driver for a private node. Only one driver can register
+ * per node. If another driver has already registered (with different np),
+ * -EBUSY is returned. Re-registration with the same np is allowed.
+ *
+ * The driver owns the node_private memory and must ensure it remains valid
+ * until refcount reaches 0 after node_private_unregister().
+ *
+ * Returns 0 on success, negative errno on failure.
+ */
+int node_private_register(int nid, struct node_private *np)
+{
+	struct node_private *existing;
+	pg_data_t *pgdat;
+	int ret = 0;
+
+	if (!np || !node_possible(nid))
+		return -EINVAL;
+
+	if (!node_private_initialized)
+		return -ENODEV;
+
+	mutex_lock(&node_private_lock);
+	mem_hotplug_begin();
+
+	/* N_MEMORY_PRIVATE and N_MEMORY are mutually exclusive */
+	if (node_state(nid, N_MEMORY)) {
+		ret = -EBUSY;
+		goto out;
+	}
+
+	pgdat = NODE_DATA(nid);
+	existing = rcu_dereference_protected(pgdat->node_private,
+					     lockdep_is_held(&node_private_lock));
+
+	/* Only one source my register this node */
+	if (existing) {
+		if (existing != np) {
+			ret = -EBUSY;
+			goto out;
+		}
+		goto out;
+	}
+
+	refcount_set(&np->refcount, 1);
+	init_completion(&np->released);
+
+	rcu_assign_pointer(pgdat->node_private, np);
+	pgdat->private = true;
+
+out:
+	mem_hotplug_done();
+	mutex_unlock(&node_private_lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(node_private_register);
+
+/**
+ * node_private_set_ops - Set service callbacks on a registered private node
+ * @nid: Node identifier
+ * @ops: Service callbacks and flags (driver-owned, must outlive registration)
+ *
+ * Validates flag dependencies and sets the ops on the node's node_private.
+ * The node must already be registered via node_private_register().
+ *
+ * Returns 0 on success, -EINVAL for invalid flag combinations,
+ * -ENODEV if no node_private is registered on @nid.
+ */
+int node_private_set_ops(int nid, const struct node_private_ops *ops)
+{
+	struct node_private *np;
+	int ret = 0;
+
+	if (!ops)
+		return -EINVAL;
+
+	if (!node_possible(nid))
+		return -EINVAL;
+
+	mutex_lock(&node_private_lock);
+	np = rcu_dereference_protected(NODE_DATA(nid)->node_private,
+				       lockdep_is_held(&node_private_lock));
+	if (!np)
+		ret = -ENODEV;
+	else
+		np->ops = ops;
+	mutex_unlock(&node_private_lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(node_private_set_ops);
+
+/**
+ * node_private_clear_ops - Clear service callbacks from a private node
+ * @nid: Node identifier
+ * @ops: Expected ops pointer (must match current ops)
+ *
+ * Clears the ops only if @ops matches the currently registered ops,
+ * preventing one service from accidentally clearing another's callbacks.
+ *
+ * Returns 0 on success, -ENODEV if no node_private is registered,
+ * -EINVAL if @ops does not match.
+ */
+int node_private_clear_ops(int nid, const struct node_private_ops *ops)
+{
+	struct node_private *np;
+	int ret = 0;
+
+	if (!node_possible(nid))
+		return -EINVAL;
+
+	mutex_lock(&node_private_lock);
+	np = rcu_dereference_protected(NODE_DATA(nid)->node_private,
+				       lockdep_is_held(&node_private_lock));
+	if (!np)
+		ret = -ENODEV;
+	else if (np->ops != ops)
+		ret = -EINVAL;
+	else
+		np->ops = NULL;
+	mutex_unlock(&node_private_lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(node_private_clear_ops);
+
+/**
+ * node_private_unregister - Unregister a private node
+ * @nid: Node identifier
+ *
+ * Unregister the driver from a private node. Only succeeds if all memory
+ * has been offlined and the node is no longer N_MEMORY_PRIVATE.
+ * When successful, drops the refcount to 0 indicating the driver can
+ * free its context.
+ *
+ * N_MEMORY_PRIVATE state is cleared by offline_pages() when the last
+ * memory is offlined, not by this function.
+ *
+ * Return: 0 if unregistered, -EBUSY if N_MEMORY_PRIVATE is still set
+ * (other memory blocks remain on this node).
+ */
+int node_private_unregister(int nid)
+{
+	struct node_private *np;
+	pg_data_t *pgdat;
+
+	if (!node_possible(nid))
+		return 0;
+
+	mutex_lock(&node_private_lock);
+	mem_hotplug_begin();
+
+	pgdat = NODE_DATA(nid);
+	np = rcu_dereference_protected(pgdat->node_private,
+				       lockdep_is_held(&node_private_lock));
+	if (!np) {
+		mem_hotplug_done();
+		mutex_unlock(&node_private_lock);
+		return 0;
+	}
+
+	/*
+	 * Only unregister if all memory is offline and N_MEMORY_PRIVATE is
+	 * cleared. N_MEMORY_PRIVATE is cleared by offline_pages() when the
+	 * last memory block is offlined.
+	 */
+	if (node_state(nid, N_MEMORY_PRIVATE)) {
+		mem_hotplug_done();
+		mutex_unlock(&node_private_lock);
+		return -EBUSY;
+	}
+
+	rcu_assign_pointer(pgdat->node_private, NULL);
+	pgdat->private = false;
+
+	mem_hotplug_done();
+	mutex_unlock(&node_private_lock);
+
+	synchronize_rcu();
+
+	if (!refcount_dec_and_test(&np->refcount))
+		wait_for_completion(&np->released);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(node_private_unregister);
+
 #endif /* CONFIG_MEMORY_HOTPLUG */
 
 /**
@@ -959,6 +1152,7 @@ static struct node_attr node_state_attr[] = {
 	[N_HIGH_MEMORY] = _NODE_ATTR(has_high_memory, N_HIGH_MEMORY),
 #endif
 	[N_MEMORY] = _NODE_ATTR(has_memory, N_MEMORY),
+	[N_MEMORY_PRIVATE] = _NODE_ATTR(has_private_memory, N_MEMORY_PRIVATE),
 	[N_CPU] = _NODE_ATTR(has_cpu, N_CPU),
 	[N_GENERIC_INITIATOR] = _NODE_ATTR(has_generic_initiator,
 					   N_GENERIC_INITIATOR),
@@ -972,6 +1166,7 @@ static struct attribute *node_state_attrs[] = {
 	&node_state_attr[N_HIGH_MEMORY].attr.attr,
 #endif
 	&node_state_attr[N_MEMORY].attr.attr,
+	&node_state_attr[N_MEMORY_PRIVATE].attr.attr,
 	&node_state_attr[N_CPU].attr.attr,
 	&node_state_attr[N_GENERIC_INITIATOR].attr.attr,
 	NULL
@@ -1006,6 +1201,8 @@ void __init node_dev_init(void)
 		if (ret)
 			panic("%s() failed to add node: %d\n", __func__, ret);
 	}
+
+	node_private_initialized = true;
 
 	register_memory_blocks_under_nodes();
 }
