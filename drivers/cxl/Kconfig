@@ -198,6 +198,7 @@ config CXL_REGION
 	default CXL_BUS
 	# For MAX_PHYSMEM_BITS
 	depends on SPARSEMEM
+	depends on MEMORY_HOTPLUG # for add_memory() and friends
 	select MEMREGION
 	select GET_FREE_REGION
 	help
