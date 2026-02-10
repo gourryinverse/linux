@@ -85,12 +85,23 @@ static int sysram_hotplug_add(struct cxl_sysram *sysram, enum mmop online_type)
 	/*
 	 * Ensure that future kexec'd kernels will not treat
 	 * this as RAM automatically.
+	 *
+	 * For private regions, use add_private_memory_driver_managed()
+	 * to register as N_MEMORY_PRIVATE which isolates the memory from
+	 * normal allocations and reclaim.
 	 */
-	rc = __add_memory_driver_managed(sysram->mgid,
-					 sysram->hpa_range.start,
-					 range_len(&sysram->hpa_range),
-					 sysram_res_name, mhp_flags,
-					 online_type);
+	if (sysram->private)
+		rc = add_private_memory_driver_managed(sysram->mgid,
+						       sysram->hpa_range.start,
+						       range_len(&sysram->hpa_range),
+						       sysram_res_name, mhp_flags,
+						       online_type, &sysram->np);
+	else
+		rc = __add_memory_driver_managed(sysram->mgid,
+						 sysram->hpa_range.start,
+						 range_len(&sysram->hpa_range),
+						 sysram_res_name, mhp_flags,
+						 online_type);
 	if (rc) {
 		remove_resource(res);
 		kfree(res);
@@ -108,10 +119,23 @@ static int sysram_hotplug_remove(struct cxl_sysram *sysram)
 	if (!sysram->res)
 		return 0;
 
-	rc = offline_and_remove_memory(sysram->hpa_range.start,
-				       range_len(&sysram->hpa_range));
-	if (rc)
-		return rc;
+	if (sysram->private) {
+		rc = offline_and_remove_private_memory(sysram->numa_node,
+						       sysram->hpa_range.start,
+						       range_len(&sysram->hpa_range));
+		/*
+		 * -EBUSY means memory was removed but node_private_unregister()
+		 * could not complete because other regions share the node.
+		 * Continue to resource cleanup since the memory is gone.
+		 */
+		if (rc && rc != -EBUSY)
+			return rc;
+	} else {
+		rc = offline_and_remove_memory(sysram->hpa_range.start,
+					       range_len(&sysram->hpa_range));
+		if (rc)
+			return rc;
+	}
 
 	if (sysram->res) {
 		remove_resource(sysram->res);
@@ -257,7 +281,8 @@ static void sysram_unregister(void *_sysram)
 	device_unregister(&sysram->dev);
 }
 
-int devm_cxl_add_sysram(struct cxl_region *cxlr, enum mmop online_type)
+int devm_cxl_add_sysram(struct cxl_region *cxlr, bool private,
+			enum mmop online_type)
 {
 	struct cxl_sysram *sysram __free(put_cxl_sysram) = NULL;
 	struct memory_dev_type *mtype;
@@ -290,6 +315,11 @@ int devm_cxl_add_sysram(struct cxl_region *cxlr, enum mmop online_type)
 	/* Override default online type if caller specified one */
 	if (online_type >= 0)
 		sysram->online_type = online_type;
+
+	/* Set up private node registration if requested */
+	sysram->private = private;
+	if (private)
+		sysram->np.owner = sysram;
 
 	dev = &sysram->dev;
 
