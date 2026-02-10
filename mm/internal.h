@@ -1611,6 +1611,42 @@ static inline void folio_managed_migrate_notify(struct folio *src,
 		ops->folio_migrate(src, dst);
 }
 
+/**
+ * node_private_reclaim_policy - invoke the service's reclaim policy callback
+ * @nid: NUMA node id
+ * @policy: reclaim policy struct to fill in
+ *
+ * Called by kswapd before boosted reclaim.  Zeroes @policy, then if the
+ * private node service provides a reclaim_policy callback, invokes it
+ * and sets policy->active to true.
+ */
+#ifdef CONFIG_NUMA
+static inline void node_private_reclaim_policy(int nid,
+					       struct node_reclaim_policy *policy)
+{
+	struct node_private *np;
+
+	memset(policy, 0, sizeof(*policy));
+
+	if (!node_is_private(nid))
+		return;
+
+	rcu_read_lock();
+	np = rcu_dereference(NODE_DATA(nid)->private);
+	if (np && np->ops && np->ops->reclaim_policy) {
+		np->ops->reclaim_policy(nid, policy);
+		policy->active = true;
+	}
+	rcu_read_unlock();
+}
+#else
+static inline void node_private_reclaim_policy(int nid,
+					       struct node_reclaim_policy *policy)
+{
+	memset(policy, 0, sizeof(*policy));
+}
+#endif
+
 struct vm_struct *__get_vm_area_node(unsigned long size,
 				     unsigned long align, unsigned long shift,
 				     unsigned long vm_flags, unsigned long start,

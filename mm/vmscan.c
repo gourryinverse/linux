@@ -73,6 +73,13 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/vmscan.h>
 
+static inline bool zone_reclaim_allowed(struct zone *zone, gfp_t gfp_mask)
+{
+	if (node_is_private(zone_to_nid(zone)))
+		return zone_private_flags(zone, NP_OPS_RECLAIM);
+	return cpuset_zone_allowed(zone, gfp_mask);
+}
+
 struct scan_control {
 	/* How many pages shrink_list() should reclaim */
 	unsigned long nr_to_reclaim;
@@ -6274,7 +6281,7 @@ static void shrink_zones(struct zonelist *zonelist, struct scan_control *sc)
 		 * to global LRU.
 		 */
 		if (!cgroup_reclaim(sc)) {
-			if (!cpuset_zone_allowed(zone,
+			if (!zone_reclaim_allowed(zone,
 						 GFP_KERNEL | __GFP_HARDWALL))
 				continue;
 
@@ -6992,6 +6999,7 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int highest_zoneidx)
 	unsigned long zone_boosts[MAX_NR_ZONES] = { 0, };
 	bool boosted;
 	struct zone *zone;
+	struct node_reclaim_policy policy;
 	struct scan_control sc = {
 		.gfp_mask = GFP_KERNEL,
 		.order = order,
@@ -7015,6 +7023,9 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int highest_zoneidx)
 		zone_boosts[i] = zone->watermark_boost;
 	}
 	boosted = nr_boost_reclaim;
+
+	/* Query/cache private node reclaim policy once per balance() */
+	node_private_reclaim_policy(pgdat->node_id, &policy);
 
 restart:
 	set_reclaim_active(pgdat, highest_zoneidx);
@@ -7082,6 +7093,12 @@ restart:
 		 */
 		sc.may_writepage = !laptop_mode && !nr_boost_reclaim;
 		sc.may_swap = !nr_boost_reclaim;
+
+		/* Private nodes may enable swap/writepage when using boost */
+		if (policy.active) {
+			sc.may_swap |= policy.may_swap;
+			sc.may_writepage |= policy.may_writepage;
+		}
 
 		/*
 		 * Do some background aging, to give pages a chance to be
@@ -7174,6 +7191,10 @@ out:
 
 		for (i = 0; i <= highest_zoneidx; i++) {
 			if (!zone_boosts[i])
+				continue;
+
+			/* Some private nodes may own the\ boost lifecycle */
+			if (policy.managed_watermarks)
 				continue;
 
 			/* Increments are under the zone lock */
@@ -7406,7 +7427,7 @@ void wakeup_kswapd(struct zone *zone, gfp_t gfp_flags, int order,
 	if (!managed_zone(zone))
 		return;
 
-	if (!cpuset_zone_allowed(zone, gfp_flags))
+	if (!zone_reclaim_allowed(zone, gfp_flags))
 		return;
 
 	pgdat = zone->zone_pgdat;
