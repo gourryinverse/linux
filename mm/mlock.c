@@ -25,6 +25,7 @@
 #include <linux/memcontrol.h>
 #include <linux/mm_inline.h>
 #include <linux/secretmem.h>
+#include <linux/node_private.h>
 
 #include "internal.h"
 
@@ -368,7 +369,7 @@ static int mlock_pte_range(pmd_t *pmd, unsigned long addr,
 		if (is_huge_zero_pmd(*pmd))
 			goto out;
 		folio = pmd_folio(*pmd);
-		if (folio_is_zone_device(folio))
+		if (unlikely(folio_is_private_managed(folio)))
 			goto out;
 		if (vma->vm_flags & VM_LOCKED)
 			mlock_folio(folio);
@@ -388,7 +389,7 @@ static int mlock_pte_range(pmd_t *pmd, unsigned long addr,
 		if (!pte_present(ptent))
 			continue;
 		folio = vm_normal_folio(vma, addr, ptent);
-		if (!folio || folio_is_zone_device(folio))
+		if (!folio || unlikely(folio_is_private_managed(folio)))
 			continue;
 
 		step = folio_mlock_step(folio, pte, addr, end);
