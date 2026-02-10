@@ -6228,6 +6228,7 @@ static void fix_spurious_fault(struct vm_fault *vmf,
  */
 static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 {
+	struct folio *folio;
 	pte_t entry;
 
 	if (unlikely(pmd_none(*vmf->pmd))) {
@@ -6284,6 +6285,16 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 		update_mmu_tlb(vmf->vma, vmf->address, vmf->pte);
 		goto unlock;
 	}
+
+	folio = vm_normal_folio(vmf->vma, vmf->address, entry);
+	if (unlikely(folio && folio_is_private_managed(folio))) {
+		vm_fault_t fault_ret;
+
+		if (folio_managed_handle_fault(folio, vmf, PGTABLE_LEVEL_PTE,
+					       &fault_ret))
+			return fault_ret;
+	}
+
 	if (vmf->flags & (FAULT_FLAG_WRITE|FAULT_FLAG_UNSHARE)) {
 		if (!pte_write(entry))
 			return do_wp_page(vmf);

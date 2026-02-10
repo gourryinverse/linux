@@ -70,6 +70,24 @@ struct vm_fault;
  *     PFN-based metadata (compression tables, device page tables, DMA
  *     mappings, etc.) before any access through the page tables.
  *
+ * @handle_fault: Handle fault on folio on this private node.
+ *   [folio-referenced callback, PTL held on entry]
+ *
+ *   Called from handle_pte_fault() (PTE level) or do_huge_pmd_wp_page()
+ *   (PMD level) after lock acquisition and entry verification.
+ *   @folio is the faulting folio, @level indicates the page table level.
+ *
+ *   For PGTABLE_LEVEL_PTE: vmf->pte is mapped and vmf->ptl is the
+ *   PTE lock.  Release via pte_unmap_unlock(vmf->pte, vmf->ptl).
+ *
+ *   For PGTABLE_LEVEL_PMD: vmf->pte is NULL and vmf->ptl is the
+ *   PMD lock.  Release via spin_unlock(vmf->ptl).
+ *
+ *   The callback MUST release PTL on ALL paths.
+ *   The caller will NOT touch the page table entry after this returns.
+ *
+ *   Returns: vm_fault_t result (0, VM_FAULT_RETRY, etc.)
+ *
  * @flags: Operation exclusion flags (NP_OPS_* constants).
  *
  */
@@ -81,6 +99,8 @@ struct node_private_ops {
 				  enum migrate_reason reason,
 				  unsigned int *nr_succeeded);
 	void (*folio_migrate)(struct folio *src, struct folio *dst);
+	vm_fault_t (*handle_fault)(struct folio *folio, struct vm_fault *vmf,
+				   enum pgtable_level level);
 	unsigned long flags;
 };
 
@@ -90,6 +110,8 @@ struct node_private_ops {
 #define NP_OPS_MEMPOLICY		BIT(1)
 /* Node participates as a demotion target in memory-tiers */
 #define NP_OPS_DEMOTION			BIT(2)
+/* Prevent mprotect/NUMA from upgrading PTEs to writable on this node */
+#define NP_OPS_PROTECT_WRITE		BIT(3)
 
 /**
  * struct node_private - Per-node container for private nodes
