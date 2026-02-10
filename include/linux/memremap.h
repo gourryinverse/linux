@@ -64,6 +64,17 @@ struct vmem_altmap {
  * MEMORY_DEVICE_PCI_P2PDMA:
  * Device memory residing in a PCI BAR intended for use with Peer-to-Peer
  * transactions.
+ *
+ * MEMORY_DEVICE_MANAGED:
+ * CPU-accessible device memory managed by a driver service (e.g. compressed
+ * memory, accelerator memory).  Pages are hotplugged into the buddy allocator
+ * via __add_memory_driver_managed() and live in normal zones (ZONE_NORMAL,
+ * ZONE_MOVABLE).  folio_is_device_managed() identifies these pages via the
+ * N_MEMORY_PRIVATE node state.  Unlike MEMORY_DEVICE_PRIVATE, the CPU can
+ * read and write these pages directly.  The driver controls lifecycle through
+ * dev_pagemap_ops callbacks registered on a per-node struct node_device
+ * container (pgdat->node_dev).  __GFP_PRIVATE gates buddy allocations from
+ * these nodes.
  */
 enum memory_type {
 	/* 0 is reserved to catch uninitialized type fields */
@@ -72,6 +83,7 @@ enum memory_type {
 	MEMORY_DEVICE_FS_DAX,
 	MEMORY_DEVICE_GENERIC,
 	MEMORY_DEVICE_PCI_P2PDMA,
+	MEMORY_DEVICE_MANAGED,
 };
 
 struct dev_pagemap_ops {
@@ -101,9 +113,8 @@ struct dev_pagemap_ops {
 			      unsigned long nr_pages, int mf_flags);
 
 	/*
-	 * Used for private (un-addressable) device memory only.
-	 * This callback is used when a folio is split into
-	 * a smaller folio
+	 * Called when a large folio is split into smaller folios.
+	 * Used for device_private and device_managed memory types.
 	 */
 	void (*folio_split)(struct folio *head, struct folio *tail);
 };
@@ -223,6 +234,22 @@ static inline bool is_fsdax_page(const struct page *page)
 	return folio_is_fsdax(page_folio(page));
 }
 
+static inline bool folio_is_device_managed(const struct folio *folio)
+{
+#if defined(CONFIG_ZONE_DEVICE) && defined(CONFIG_NUMA) && \
+    !defined(NODE_NOT_IN_PAGE_FLAGS)
+	return node_state((int)((folio->flags.f >> NODES_PGSHIFT) & NODES_MASK),
+			  N_MEMORY_PRIVATE);
+#else
+	return false;
+#endif
+}
+
+static inline bool is_device_managed_page(const struct page *page)
+{
+	return folio_is_device_managed(page_folio(page));
+}
+
 #ifdef CONFIG_ZONE_DEVICE
 void zone_device_page_init(struct page *page, unsigned int order);
 void *memremap_pages(struct dev_pagemap *pgmap, int nid);
@@ -256,6 +283,11 @@ static inline void zone_device_private_split_cb(struct folio *original_folio,
 								 new_folio);
 		}
 	}
+	/*
+	 * Buddy-managed private node pages (folio_is_device_managed) do not
+	 * have per-page pgmap pointers.  Split callbacks for these pages are
+	 * handled through the node_device infrastructure, not here.
+	 */
 }
 
 #else

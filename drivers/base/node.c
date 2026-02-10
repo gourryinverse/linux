@@ -22,6 +22,8 @@
 #include <linux/swap.h>
 #include <linux/slab.h>
 #include <linux/memblock.h>
+#include <linux/memremap.h>
+#include <linux/node_device.h>
 
 static const struct bus_type node_subsys = {
 	.name = "node",
@@ -861,6 +863,228 @@ void register_memory_blocks_under_node_hotplug(int nid, unsigned long start_pfn,
 			   (void *)&nid, register_mem_block_under_node_hotplug);
 	return;
 }
+
+static DEFINE_MUTEX(node_device_lock);
+static bool node_device_initialized;
+
+/**
+ * node_device_register - Register a managed device node
+ * @nid: Node identifier
+ * @nd: The node_device structure (driver-allocated, driver-owned)
+ *
+ * Register a driver for a managed device node.  Only one driver can
+ * register per node.  If another driver has already registered (with
+ * a different nd), -EBUSY is returned.  Re-registration with the same
+ * nd is allowed.
+ *
+ * The driver owns the node_device memory and must ensure it remains
+ * valid until refcount reaches 0 after node_device_unregister().
+ *
+ * Must be called holding the device_hotplug lock.
+ *
+ * Returns 0 on success, negative errno on failure.
+ */
+int node_device_register(int nid, struct node_device *nd)
+{
+	struct node_device *existing;
+	pg_data_t *pgdat;
+	int ret = 0;
+
+	if (!nd || !node_possible(nid))
+		return -EINVAL;
+
+	if (!node_device_initialized)
+		return -ENODEV;
+
+	mutex_lock(&node_device_lock);
+	pgdat = NODE_DATA(nid);
+	existing = rcu_dereference_protected(pgdat->node_dev,
+				lockdep_is_held(&node_device_lock));
+
+	if (node_state(nid, N_MEMORY) && !existing) {
+		ret = -EBUSY;
+		goto out;
+	}
+
+	/* Only one source may register this node */
+	if (existing && nd != existing) {
+		ret = -EBUSY;
+		goto out;
+	}
+
+	/* Re-registration with the same nd is a no-op */
+	if (existing == nd)
+		goto out;
+
+	refcount_set(&nd->refcount, 1);
+	init_completion(&nd->released);
+	nd->nr_pgmaps = 0;
+	nd->pgmaps = NULL;
+	nd->flags = 0;
+
+	rcu_assign_pointer(pgdat->node_dev, nd);
+out:
+	mutex_unlock(&node_device_lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(node_device_register);
+
+/**
+ * node_device_unregister - Unregister a managed device node
+ * @nid: Node identifier
+ *
+ * Unregister the driver from a managed device node.  Only succeeds if
+ * all memory has been offlined and the node is no longer in N_MEMORY.
+ *
+ * N_MEMORY state is cleared by offline_pages() when the last memory
+ * is offlined, not by this function.
+ *
+ * Caller must hold device_hotplug lock.
+ *
+ * Return: 0 if unregistered, -EBUSY if N_MEMORY is still set.
+ */
+int node_device_unregister(int nid)
+{
+	struct node_device *nd;
+	pg_data_t *pgdat;
+
+	if (!node_possible(nid))
+		return 0;
+
+	mutex_lock(&node_device_lock);
+
+	pgdat = NODE_DATA(nid);
+	nd = rcu_dereference_protected(pgdat->node_dev,
+				       lockdep_is_held(&node_device_lock));
+	if (!nd) {
+		mutex_unlock(&node_device_lock);
+		return 0;
+	}
+
+	if (node_state(nid, N_MEMORY)) {
+		mutex_unlock(&node_device_lock);
+		return -EBUSY;
+	}
+
+	rcu_assign_pointer(pgdat->node_dev, NULL);
+	mutex_unlock(&node_device_lock);
+
+	synchronize_rcu();
+
+	kfree(nd->pgmaps);
+	nd->pgmaps = NULL;
+	nd->nr_pgmaps = 0;
+
+	if (!refcount_dec_and_test(&nd->refcount))
+		wait_for_completion(&nd->released);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(node_device_unregister);
+
+/**
+ * node_device_add_pgmap - Add a dev_pagemap to a managed device node
+ * @nid: Node identifier
+ * @pgmap: The dev_pagemap to add (must be of type MEMORY_DEVICE_MANAGED)
+ *
+ * Adds a pgmap to the node_device's dynamic array.  Called when a new
+ * memory range is hotplugged to the managed node.
+ *
+ * Must be called holding the device_hotplug lock.
+ *
+ * Returns 0 on success, negative errno on failure.
+ */
+int node_device_add_pgmap(int nid, struct dev_pagemap *pgmap)
+{
+	struct dev_pagemap **new_pgmaps;
+	struct node_device *nd;
+
+	if (!node_possible(nid) || !pgmap)
+		return -EINVAL;
+
+	if (pgmap->type != MEMORY_DEVICE_MANAGED)
+		return -EINVAL;
+
+	mutex_lock(&node_device_lock);
+	nd = rcu_dereference_protected(NODE_DATA(nid)->node_dev,
+				       lockdep_is_held(&node_device_lock));
+	if (!nd) {
+		mutex_unlock(&node_device_lock);
+		return -ENODEV;
+	}
+
+	new_pgmaps = krealloc(nd->pgmaps,
+			      (nd->nr_pgmaps + 1) * sizeof(*new_pgmaps),
+			      GFP_KERNEL);
+	if (!new_pgmaps) {
+		mutex_unlock(&node_device_lock);
+		return -ENOMEM;
+	}
+
+	new_pgmaps[nd->nr_pgmaps] = pgmap;
+	nd->pgmaps = new_pgmaps;
+	nd->nr_pgmaps++;
+	nd->flags |= pgmap->flags & ~PGMAP_ALTMAP_VALID;
+
+	mutex_unlock(&node_device_lock);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(node_device_add_pgmap);
+
+/**
+ * node_device_remove_pgmap - Remove a dev_pagemap from a managed device node
+ * @nid: Node identifier
+ * @pgmap: The dev_pagemap to remove
+ *
+ * Removes a pgmap from the node_device's array.  Called when a memory
+ * range is hot-removed from the managed node.
+ *
+ * Must be called holding the device_hotplug lock.
+ *
+ * Returns 0 on success, -ENODEV if not found.
+ */
+int node_device_remove_pgmap(int nid, struct dev_pagemap *pgmap)
+{
+	struct node_device *nd;
+	int i, found = -1;
+
+	if (!node_possible(nid) || !pgmap)
+		return -EINVAL;
+
+	mutex_lock(&node_device_lock);
+	nd = rcu_dereference_protected(NODE_DATA(nid)->node_dev,
+				       lockdep_is_held(&node_device_lock));
+	if (!nd) {
+		mutex_unlock(&node_device_lock);
+		return -ENODEV;
+	}
+
+	for (i = 0; i < nd->nr_pgmaps; i++) {
+		if (nd->pgmaps[i] == pgmap) {
+			found = i;
+			break;
+		}
+	}
+
+	if (found < 0) {
+		mutex_unlock(&node_device_lock);
+		return -ENODEV;
+	}
+
+	/* Shift remaining entries down */
+	for (i = found; i < nd->nr_pgmaps - 1; i++)
+		nd->pgmaps[i] = nd->pgmaps[i + 1];
+	nd->nr_pgmaps--;
+
+	/* Recalculate flags from remaining pgmaps */
+	nd->flags = 0;
+	for (i = 0; i < nd->nr_pgmaps; i++)
+		nd->flags |= nd->pgmaps[i]->flags & ~PGMAP_ALTMAP_VALID;
+
+	mutex_unlock(&node_device_lock);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(node_device_remove_pgmap);
+
 #endif /* CONFIG_MEMORY_HOTPLUG */
 
 /**
@@ -959,6 +1183,7 @@ static struct node_attr node_state_attr[] = {
 	[N_HIGH_MEMORY] = _NODE_ATTR(has_high_memory, N_HIGH_MEMORY),
 #endif
 	[N_MEMORY] = _NODE_ATTR(has_memory, N_MEMORY),
+	[N_MEMORY_PRIVATE] = _NODE_ATTR(has_private_memory, N_MEMORY_PRIVATE),
 	[N_CPU] = _NODE_ATTR(has_cpu, N_CPU),
 	[N_GENERIC_INITIATOR] = _NODE_ATTR(has_generic_initiator,
 					   N_GENERIC_INITIATOR),
@@ -972,6 +1197,7 @@ static struct attribute *node_state_attrs[] = {
 	&node_state_attr[N_HIGH_MEMORY].attr.attr,
 #endif
 	&node_state_attr[N_MEMORY].attr.attr,
+	&node_state_attr[N_MEMORY_PRIVATE].attr.attr,
 	&node_state_attr[N_CPU].attr.attr,
 	&node_state_attr[N_GENERIC_INITIATOR].attr.attr,
 	NULL
@@ -991,7 +1217,6 @@ void __init node_dev_init(void)
 	int ret, i;
 
  	BUILD_BUG_ON(ARRAY_SIZE(node_state_attr) != NR_NODE_STATES);
- 	BUILD_BUG_ON(ARRAY_SIZE(node_state_attrs)-1 != NR_NODE_STATES);
 
 	ret = subsys_system_register(&node_subsys, cpu_root_attr_groups);
 	if (ret)
@@ -1006,6 +1231,8 @@ void __init node_dev_init(void)
 		if (ret)
 			panic("%s() failed to add node: %d\n", __func__, ret);
 	}
+
+	node_device_initialized = true;
 
 	register_memory_blocks_under_nodes();
 }
