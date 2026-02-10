@@ -29,6 +29,7 @@
 #include <linux/mempolicy.h>
 #include <linux/mm.h>
 #include <linux/memory.h>
+#include <linux/node_private.h>
 #include <linux/export.h>
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
@@ -449,6 +450,8 @@ static void guarantee_active_cpus(struct task_struct *tsk,
  * up the cpuset hierarchy until we find one that does have some
  * online mems.  The top cpuset always has some mems online.
  *
+ * Guarantee the returned mask contains at least one non-private node
+ *
  * One way or another, we guarantee to return some non-empty subset
  * of node_states[N_MEMORY].
  *
@@ -456,7 +459,7 @@ static void guarantee_active_cpus(struct task_struct *tsk,
  */
 static void guarantee_online_mems(struct cpuset *cs, nodemask_t *pmask)
 {
-	while (!nodes_intersects(cs->effective_mems, node_states[N_MEMORY]))
+	while (nodes_subset(cs->effective_mems, node_states[N_MEMORY_PRIVATE]))
 		cs = parent_cs(cs);
 	nodes_and(*pmask, cs->effective_mems, node_states[N_MEMORY]);
 }
@@ -2926,6 +2929,11 @@ static int update_nodemask(struct cpuset *cs, struct cpuset *trialcs,
 			  top_cpuset.mems_allowed))
 		return -EINVAL;
 
+	/* Require at least one non-private memory node */
+	if (!nodes_empty(trialcs->mems_allowed) &&
+	    nodes_subset(trialcs->mems_allowed, node_states[N_MEMORY_PRIVATE]))
+		return -EINVAL;
+
 	/* No change? nothing to do */
 	if (nodes_equal(cs->mems_allowed, trialcs->mems_allowed))
 		return 0;
@@ -4402,7 +4410,7 @@ bool cpuset_current_node_allowed(int node, gfp_t gfp_mask)
 	unsigned long flags;
 
 	if (in_interrupt())
-		return true;
+		return !node_is_private(node);
 	if (node_isset(node, current->mems_allowed))
 		return true;
 	/*
@@ -4491,7 +4499,14 @@ bool cpuset_node_allowed(struct cgroup *cgroup, int nid)
  */
 static int cpuset_spread_node(int *rotor)
 {
-	return *rotor = next_node_in(*rotor, current->mems_allowed);
+	int node;
+
+	do {
+		node = next_node_in(*rotor, current->mems_allowed);
+		*rotor = node;
+	} while (node_is_private(node));
+
+	return node;
 }
 
 /**
