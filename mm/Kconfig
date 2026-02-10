@@ -662,6 +662,16 @@ config MIGRATION
 config DEVICE_MIGRATION
 	def_bool MIGRATION && ZONE_DEVICE
 
+config CRAM
+	bool "Compressed RAM - private node memory management"
+	depends on NUMA
+	depends on MIGRATION
+	depends on MEMORY_HOTPLUG
+	help
+	  Enables management of N_MEMORY_PRIVATE nodes for compressed RAM
+	  and similar use cases. Provides demotion, promotion, and lifecycle
+	  management for private memory nodes.
+
 config ARCH_ENABLE_HUGEPAGE_MIGRATION
 	bool
 
