@@ -11,6 +11,7 @@
 #include <linux/khugepaged.h>
 #include <linux/mm.h>
 #include <linux/mm_inline.h>
+#include <linux/node_private.h>
 #include <linux/pagemap.h>
 #include <linux/pagewalk.h>
 #include <linux/rmap.h>
@@ -18,6 +19,7 @@
 #include <linux/leafops.h>
 #include <linux/swap_cgroup.h>
 #include <linux/tracepoint-defs.h>
+#include <linux/node_private.h>
 
 /* Internal core VMA manipulation functions. */
 #include "vma.h"
@@ -1447,6 +1449,103 @@ static inline bool folio_managed_on_free(struct folio *folio)
 		}
 	}
 	return false;
+}
+
+/*
+ * folio_managed_handle_fault - Dispatch fault on managed-memory folio
+ * @folio: the faulting folio (must not be NULL)
+ * @vmf: the vm_fault descriptor (PTL held: vmf->ptl locked)
+ * @level: page table level (PGTABLE_LEVEL_PTE or PGTABLE_LEVEL_PMD)
+ * @ret: output fault result if handled
+ *
+ * Called with PTL held.  If a handle_fault callback exists, it is invoked
+ * with PTL still held.  The callback is responsible for releasing PTL on
+ * all paths.
+ *
+ * Returns true if the service handled the fault (PTL released by callback,
+ * caller returns *ret).  Returns false if no handler exists (PTL still held,
+ * caller continues with normal fault handling).
+ */
+static inline bool folio_managed_handle_fault(struct folio *folio,
+					      struct vm_fault *vmf,
+					      enum pgtable_level level,
+					      vm_fault_t *ret)
+{
+	/* Zone device pages use swap entries; handled in do_swap_page */
+	if (folio_is_zone_device(folio))
+		return false;
+
+	if (folio_is_private_node(folio)) {
+		const struct node_private_ops *ops =
+			folio_node_private_ops(folio);
+
+		if (ops && ops->handle_fault) {
+			*ret = ops->handle_fault(folio, vmf, level);
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * folio_managed_wrprotect - Should this folio's mappings stay write-protected?
+ * @folio: the folio to check
+ *
+ * Returns true if the folio is on a private node with NP_OPS_PROTECT_WRITE,
+ * meaning page table entries (PTE or PMD) should not be made writable.
+ * Write faults are intercepted by the service's handle_fault callback
+ * to promote the folio to DRAM.
+ *
+ * Used by:
+ *   - change_pte_range() / change_huge_pmd(): prevent mprotect write-upgrade
+ *   - remove_migration_pte() / remove_migration_pmd(): strip write after migration
+ *   - do_huge_pmd_wp_page(): dispatch to fault handler instead of reuse
+ */
+static inline bool folio_managed_wrprotect(struct folio *folio)
+{
+	return unlikely(folio_is_private_node(folio) &&
+			folio_private_flags(folio, NP_OPS_PROTECT_WRITE));
+}
+
+/**
+ * folio_managed_fixup_migration_pte - Fixup PTE after migration for
+ *                                     managed memory pages.
+ * @new: the destination page
+ * @pte: the PTE being installed (normal PTE built by caller)
+ * @old_pte: the original PTE (before migration, for swap entry flags)
+ * @vma: the VMA
+ *
+ * For MEMORY_DEVICE_PRIVATE pages: replaces the PTE with a device-private
+ * swap entry, preserving soft_dirty and uffd_wp from old_pte.
+ *
+ * For N_MEMORY_PRIVATE pages with NP_OPS_PROTECT_WRITE: strips the write
+ * bit so the next write triggers the fault handler for promotion.
+ *
+ * For normal pages: returns pte unmodified.
+ */
+static inline pte_t folio_managed_fixup_migration_pte(struct page *new,
+						      pte_t pte,
+						      pte_t old_pte,
+						      struct vm_area_struct *vma)
+{
+	if (unlikely(is_device_private_page(new))) {
+		softleaf_t entry;
+
+		if (pte_write(pte))
+			entry = make_writable_device_private_entry(
+						page_to_pfn(new));
+		else
+			entry = make_readable_device_private_entry(
+						page_to_pfn(new));
+		pte = softleaf_to_pte(entry);
+		if (pte_swp_soft_dirty(old_pte))
+			pte = pte_swp_mksoft_dirty(pte);
+		if (pte_swp_uffd_wp(old_pte))
+			pte = pte_swp_mkuffd_wp(pte);
+	} else if (folio_managed_wrprotect(page_folio(new))) {
+		pte = pte_wrprotect(pte);
+	}
+	return pte;
 }
 
 /**
