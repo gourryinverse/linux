@@ -10,6 +10,7 @@
 #include <linux/bitops.h>
 #include <linux/log2.h>
 #include <linux/node.h>
+#include <linux/node_device.h>
 #include <linux/io.h>
 #include <linux/range.h>
 #include <linux/dax.h>
@@ -619,6 +620,8 @@ struct cxl_dax_region {
  * @mgid: Memory group id
  * @mtype: Memory tier type
  * @numa_node: NUMA node for this memory
+ * @private: true if this region uses private node hotplug
+ * @nd: private node registration state (valid when @private is true)
  *
  * Device that directly performs memory hotplug for CXL RAM regions.
  */
@@ -633,6 +636,8 @@ struct cxl_sysram {
 	int mgid;
 	struct memory_dev_type *mtype;
 	int numa_node;
+	bool private;
+	struct node_device nd;
 };
 
 /**
@@ -987,7 +992,9 @@ int cxl_add_to_region(struct cxl_endpoint_decoder *cxled);
 struct cxl_dax_region *to_cxl_dax_region(struct device *dev);
 struct cxl_sysram *to_cxl_sysram(struct device *dev);
 struct device *cxl_sysram_dev(struct cxl_sysram *sysram);
-int devm_cxl_add_sysram(struct cxl_region *cxlr, enum mmop online_type);
+int devm_cxl_add_sysram(struct cxl_region *cxlr, bool private, enum mmop online_type);
+int devm_cxl_add_sysram_range(struct device *parent, struct range *hpa,
+			      bool private, enum mmop online_type);
 int cxl_sysram_offline_and_remove(struct cxl_sysram *sysram);
 u64 cxl_port_get_spa_cache_alias(struct cxl_port *endpoint, u64 spa);
 #else
@@ -1011,8 +1018,14 @@ static inline struct cxl_sysram *to_cxl_sysram(struct device *dev)
 {
 	return NULL;
 }
-static inline int devm_cxl_add_sysram(struct cxl_region *cxlr,
+static inline int devm_cxl_add_sysram(struct cxl_region *cxlr, bool private,
 				      enum mmop online_type)
+{
+	return -ENXIO;
+}
+static inline int devm_cxl_add_sysram_range(struct device *parent,
+					    struct range *hpa, bool private,
+					    enum mmop online_type)
 {
 	return -ENXIO;
 }

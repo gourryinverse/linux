@@ -435,6 +435,7 @@ struct cxl_dpa_partition {
  * @serial: PCIe Device Serial Number
  * @type: Generic Memory Class device or Vendor Specific Memory device
  * @cxl_mbox: CXL mailbox context
+ * @dvsec_info: Cached DVSEC range registers for RCD fallback
  * @cxlfs: CXL features context
  */
 struct cxl_dev_state {
@@ -451,6 +452,7 @@ struct cxl_dev_state {
 	u64 serial;
 	enum cxl_devtype type;
 	struct cxl_mailbox cxl_mbox;
+	struct cxl_endpoint_dvsec_info dvsec_info; /* Cached for RCD fallback */
 #ifdef CONFIG_CXL_FEATURES
 	struct cxl_features_state *cxlfs;
 #endif

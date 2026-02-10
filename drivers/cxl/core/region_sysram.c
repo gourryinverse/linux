@@ -85,12 +85,23 @@ static int sysram_hotplug_add(struct cxl_sysram *sysram, enum mmop online_type)
 	/*
 	 * Ensure that future kexec'd kernels will not treat
 	 * this as RAM automatically.
+	 *
+	 * For private regions, use add_private_memory_driver_managed()
+	 * to register as a private node which isolates the memory from
+	 * normal allocations and reclaim.
 	 */
-	rc = __add_memory_driver_managed(sysram->mgid,
-					 sysram->hpa_range.start,
-					 range_len(&sysram->hpa_range),
-					 sysram_res_name, mhp_flags,
-					 online_type, NULL);
+	if (sysram->private)
+		rc = add_private_memory_driver_managed(sysram->mgid,
+					sysram->hpa_range.start,
+					range_len(&sysram->hpa_range),
+					sysram_res_name, mhp_flags,
+					online_type, &sysram->nd);
+	else
+		rc = __add_memory_driver_managed(sysram->mgid,
+					sysram->hpa_range.start,
+					range_len(&sysram->hpa_range),
+					sysram_res_name, mhp_flags,
+					online_type, NULL);
 	if (rc) {
 		remove_resource(res);
 		kfree(res);
@@ -224,7 +235,7 @@ static enum mmop cxl_sysram_get_default_online_type(void)
 	return MMOP_OFFLINE;
 }
 
-static struct cxl_sysram *cxl_sysram_alloc(struct cxl_region *cxlr)
+static struct cxl_sysram *cxl_sysram_alloc_dev(struct device *parent)
 {
 	struct cxl_sysram *sysram __free(kfree) = NULL;
 	struct device *dev;
@@ -239,15 +250,26 @@ static struct cxl_sysram *cxl_sysram_alloc(struct cxl_region *cxlr)
 	sysram->mgid = -1;
 
 	dev = &sysram->dev;
-	sysram->cxlr = cxlr;
 	device_initialize(dev);
 	lockdep_set_class(&dev->mutex, &cxl_sysram_key);
 	device_set_pm_not_required(dev);
-	dev->parent = &cxlr->dev;
+	dev->parent = parent;
 	dev->bus = &cxl_bus_type;
 	dev->type = &cxl_sysram_type;
 
 	return_ptr(sysram);
+}
+
+static struct cxl_sysram *cxl_sysram_alloc(struct cxl_region *cxlr)
+{
+	struct cxl_sysram *sysram;
+
+	sysram = cxl_sysram_alloc_dev(&cxlr->dev);
+	if (IS_ERR(sysram))
+		return sysram;
+
+	sysram->cxlr = cxlr;
+	return sysram;
 }
 
 static void sysram_unregister(void *_sysram)
@@ -257,7 +279,8 @@ static void sysram_unregister(void *_sysram)
 	device_unregister(&sysram->dev);
 }
 
-int devm_cxl_add_sysram(struct cxl_region *cxlr, enum mmop online_type)
+int devm_cxl_add_sysram(struct cxl_region *cxlr, bool private,
+			enum mmop online_type)
 {
 	struct cxl_sysram *sysram __free(put_cxl_sysram) = NULL;
 	struct memory_dev_type *mtype;
@@ -290,6 +313,11 @@ int devm_cxl_add_sysram(struct cxl_region *cxlr, enum mmop online_type)
 	/* Override default online type if caller specified one */
 	if (online_type >= 0)
 		sysram->online_type = online_type;
+
+	/* Set up private node registration if requested */
+	sysram->private = private;
+	if (private)
+		sysram->nd.owner = sysram;
 
 	dev = &sysram->dev;
 
@@ -349,3 +377,88 @@ out:
 					no_free_ptr(sysram));
 }
 EXPORT_SYMBOL_NS_GPL(devm_cxl_add_sysram, "CXL");
+
+int devm_cxl_add_sysram_range(struct device *parent, struct range *hpa,
+			      bool private, enum mmop online_type)
+{
+	struct cxl_sysram *sysram __free(put_cxl_sysram) = NULL;
+	struct memory_dev_type *mtype;
+	struct range hpa_range;
+	struct device *dev;
+	int adist = MEMTIER_DEFAULT_LOWTIER_ADISTANCE;
+	int numa_node;
+	int rc;
+
+	hpa_range = memory_block_align_range(hpa);
+	if (hpa_range.start >= hpa_range.end) {
+		dev_warn(parent, "range too small after alignment\n");
+		return -ENOSPC;
+	}
+
+	sysram = cxl_sysram_alloc_dev(parent);
+	if (IS_ERR(sysram))
+		return PTR_ERR(sysram);
+
+	sysram->hpa_range = hpa_range;
+
+	sysram->res_name = kasprintf(GFP_KERNEL, "cxl_sysram_%s",
+				     dev_name(parent));
+	if (!sysram->res_name)
+		return -ENOMEM;
+
+	if (online_type >= 0)
+		sysram->online_type = online_type;
+
+	sysram->private = private;
+	if (private)
+		sysram->nd.owner = sysram;
+
+	dev = &sysram->dev;
+
+	rc = dev_set_name(dev, "sysram_%s", dev_name(parent));
+	if (rc)
+		return rc;
+
+	numa_node = phys_to_target_node(hpa_range.start);
+	if (numa_node == NUMA_NO_NODE)
+		numa_node = memory_add_physaddr_to_nid(hpa_range.start);
+	if (numa_node < 0) {
+		dev_warn(parent, "rejecting range with invalid node: %d\n",
+			 numa_node);
+		return -EINVAL;
+	}
+	sysram->numa_node = numa_node;
+
+	mt_calc_adistance(numa_node, &adist);
+	mtype = mt_get_memory_type(adist);
+	if (IS_ERR(mtype))
+		return PTR_ERR(mtype);
+	sysram->mtype = mtype;
+
+	init_node_memory_type(numa_node, mtype);
+
+	rc = memory_group_register_static(numa_node,
+					  PFN_UP(range_len(&hpa_range)));
+	if (rc < 0)
+		return rc;
+	sysram->mgid = rc;
+
+	rc = device_add(dev);
+	if (rc)
+		return rc;
+
+	dev_dbg(parent, "%s: register %s\n", dev_name(parent),
+		dev_name(dev));
+
+	if (sysram->online_type > MMOP_OFFLINE) {
+		rc = sysram_hotplug_add(sysram, sysram->online_type);
+		if (rc)
+			dev_warn(dev, "hotplug failed: %d\n", rc);
+		else
+			sysram->last_hotplug_cmd = sysram->online_type;
+	}
+
+	return devm_add_action_or_reset(parent, sysram_unregister,
+					no_free_ptr(sysram));
+}
+EXPORT_SYMBOL_NS_GPL(devm_cxl_add_sysram_range, "CXL");
