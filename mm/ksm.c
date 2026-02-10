@@ -40,6 +40,7 @@
 #include <linux/oom.h>
 #include <linux/numa.h>
 #include <linux/pagewalk.h>
+#include <linux/node_private.h>
 
 #include <asm/tlbflush.h>
 #include "internal.h"
@@ -746,7 +747,7 @@ static struct page *get_mergeable_page(struct ksm_rmap_item *rmap_item)
 
 	folio = folio_walk_start(&fw, vma, addr, 0);
 	if (folio) {
-		if (!folio_is_zone_device(folio) &&
+		if (!folio_is_private_managed(folio) &&
 		    folio_test_anon(folio)) {
 			folio_get(folio);
 			page = fw.page;
@@ -2550,7 +2551,7 @@ next_mm:
 
 			folio = folio_walk_start(&fw, vma, ksm_scan.address, 0);
 			if (folio) {
-				if (!folio_is_zone_device(folio) &&
+				if (!folio_is_private_managed(folio) &&
 				     folio_test_anon(folio)) {
 					folio_get(folio);
 					tmp_page = fw.page;
