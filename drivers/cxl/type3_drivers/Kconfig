@@ -1,2 +1,3 @@
 # SPDX-License-Identifier: GPL-2.0
 source "drivers/cxl/type3_drivers/cxl_mempolicy/Kconfig"
+source "drivers/cxl/type3_drivers/cxl_compression/Kconfig"
