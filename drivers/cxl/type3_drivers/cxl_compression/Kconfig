@@ -1,0 +1,20 @@
+config CXL_COMPRESSION
+	tristate "CXL Compression Memory Driver"
+	depends on CXL_PCI
+	depends on CXL_REGION
+	depends on CRAM
+	help
+	  This driver provides an alternative PCI binding for CXL memory
+	  devices with compressed memory support. It converts CXL RAM
+	  regions to sysram for direct memory hotplug and registers with
+	  the CRAM subsystem for transparent compression.
+
+	  Page reclamation uses the standard CXL Media Operations Zero
+	  command (opcode 0x4402). If the device does not support it,
+	  the driver falls back to inline CPU zeroing.
+
+	  Usage: First unbind the device from cxl_pci, then bind to
+	  cxl_compression. The driver will initialize the CXL device and
+	  convert any RAM regions to use direct memory hotplug via sysram.
+
+	  If unsure say 'n'.
