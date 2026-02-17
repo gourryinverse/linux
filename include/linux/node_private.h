@@ -86,6 +86,8 @@ struct node_private_ops {
 
 /* Allow user/kernel migration; requires migrate_to and folio_migrate */
 #define NP_OPS_MIGRATION		BIT(0)
+/* Allow mempolicy-directed allocation and mbind migration to this node */
+#define NP_OPS_MEMPOLICY		BIT(1)
 
 /**
  * struct node_private - Per-node container for private nodes
@@ -283,6 +285,34 @@ static inline int node_private_migrate_to(struct list_head *folios, int nid,
 
 	return ret;
 }
+
+static inline bool node_mpol_eligible(int nid)
+{
+	bool ret;
+
+	if (!node_is_private(nid))
+		return node_state(nid, N_MEMORY);
+
+	rcu_read_lock();
+	ret = node_private_has_flag(nid, NP_OPS_MEMPOLICY);
+	rcu_read_unlock();
+	return ret;
+}
+
+static inline bool nodes_private_mpol_allowed(const nodemask_t *nodes)
+{
+	int nid;
+	bool eligible = false;
+
+	for_each_node_mask(nid, *nodes) {
+		if (!node_is_private(nid))
+			continue;
+		if (!node_mpol_eligible(nid))
+			return false;
+		eligible = true;
+	}
+	return eligible;
+}
 #endif /* CONFIG_MEMORY_HOTPLUG */
 
 #else /* !CONFIG_NUMA */
@@ -372,6 +402,16 @@ static inline int node_private_migrate_to(struct list_head *folios, int nid,
 					  unsigned int *nr_succeeded)
 {
 	return -ENODEV;
+}
+
+static inline bool node_mpol_eligible(int nid)
+{
+	return false;
+}
+
+static inline bool nodes_private_mpol_allowed(const nodemask_t *nodes)
+{
+	return false;
 }
 
 static inline int node_private_register(int nid, struct node_private *np)
