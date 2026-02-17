@@ -4504,7 +4504,7 @@ static int cpuset_spread_node(int *rotor)
 	do {
 		node = next_node_in(*rotor, current->mems_allowed);
 		*rotor = node;
-	} while (node_is_private(node));
+	} while (node_mpol_eligible(node));
 
 	return node;
 }
