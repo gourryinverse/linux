@@ -406,8 +406,6 @@ static int mpol_new_preferred(struct mempolicy *pol, const nodemask_t *nodes)
 static int mpol_set_nodemask(struct mempolicy *pol,
 		     const nodemask_t *nodes, struct nodemask_scratch *nsc)
 {
-	int ret;
-
 	/*
 	 * Default (pol==NULL) resp. local memory policies are not a
 	 * subject of any remapping. They also do not need any special
@@ -416,9 +414,12 @@ static int mpol_set_nodemask(struct mempolicy *pol,
 	if (!pol || pol->mode == MPOL_LOCAL)
 		return 0;
 
-	/* Check N_MEMORY */
+	/* Check N_MEMORY and N_MEMORY_PRIVATE*/
 	nodes_and(nsc->mask1,
 		  cpuset_current_mems_allowed, node_states[N_MEMORY]);
+	nodes_and(nsc->mask2, cpuset_current_mems_allowed,
+		  node_states[N_MEMORY_PRIVATE]);
+	nodes_or(nsc->mask1, nsc->mask1, nsc->mask2);
 
 	VM_BUG_ON(!nodes);
 
@@ -432,8 +433,13 @@ static int mpol_set_nodemask(struct mempolicy *pol,
 	else
 		pol->w.cpuset_mems_allowed = cpuset_current_mems_allowed;
 
-	ret = mpol_ops[pol->mode].create(pol, &nsc->mask2);
-	return ret;
+	/* All private nodes in the mask must have NP_OPS_MEMPOLICY. */
+	if (nodes_private_mpol_allowed(&nsc->mask2))
+		pol->flags |= MPOL_F_PRIVATE;
+	else if (nodes_intersects(nsc->mask2, node_states[N_MEMORY_PRIVATE]))
+		return -EINVAL;
+
+	return mpol_ops[pol->mode].create(pol, &nsc->mask2);
 }
 
 /*
@@ -500,6 +506,7 @@ static void mpol_rebind_default(struct mempolicy *pol, const nodemask_t *nodes)
 static void mpol_rebind_nodemask(struct mempolicy *pol, const nodemask_t *nodes)
 {
 	nodemask_t tmp;
+	int nid;
 
 	if (pol->flags & MPOL_F_STATIC_NODES)
 		nodes_and(tmp, pol->w.user_nodemask, *nodes);
@@ -513,6 +520,21 @@ static void mpol_rebind_nodemask(struct mempolicy *pol, const nodemask_t *nodes)
 
 	if (nodes_empty(tmp))
 		tmp = *nodes;
+
+	/*
+	 * Drop private nodes that don't have mempolicy support.
+	 * cpusets guarantees at least one N_MEMORY node in effective_mems
+	 * and mems_allowed, so dropping private nodes here is safe.
+	 */
+	for_each_node_mask(nid, tmp) {
+		if (node_state(nid, N_MEMORY_PRIVATE) &&
+		    !node_private_has_flag(nid, NP_OPS_MEMPOLICY))
+			node_clear(nid, tmp);
+	}
+	if (nodes_intersects(tmp, node_states[N_MEMORY_PRIVATE]))
+		pol->flags |= MPOL_F_PRIVATE;
+	else
+		pol->flags &= ~MPOL_F_PRIVATE;
 
 	pol->nodes = tmp;
 }
@@ -661,6 +683,9 @@ static void queue_folios_pmd(pmd_t *pmd, struct mm_walk *walk)
 	}
 	if (!queue_folio_required(folio, qp))
 		return;
+	if (folio_is_private_node(folio) &&
+	    !folio_private_flags(folio, NP_OPS_MIGRATION))
+		return;
 	if (!(qp->flags & (MPOL_MF_MOVE | MPOL_MF_MOVE_ALL)) ||
 	    !vma_migratable(walk->vma) ||
 	    !migrate_folio_add(folio, qp->pagelist, qp->flags))
@@ -716,6 +741,9 @@ static int queue_folios_pte_range(pmd_t *pmd, unsigned long addr,
 		}
 		folio = vm_normal_folio(vma, addr, ptent);
 		if (!folio || folio_is_zone_device(folio))
+			continue;
+		if (folio_is_private_node(folio) &&
+		    !folio_private_flags(folio, NP_OPS_MIGRATION))
 			continue;
 		if (folio_test_large(folio) && max_nr != 1)
 			nr = folio_pte_batch(folio, pte, ptent, max_nr);
@@ -1450,6 +1478,9 @@ static struct folio *alloc_migration_target_by_mpol(struct folio *src,
 		gfp = GFP_TRANSHUGE;
 	else
 		gfp = GFP_HIGHUSER_MOVABLE | __GFP_RETRY_MAYFAIL | __GFP_COMP;
+
+	if (pol->flags & MPOL_F_PRIVATE)
+		gfp |= __GFP_PRIVATE;
 
 	return folio_alloc_mpol(gfp, order, pol, ilx, nid);
 }
@@ -2280,6 +2311,15 @@ static nodemask_t *policy_nodemask(gfp_t gfp, struct mempolicy *pol,
 			nodemask = &pol->nodes;
 		if (pol->home_node != NUMA_NO_NODE)
 			*nid = pol->home_node;
+		else if ((pol->flags & MPOL_F_PRIVATE) &&
+			 !node_isset(*nid, pol->nodes)) {
+			/*
+			 * Private nodes are not in N_MEMORY nodes' zonelists.
+			 * When the preferred nid (usually numa_node_id()) can't
+			 * reach the policy nodes, start from a policy node.
+			 */
+			*nid = first_node(pol->nodes);
+		}
 		/*
 		 * __GFP_THISNODE shouldn't even be used with the bind policy
 		 * because we might easily break the expectation to stay on the
@@ -2533,6 +2573,10 @@ struct folio *vma_alloc_folio_noprof(gfp_t gfp, int order, struct vm_area_struct
 		gfp |= __GFP_NOWARN;
 
 	pol = get_vma_policy(vma, addr, order, &ilx);
+
+	if (pol->flags & MPOL_F_PRIVATE)
+		gfp |= __GFP_PRIVATE;
+
 	folio = folio_alloc_mpol_noprof(gfp, order, pol, ilx, numa_node_id());
 	mpol_cond_put(pol);
 	return folio;

@@ -3849,8 +3849,13 @@ retry:
 		 * if another process has NUMA bindings and is causing
 		 * kswapd wakeups on only some nodes. Avoid accidental
 		 * "node_reclaim_mode"-like behavior in this case.
+		 *
+		 * Nodes without kswapd (some private nodes) are never
+		 * skipped - this causes some mempolicies to silently
+		 * fall back to DRAM even if the node is eligible.
 		 */
 		if (skip_kswapd_nodes &&
+		    zone->zone_pgdat->kswapd &&
 		    !waitqueue_active(&zone->zone_pgdat->kswapd_wait)) {
 			skipped_kswapd_nodes = true;
 			continue;
