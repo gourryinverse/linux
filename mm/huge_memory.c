@@ -24,6 +24,7 @@
 #include <linux/freezer.h>
 #include <linux/mman.h>
 #include <linux/memremap.h>
+#include <linux/node_private.h>
 #include <linux/pagemap.h>
 #include <linux/debugfs.h>
 #include <linux/migrate.h>
@@ -3850,7 +3851,7 @@ static int __folio_freeze_and_split_unmapped(struct folio *folio, unsigned int n
 
 			next = folio_next(new_folio);
 
-			zone_device_private_split_cb(folio, new_folio);
+			folio_managed_split_cb(folio, new_folio);
 
 			folio_ref_unfreeze(new_folio,
 					   folio_cache_ref_count(new_folio) + 1);
@@ -3889,7 +3890,8 @@ static int __folio_freeze_and_split_unmapped(struct folio *folio, unsigned int n
 			folio_put_refs(new_folio, nr_pages);
 		}
 
-		zone_device_private_split_cb(folio, NULL);
+		folio_managed_split_cb(folio, NULL);
+
 		/*
 		 * Unfreeze @folio only after all page cache entries, which
 		 * used to point to it, have been updated with new folios.
