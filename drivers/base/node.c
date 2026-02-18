@@ -867,6 +867,21 @@ static DEFINE_MUTEX(node_private_lock);
 static bool node_private_initialized;
 
 /**
+ * node_private_allows_longterm_pin - Check if a private node allows longterm pinning
+ * @nid: Node identifier
+ *
+ * Out-of-line helper for folio_is_longterm_pinnable() since mm.h cannot
+ * include node_private.h (circular dependency).
+ *
+ * Returns true if the node has NP_OPS_LONGTERM_PIN set.
+ */
+bool node_private_allows_longterm_pin(int nid)
+{
+	return node_private_has_flag(nid, NP_OPS_LONGTERM_PIN);
+}
+EXPORT_SYMBOL_GPL(node_private_allows_longterm_pin);
+
+/**
  * node_private_register - Register a private node
  * @nid: Node identifier
  * @np: The node_private structure (driver-allocated, driver-owned)
