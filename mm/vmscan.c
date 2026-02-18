@@ -58,6 +58,7 @@
 #include <linux/random.h>
 #include <linux/mmu_notifier.h>
 #include <linux/parser.h>
+#include <linux/node_private.h>
 
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
@@ -353,6 +354,10 @@ static bool can_demote(int nid, struct scan_control *sc,
 
 	demotion_nid = next_demotion_node(nid);
 	if (demotion_nid == NUMA_NO_NODE)
+		return false;
+
+	/* Don't demote when the target's service signals backpressure */
+	if (node_private_alloc_blocked(demotion_nid))
 		return false;
 
 	/* If demotion node isn't in the cgroup's mems_allowed, fall back */
@@ -1022,8 +1027,10 @@ static unsigned int demote_folio_list(struct list_head *demote_folios,
 				     struct pglist_data *pgdat)
 {
 	int target_nid = next_demotion_node(pgdat->node_id);
-	unsigned int nr_succeeded;
+	int first_nid = target_nid;
+	unsigned int nr_succeeded = 0;
 	nodemask_t allowed_mask;
+	int ret;
 
 	struct migration_target_control mtc = {
 		/*
@@ -1045,6 +1052,27 @@ static unsigned int demote_folio_list(struct list_head *demote_folios,
 		return 0;
 
 	node_get_allowed_targets(pgdat, &allowed_mask);
+
+	/* Try private node targets until we find non-private node */
+	while (node_is_private(target_nid)) {
+		unsigned int nr = 0;
+
+		ret = node_private_migrate_to(demote_folios, target_nid,
+					      MIGRATE_ASYNC, MR_DEMOTION,
+					      &nr);
+		nr_succeeded += nr;
+		if (ret == 0 || list_empty(demote_folios))
+			return nr_succeeded;
+
+		target_nid = next_node_in(target_nid, allowed_mask);
+		if (target_nid == first_nid)
+			return nr_succeeded;
+		if (!node_is_private(target_nid))
+			break;
+	}
+
+	/* target_nid is a non-private node; use standard migration */
+	mtc.nid = target_nid;
 
 	/* Demotion ignores all cpuset and mempolicy settings */
 	migrate_pages(demote_folios, alloc_demote_folio, NULL,

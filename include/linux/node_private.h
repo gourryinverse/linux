@@ -88,6 +88,8 @@ struct node_private_ops {
 #define NP_OPS_MIGRATION		BIT(0)
 /* Allow mempolicy-directed allocation and mbind migration to this node */
 #define NP_OPS_MEMPOLICY		BIT(1)
+/* Node participates as a demotion target in memory-tiers */
+#define NP_OPS_DEMOTION			BIT(2)
 
 /**
  * struct node_private - Per-node container for private nodes
@@ -101,12 +103,14 @@ struct node_private_ops {
  *		callbacks that may sleep; 0 = fully released)
  * @released: Signaled when refcount drops to 0; unregister waits on this
  * @ops: Service callbacks and exclusion flags (NULL until service registers)
+ * @alloc_blocked: Service signals allocations should be rejected
  */
 struct node_private {
 	void *owner;
 	refcount_t refcount;
 	struct completion released;
 	const struct node_private_ops *ops;
+	bool alloc_blocked;
 };
 
 #ifdef CONFIG_NUMA
@@ -187,6 +191,19 @@ static inline bool zone_private_flags(struct zone *z, unsigned long flag)
 	return node_private_flags(zone_to_nid(z)) & flag;
 }
 
+static inline bool node_private_alloc_blocked(int nid)
+{
+	struct node_private *np;
+	bool blocked;
+
+	rcu_read_lock();
+	np = rcu_dereference(NODE_DATA(nid)->private);
+	blocked = np && READ_ONCE(np->alloc_blocked);
+	rcu_read_unlock();
+
+	return blocked;
+}
+
 static inline bool zone_private_alloc_allowed(struct zone *zone, gfp_t gfp_mask)
 {
 	int nid = zone_to_nid(zone);
@@ -194,7 +211,7 @@ static inline bool zone_private_alloc_allowed(struct zone *zone, gfp_t gfp_mask)
 	if (!node_is_private(nid))
 		return true;
 
-	return (gfp_mask & __GFP_PRIVATE);
+	return (gfp_mask & __GFP_PRIVATE) && !node_private_alloc_blocked(nid);
 }
 
 static inline void node_private_split_cb(struct folio *folio,
@@ -316,6 +333,7 @@ static inline bool nodes_private_mpol_allowed(const nodemask_t *nodes)
 	}
 	return eligible;
 }
+
 #endif /* CONFIG_MEMORY_HOTPLUG */
 
 #else /* !CONFIG_NUMA */
@@ -382,6 +400,11 @@ int node_private_set_ops(int nid, const struct node_private_ops *ops);
 int node_private_clear_ops(int nid, const struct node_private_ops *ops);
 
 #else /* !CONFIG_NUMA || !CONFIG_MEMORY_HOTPLUG */
+
+static inline bool node_private_alloc_blocked(int nid)
+{
+	return false;
+}
 
 static inline bool zone_private_alloc_allowed(struct zone *zone, gfp_t gfp_mask)
 {
