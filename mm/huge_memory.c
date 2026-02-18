@@ -25,6 +25,7 @@
 #include <linux/pfn_t.h>
 #include <linux/mman.h>
 #include <linux/memremap.h>
+#include <linux/node_private.h>
 #include <linux/pagemap.h>
 #include <linux/debugfs.h>
 #include <linux/migrate.h>
@@ -3564,6 +3565,8 @@ after_split:
 			if (release == origin_folio)
 				continue;
 
+			folio_managed_split_cb(origin_folio, release);
+
 			folio_ref_unfreeze(release, 1 +
 					((mapping || swap_cache) ?
 						folio_nr_pages(release) : 0));
@@ -3597,6 +3600,7 @@ after_split:
 	 * a parallel folio_try_get() can grab origin_folio and its caller can
 	 * see stale page cache entries.
 	 */
+	folio_managed_split_cb(origin_folio, NULL);
 	folio_ref_unfreeze(origin_folio, 1 +
 		((mapping || swap_cache) ? folio_nr_pages(origin_folio) : 0));
 

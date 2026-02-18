@@ -3,6 +3,7 @@
 #define _LINUX_NODE_PRIVATE_H
 
 #include <linux/completion.h>
+#include <linux/memremap.h>
 #include <linux/mm.h>
 #include <linux/nodemask.h>
 #include <linux/rcupdate.h>
@@ -44,11 +45,19 @@ struct vm_fault;
  *   Returns: true if handled (skip return to buddy)
  *            false if no op (return to buddy)
  *
+ * @folio_split: Notification that a folio on this private node is being split.
+ *    [folio-referenced callback]
+ *     Called from the folio split path via folio_managed_split_cb().
+ *     @folio is the original folio; @new_folio is the newly created folio,
+ *     or NULL when called for the final (original) folio after all sub-folios
+ *     have been split off.
+ *
  * @flags: Operation exclusion flags (NP_OPS_* constants).
  *
  */
 struct node_private_ops {
 	bool (*free_folio)(struct folio *folio);
+	void (*folio_split)(struct folio *folio, struct folio *new_folio);
 	unsigned long flags;
 };
 
@@ -160,6 +169,21 @@ static inline bool zone_private_alloc_allowed(struct zone *zone, gfp_t gfp_mask)
 	return (gfp_mask & __GFP_PRIVATE);
 }
 
+static inline void node_private_split_cb(struct folio *folio,
+					 struct folio *new_folio)
+{
+	const struct node_private_ops *ops = folio_node_private_ops(folio);
+
+	if (ops && ops->folio_split)
+		ops->folio_split(folio, new_folio);
+}
+
+static inline void folio_managed_split_cb(struct folio *original_folio,
+					  struct folio *new_folio)
+{
+	node_private_split_cb(original_folio, new_folio);
+}
+
 #else /* !CONFIG_NUMA */
 
 static inline bool folio_is_private_node(struct folio *folio)
@@ -213,6 +237,10 @@ static inline bool zone_private_alloc_allowed(struct zone *zone, gfp_t gfp_mask)
 	return true;
 }
 
+static inline void folio_managed_split_cb(struct folio *original_folio,
+					  struct folio *new_folio)
+{
+}
 #endif /* CONFIG_NUMA */
 
 #if defined(CONFIG_NUMA) && defined(CONFIG_MEMORY_HOTPLUG)
