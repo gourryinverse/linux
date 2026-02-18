@@ -88,6 +88,8 @@ struct node_private_ops {
 #define NP_OPS_MIGRATION		BIT(0)
 /* Allow mempolicy-directed allocation and mbind migration to this node */
 #define NP_OPS_MEMPOLICY		BIT(1)
+/* Node participates as a demotion target in memory-tiers */
+#define NP_OPS_DEMOTION			BIT(2)
 
 /**
  * struct node_private - Per-node container for N_MEMORY_PRIVATE nodes
@@ -101,12 +103,14 @@ struct node_private_ops {
  *		callbacks that may sleep; 0 = fully released)
  * @released: Signaled when refcount drops to 0; unregister waits on this
  * @ops: Service callbacks and exclusion flags (NULL until service registers)
+ * @migration_blocked: Service signals migrations should pause
  */
 struct node_private {
 	void *owner;
 	refcount_t refcount;
 	struct completion released;
 	const struct node_private_ops *ops;
+	bool migration_blocked;
 };
 
 #ifdef CONFIG_NUMA
@@ -306,6 +310,19 @@ static inline bool nodes_private_mpol_allowed(const nodemask_t *nodes)
 	}
 	return eligible;
 }
+
+static inline bool node_private_migration_blocked(int nid)
+{
+	struct node_private *np;
+	bool blocked;
+
+	rcu_read_lock();
+	np = rcu_dereference(NODE_DATA(nid)->node_private);
+	blocked = np && READ_ONCE(np->migration_blocked);
+	rcu_read_unlock();
+
+	return blocked;
+}
 #endif /* CONFIG_MEMORY_HOTPLUG */
 
 #else /* !CONFIG_NUMA */
@@ -400,6 +417,11 @@ static inline bool node_mpol_eligible(int nid)
 }
 
 static inline bool nodes_private_mpol_allowed(const nodemask_t *nodes)
+{
+	return false;
+}
+
+static inline bool node_private_migration_blocked(int nid)
 {
 	return false;
 }
