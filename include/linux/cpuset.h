@@ -97,9 +97,6 @@ static inline bool cpuset_zone_allowed(struct zone *z, gfp_t gfp_mask)
 	return true;
 }
 
-extern int cpuset_mems_allowed_intersects(const struct task_struct *tsk1,
-					  const struct task_struct *tsk2);
-
 #ifdef CONFIG_CPUSETS_V1
 #define cpuset_memory_pressure_bump() 				\
 	do {							\
@@ -239,12 +236,6 @@ static inline bool __cpuset_zone_allowed(struct zone *z, gfp_t gfp_mask)
 static inline bool cpuset_zone_allowed(struct zone *z, gfp_t gfp_mask)
 {
 	return true;
-}
-
-static inline int cpuset_mems_allowed_intersects(const struct task_struct *tsk1,
-						 const struct task_struct *tsk2)
-{
-	return 1;
 }
 
 static inline void cpuset_memory_pressure_bump(void) {}

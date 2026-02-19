@@ -141,6 +141,9 @@ struct node_private_ops {
 /* Kernel reclaim (kswapd, direct reclaim, OOM) operates on this node */
 #define NP_OPS_RECLAIM			BIT(4)
 
+/* Private node is OOM-eligible: reclaim can run and pages can be demoted here */
+#define NP_OPS_OOM_ELIGIBLE		(NP_OPS_RECLAIM | NP_OPS_DEMOTION)
+
 /**
  * struct node_private - Per-node container for N_MEMORY_PRIVATE nodes
  *

@@ -74,7 +74,45 @@ static inline bool is_memcg_oom(struct oom_control *oc)
 	return oc->memcg != NULL;
 }
 
+/* Private nodes are only eligible if they support both reclaim and demotion */
+static inline bool node_oom_eligible(int nid)
+{
+	if (!node_state(nid, N_MEMORY_PRIVATE))
+		return true;
+	return (node_private_flags(nid) & NP_OPS_OOM_ELIGIBLE) ==
+		NP_OPS_OOM_ELIGIBLE;
+}
+
+static inline bool zone_oom_eligible(struct zone *zone, gfp_t gfp_mask)
+{
+	if (!node_oom_eligible(zone_to_nid(zone)))
+		return false;
+	return cpuset_zone_allowed(zone, gfp_mask);
+}
+
 #ifdef CONFIG_NUMA
+/*
+ * Killing a task can only relieve system pressure if freed memory can be
+ * demoted there and reclaim can operate on the node's pages, so we
+ * omit private nodes that aren't eligible.
+ */
+static bool oom_mems_intersect(const struct task_struct *tsk1,
+			       const struct task_struct *tsk2)
+{
+	int nid;
+
+	for_each_node_state(nid, N_MEMORY) {
+		if (!node_isset(nid, tsk1->mems_allowed))
+			continue;
+		if (!node_isset(nid, tsk2->mems_allowed))
+			continue;
+		if (!node_oom_eligible(nid))
+			continue;
+		return true;
+	}
+	return false;
+}
+
 /**
  * oom_cpuset_eligible() - check task eligibility for kill
  * @start: task struct of which task to consider
@@ -107,9 +145,10 @@ static bool oom_cpuset_eligible(struct task_struct *start,
 		} else {
 			/*
 			 * This is not a mempolicy constrained oom, so only
-			 * check the mems of tsk's cpuset.
+			 * check the mems of tsk's cpuset, excluding private
+			 * nodes that do not participate in kernel reclaim.
 			 */
-			ret = cpuset_mems_allowed_intersects(current, tsk);
+			ret = oom_mems_intersect(current, tsk);
 		}
 		if (ret)
 			break;
@@ -291,16 +330,19 @@ static enum oom_constraint constrained_alloc(struct oom_control *oc)
 		return CONSTRAINT_MEMORY_POLICY;
 	}
 
-	/* Check this allocation failure is caused by cpuset's wall function */
+	/* Check this allocation failure is caused by cpuset or private node constraints */
 	for_each_zone_zonelist_nodemask(zone, z, oc->zonelist,
 			highest_zoneidx, oc->nodemask)
-		if (!cpuset_zone_allowed(zone, oc->gfp_mask))
+		if (!zone_oom_eligible(zone, oc->gfp_mask))
 			cpuset_limited = true;
 
 	if (cpuset_limited) {
 		oc->totalpages = total_swap_pages;
-		for_each_node_mask(nid, cpuset_current_mems_allowed)
+		for_each_node_mask(nid, cpuset_current_mems_allowed) {
+			if (!node_oom_eligible(nid))
+				continue;
 			oc->totalpages += node_present_pages(nid);
+		}
 		return CONSTRAINT_CPUSET;
 	}
 	return CONSTRAINT_NONE;
