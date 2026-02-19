@@ -4522,23 +4522,6 @@ int cpuset_mem_spread_node(void)
 }
 
 /**
- * cpuset_mems_allowed_intersects - Does @tsk1's mems_allowed intersect @tsk2's?
- * @tsk1: pointer to task_struct of some task.
- * @tsk2: pointer to task_struct of some other task.
- *
- * Description: Return true if @tsk1's mems_allowed intersects the
- * mems_allowed of @tsk2.  Used by the OOM killer to determine if
- * one of the task's memory usage might impact the memory available
- * to the other.
- **/
-
-int cpuset_mems_allowed_intersects(const struct task_struct *tsk1,
-				   const struct task_struct *tsk2)
-{
-	return nodes_intersects(tsk1->mems_allowed, tsk2->mems_allowed);
-}
-
-/**
  * cpuset_print_current_mems_allowed - prints current's cpuset and mems_allowed
  *
  * Description: Prints current's name, cpuset name, and cached copy of its
