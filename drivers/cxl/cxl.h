@@ -886,6 +886,8 @@ void cxl_destroy_region(struct cxl_region *cxlr);
 struct device *cxl_region_dev(struct cxl_region *cxlr);
 enum cxl_partition_mode cxl_region_mode(struct cxl_region *cxlr);
 int cxl_get_region_range(struct cxl_region *cxlr, struct range *range);
+int cxl_get_committed_regions(struct cxl_memdev *cxlmd,
+			      struct cxl_region **regions, int max_regions);
 
 extern const struct bus_type cxl_bus_type;
 
