@@ -1352,13 +1352,6 @@ extern const struct trace_print_flags gfpflag_names[];
 
 void setup_zone_pageset(struct zone *zone);
 
-struct migration_target_control {
-	int nid;		/* preferred node id */
-	nodemask_t *nmask;
-	gfp_t gfp_mask;
-	enum migrate_reason reason;
-};
-
 /*
  * mm/filemap.c
  */
