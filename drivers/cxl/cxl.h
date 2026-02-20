@@ -880,6 +880,9 @@ int cxl_dvsec_rr_decode(struct cxl_dev_state *cxlds,
 
 bool is_cxl_region(struct device *dev);
 
+struct cxl_endpoint_decoder;
+int cxl_dpa_free(struct cxl_endpoint_decoder *cxled);
+
 extern const struct bus_type cxl_bus_type;
 
 /*
