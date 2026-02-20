@@ -2533,6 +2533,50 @@ int cxl_get_region_range(struct cxl_region *cxlr, struct range *range)
 }
 EXPORT_SYMBOL_NS_GPL(cxl_get_region_range, "CXL");
 
+/**
+ * cxl_get_committed_regions - Discover committed CXL regions for a memdev
+ * @cxlmd: The CXL memory device
+ * @regions: Output array to store discovered regions
+ * @max_regions: Maximum number of regions the array can hold
+ *
+ * Walk the CXL topology to find BIOS-committed regions that contain the
+ * given memdev.  VFIO-CXL needs this to discover committed regions before
+ * managing them during device passthrough.
+ *
+ * The caller must put_device() each returned region when done.
+ *
+ * Return: number of committed regions found, or negative error code
+ */
+int cxl_get_committed_regions(struct cxl_memdev *cxlmd,
+			      struct cxl_region **regions, int max_regions)
+{
+	struct cxl_port *endpoint = cxlmd->endpoint;
+	struct cxl_region_ref *iter;
+	unsigned long index;
+	int count = 0;
+
+	if (!endpoint)
+		return -ENODEV;
+
+	guard(rwsem_read)(&cxl_rwsem.region);
+
+	xa_for_each(&endpoint->regions, index, iter) {
+		struct cxl_region *cxlr = iter->region;
+
+		if (cxlr->params.state < CXL_CONFIG_COMMIT)
+			continue;
+
+		if (count < max_regions) {
+			get_device(&cxlr->dev);
+			regions[count] = cxlr;
+		}
+		count++;
+	}
+
+	return count;
+}
+EXPORT_SYMBOL_NS_GPL(cxl_get_committed_regions, "CXL");
+
 static void cxl_unregister_region(struct cxl_region *cxlr)
 {
 	struct cxl_region_params *p = &cxlr->params;
