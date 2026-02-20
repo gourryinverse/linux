@@ -468,6 +468,14 @@ static inline resource_size_t cxl_pmem_size(struct cxl_dev_state *cxlds)
 	return 0;
 }
 
+static inline resource_size_t cxl_ram_size(struct cxl_dev_state *cxlds)
+{
+	/* Static RAM is only expected at partition 0. */
+	if (cxlds->part[0].mode != CXL_PARTMODE_RAM)
+		return 0;
+	return resource_size(&cxlds->part[0].res);
+}
+
 static inline struct cxl_dev_state *mbox_to_cxlds(struct cxl_mailbox *cxl_mbox)
 {
 	return dev_get_drvdata(cxl_mbox->host);
