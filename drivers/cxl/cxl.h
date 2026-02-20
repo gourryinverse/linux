@@ -888,6 +888,9 @@ enum cxl_partition_mode cxl_region_mode(struct cxl_region *cxlr);
 int cxl_get_region_range(struct cxl_region *cxlr, struct range *range);
 int cxl_get_committed_regions(struct cxl_memdev *cxlmd,
 			      struct cxl_region **regions, int max_regions);
+struct cxl_region *cxl_create_region(struct cxl_root_decoder *cxlrd,
+				     struct cxl_endpoint_decoder **cxled,
+				     int ways);
 
 extern const struct bus_type cxl_bus_type;
 
