@@ -1,0 +1,16 @@
+config CXL_MEMPOLICY
+	tristate "CXL Private Memory with Mempolicy Support"
+	depends on CXL_PCI
+	depends on CXL_REGION
+	depends on NUMA
+	depends on MIGRATION
+	help
+	  Minimal driver for CXL memory devices that registers memory as a
+	  private node with mempolicy support.  The memory is isolated
+	  from default allocations and can only be reached via explicit
+	  mempolicy (set_mempolicy or mbind).
+
+	  No compression, no PTE controls, the memory behaves like normal
+	  DRAM but is excluded from fallback allocations.
+
+	  If unsure say 'n'.
