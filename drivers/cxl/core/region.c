@@ -3879,6 +3879,117 @@ struct cxl_region *cxl_create_region(struct cxl_root_decoder *cxlrd,
 }
 EXPORT_SYMBOL_NS_GPL(cxl_create_region, "CXL");
 
+struct hpa_freespace_match {
+	resource_size_t size;
+	const struct device *host_bridge;
+};
+
+static int match_root_decoder_freespace(struct device *dev, const void *data)
+{
+	const struct hpa_freespace_match *m = data;
+	struct cxl_root_decoder *cxlrd;
+	struct cxl_switch_decoder *cxlsd;
+	struct resource *p;
+	resource_size_t avail;
+	bool target_match;
+	int i;
+
+	if (!is_root_decoder(dev))
+		return 0;
+
+	cxlrd = to_cxl_root_decoder(dev);
+	if (!cxlrd->res)
+		return 0;
+
+	/*
+	 * Verify the endpoint's host bridge matches one of this root
+	 * decoder's targets.  The root port has all dports registered,
+	 * but each root decoder (CFMWS window) only serves specific
+	 * host bridges via its target[] array.
+	 */
+	cxlsd = &cxlrd->cxlsd;
+	target_match = false;
+	for (i = 0; i < cxlsd->cxld.interleave_ways; i++) {
+		if (cxlsd->target[i] &&
+		    cxlsd->target[i]->dport_dev == m->host_bridge) {
+			target_match = true;
+			break;
+		}
+	}
+	if (!target_match)
+		return 0;
+
+	avail = resource_size(cxlrd->res);
+	for (p = cxlrd->res->child; p; p = p->sibling)
+		avail -= resource_size(p);
+
+	return avail >= m->size;
+}
+
+/**
+ * cxl_get_hpa_freespace - Find a root decoder with available HPA capacity
+ * @cxlmd: memdev whose port hierarchy identifies the CXL topology
+ * @size: minimum free capacity required (bytes)
+ * @avail: output parameter filled with total free space in the decoder
+ *
+ * Walks up from @cxlmd to the CXL root and searches for a root decoder
+ * that has at least @size bytes of free HPA space and whose port hierarchy
+ * is reachable from @cxlmd.  On success, returns the root decoder with a
+ * device reference held; the caller must release it with
+ * cxl_put_root_decoder().
+ *
+ * Return: root decoder pointer on success, ERR_PTR on failure
+ */
+struct cxl_root_decoder *cxl_get_hpa_freespace(struct cxl_memdev *cxlmd,
+					       resource_size_t size,
+					       resource_size_t *avail)
+{
+	struct cxl_port *endpoint = cxlmd->endpoint;
+	struct cxl_root *cxl_root __free(put_cxl_root) = NULL;
+	struct hpa_freespace_match match;
+	struct cxl_root_decoder *cxlrd;
+	struct device *cxlrd_dev;
+	struct resource *p;
+
+	if (!endpoint)
+		return ERR_PTR(-ENODEV);
+
+	cxl_root = find_cxl_root(endpoint);
+	if (!cxl_root)
+		return ERR_PTR(-ENXIO);
+
+	match.size = size;
+	match.host_bridge = endpoint->host_bridge;
+
+	cxlrd_dev = device_find_child(&cxl_root->port.dev, &match,
+				      match_root_decoder_freespace);
+	if (!cxlrd_dev)
+		return ERR_PTR(-ENOSPC);
+
+	cxlrd = to_cxl_root_decoder(cxlrd_dev);
+
+	if (avail) {
+		resource_size_t free = resource_size(cxlrd->res);
+
+		for (p = cxlrd->res->child; p; p = p->sibling)
+			free -= resource_size(p);
+		*avail = free;
+	}
+
+	return cxlrd;
+}
+EXPORT_SYMBOL_NS_GPL(cxl_get_hpa_freespace, "CXL");
+
+/**
+ * cxl_put_root_decoder - Release a reference to a root decoder
+ * @cxlrd: root decoder obtained from cxl_get_hpa_freespace()
+ */
+void cxl_put_root_decoder(struct cxl_root_decoder *cxlrd)
+{
+	put_device(&cxlrd->cxlsd.cxld.dev);
+}
+EXPORT_SYMBOL_NS_GPL(cxl_put_root_decoder, "CXL");
+
 static struct cxl_region *
 cxl_find_region_by_range(struct cxl_root_decoder *cxlrd,
 			 struct range *hpa_range)
