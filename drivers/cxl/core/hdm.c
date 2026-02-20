@@ -687,6 +687,66 @@ int cxl_dpa_alloc(struct cxl_endpoint_decoder *cxled, u64 size)
 	return devm_add_action_or_reset(&port->dev, cxl_dpa_release, cxled);
 }
 
+static int match_free_endpoint_decoder(struct device *dev, const void *data)
+{
+	struct cxl_endpoint_decoder *cxled;
+
+	if (!is_endpoint_decoder(dev))
+		return 0;
+
+	cxled = to_cxl_endpoint_decoder(dev);
+	if (cxled->dpa_res || cxled->cxld.region ||
+	    (cxled->cxld.flags & CXL_DECODER_F_ENABLE))
+		return 0;
+
+	return 1;
+}
+
+/**
+ * cxl_request_dpa - Allocate DPA on a free endpoint decoder
+ * @cxlmd: memory device to allocate DPA on
+ * @mode: partition mode (RAM or PMEM)
+ * @size: DPA capacity to allocate in bytes
+ *
+ * High-level DPA allocation for Type2 accelerator drivers.  Finds a free
+ * endpoint decoder on @cxlmd, sets its partition mode, and allocates @size
+ * bytes of DPA.
+ *
+ * Return: endpoint decoder with DPA allocated, or ERR_PTR on failure
+ */
+struct cxl_endpoint_decoder *cxl_request_dpa(struct cxl_memdev *cxlmd,
+					     enum cxl_partition_mode mode,
+					     resource_size_t size)
+{
+	struct cxl_endpoint_decoder *cxled;
+	struct cxl_port *endpoint;
+	struct device *cxled_dev;
+	int rc;
+
+	endpoint = cxlmd->endpoint;
+	if (!endpoint)
+		return ERR_PTR(-ENODEV);
+
+	cxled_dev = device_find_child(&endpoint->dev, NULL,
+				      match_free_endpoint_decoder);
+	if (!cxled_dev)
+		return ERR_PTR(-ENXIO);
+
+	cxled = to_cxl_endpoint_decoder(cxled_dev);
+	put_device(cxled_dev);
+
+	rc = cxl_dpa_set_part(cxled, mode);
+	if (rc)
+		return ERR_PTR(rc);
+
+	rc = cxl_dpa_alloc(cxled, size);
+	if (rc)
+		return ERR_PTR(rc);
+
+	return cxled;
+}
+EXPORT_SYMBOL_NS_GPL(cxl_request_dpa, "CXL");
+
 static void cxld_set_interleave(struct cxl_decoder *cxld, u32 *ctrl)
 {
 	u16 eig;
