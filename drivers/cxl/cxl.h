@@ -891,6 +891,10 @@ int cxl_get_committed_regions(struct cxl_memdev *cxlmd,
 struct cxl_region *cxl_create_region(struct cxl_root_decoder *cxlrd,
 				     struct cxl_endpoint_decoder **cxled,
 				     int ways);
+struct cxl_root_decoder *cxl_get_hpa_freespace(struct cxl_memdev *cxlmd,
+					       resource_size_t size,
+					       resource_size_t *avail);
+void cxl_put_root_decoder(struct cxl_root_decoder *cxlrd);
 
 extern const struct bus_type cxl_bus_type;
 
