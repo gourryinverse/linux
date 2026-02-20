@@ -3779,6 +3779,106 @@ static struct cxl_region *construct_region(struct cxl_root_decoder *cxlrd,
 	return cxlr;
 }
 
+static void drop_region(struct cxl_root_decoder *cxlrd,
+			struct cxl_region *cxlr)
+{
+	struct cxl_port *port = cxlrd_to_port(cxlrd);
+
+	devm_release_action(port->uport_dev, __unregister_region, cxlr);
+}
+
+/*
+ * Perform the locked portion of region creation: configure interleave,
+ * allocate HPA, attach targets, and commit decoders.  The caller
+ * (__create_region) handles cleanup on failure *after* this returns so
+ * that the region rwsem is no longer held when drop_region() runs
+ * drop_region -> cxl_unregister_region -> detach_target also acquires
+ * the region rwsem and would self-deadlock if it were still held here.
+ */
+static int __commit_region(struct cxl_root_decoder *cxlrd,
+			   struct cxl_region *cxlr,
+			   struct cxl_endpoint_decoder **cxled, int ways)
+{
+	resource_size_t size = 0;
+	int rc, i;
+
+	guard(rwsem_write)(&cxl_rwsem.region);
+
+	rc = set_interleave_ways(cxlr, ways);
+	if (rc)
+		return rc;
+
+	rc = set_interleave_granularity(cxlr,
+			cxlrd->cxlsd.cxld.interleave_granularity);
+	if (rc)
+		return rc;
+
+	for (i = 0; i < ways; i++)
+		size += cxl_dpa_size(cxled[i]);
+
+	rc = alloc_hpa(cxlr, size);
+	if (rc)
+		return rc;
+
+	scoped_guard(rwsem_read, &cxl_rwsem.dpa) {
+		for (i = 0; i < ways; i++) {
+			rc = cxl_region_attach(cxlr, cxled[i], i);
+			if (rc)
+				return rc;
+		}
+	}
+
+	rc = cxl_region_invalidate_memregion(cxlr);
+	if (rc)
+		return rc;
+
+	rc = cxl_region_decode_commit(cxlr);
+	if (rc)
+		return rc;
+
+	cxlr->params.state = CXL_CONFIG_COMMIT;
+
+	return 0;
+}
+
+/**
+ * cxl_create_region - Create and commit a CXL region programmatically
+ * @cxlrd: Root decoder under which to create the region
+ * @cxled: Array of endpoint decoders to use as targets
+ * @ways: Number of interleave ways (length of @cxled array)
+ *
+ * Type2 accelerator drivers use this to create CXL regions entirely from
+ * kernel code without sysfs.  The caller must have already allocated DPA
+ * on each endpoint decoder.
+ *
+ * Return: pointer to the new region on success, ERR_PTR on failure
+ */
+struct cxl_region *cxl_create_region(struct cxl_root_decoder *cxlrd,
+				     struct cxl_endpoint_decoder **cxled,
+				     int ways)
+{
+	struct cxl_memdev *cxlmd = cxled_to_memdev(cxled[0]);
+	struct cxl_dev_state *cxlds = cxlmd->cxlds;
+	int part = READ_ONCE(cxled[0]->part);
+	struct cxl_region *cxlr;
+	int rc;
+
+	cxlr = __create_region(cxlrd, cxlds->part[part].mode,
+			       atomic_read(&cxlrd->region_id),
+			       cxled[0]->cxld.target_type);
+	if (IS_ERR(cxlr))
+		return cxlr;
+
+	rc = __commit_region(cxlrd, cxlr, cxled, ways);
+	if (rc) {
+		drop_region(cxlrd, cxlr);
+		return ERR_PTR(rc);
+	}
+
+	return cxlr;
+}
+EXPORT_SYMBOL_NS_GPL(cxl_create_region, "CXL");
+
 static struct cxl_region *
 cxl_find_region_by_range(struct cxl_root_decoder *cxlrd,
 			 struct range *hpa_range)
