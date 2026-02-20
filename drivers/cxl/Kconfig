@@ -278,4 +278,6 @@ config CXL_ATL
 	depends on CXL_REGION
 	depends on ACPI_PRMT && AMD_NB
 
+source "drivers/cxl/type3_drivers/Kconfig"
+
 endif
