@@ -854,6 +854,126 @@ static struct attribute_group cxl_rcd_group = {
 };
 __ATTRIBUTE_GROUPS(cxl_rcd);
 
+/**
+ * cxl_pci_type3_probe_init() - Common Type-3 PCI device initialization
+ * @pdev: PCI device to initialize
+ * @attach: memdev attach callback for region/endpoint management, or NULL
+ *
+ * Performs the standard CXL Type-3 PCI device probe sequence:
+ * PCI enable, register discovery, mailbox init, media ready check,
+ * IRQ vectors, command enumeration, DPA setup, memdev registration,
+ * and event configuration.
+ *
+ * Alternative PCI drivers (e.g., compression, accelerator) call this
+ * instead of duplicating the ~100 line init sequence.  The returned
+ * cxl_memdev is fully initialized and ready for region operations.
+ *
+ * Returns the cxl_memdev on success, ERR_PTR on failure.
+ */
+struct cxl_memdev *cxl_pci_type3_probe_init(struct pci_dev *pdev,
+					    const struct cxl_memdev_attach *attach)
+{
+	struct pci_host_bridge *host_bridge = pci_find_host_bridge(pdev->bus);
+	struct cxl_dpa_info range_info = { 0 };
+	struct cxl_memdev_state *mds;
+	struct cxl_dev_state *cxlds;
+	struct cxl_register_map map;
+	struct cxl_memdev *cxlmd;
+	int rc;
+	bool irq_avail;
+
+	rc = pcim_enable_device(pdev);
+	if (rc)
+		return ERR_PTR(rc);
+	pci_set_master(pdev);
+
+	mds = cxl_memdev_state_create(&pdev->dev);
+	if (IS_ERR(mds))
+		return ERR_CAST(mds);
+	cxlds = &mds->cxlds;
+	pci_set_drvdata(pdev, cxlds);
+
+	cxlds->rcd = is_cxl_restricted(pdev);
+	cxlds->serial = pci_get_dsn(pdev);
+	cxlds->cxl_dvsec = pci_find_dvsec_capability(
+		pdev, PCI_VENDOR_ID_CXL, PCI_DVSEC_CXL_DEVICE);
+	if (!cxlds->cxl_dvsec)
+		dev_warn(&pdev->dev,
+			 "Device DVSEC not present, skip CXL.mem init\n");
+
+	rc = cxl_pci_setup_regs(pdev, CXL_REGLOC_RBI_MEMDEV, &map);
+	if (rc)
+		return ERR_PTR(rc);
+
+	rc = cxl_map_device_regs(&map, &cxlds->regs);
+	if (rc)
+		return ERR_PTR(rc);
+
+	rc = cxl_pci_setup_regs(pdev, CXL_REGLOC_RBI_COMPONENT,
+				&cxlds->reg_map);
+	if (rc)
+		dev_warn(&pdev->dev, "No component registers (%d)\n", rc);
+	else if (!cxlds->reg_map.component_map.ras.valid)
+		dev_dbg(&pdev->dev, "RAS registers not found\n");
+
+	rc = cxl_pci_type3_init_mailbox(cxlds);
+	if (rc)
+		return ERR_PTR(rc);
+
+	rc = cxl_await_media_ready(cxlds);
+	if (rc == 0)
+		cxlds->media_ready = true;
+	else
+		dev_warn(&pdev->dev, "Media not active (%d)\n", rc);
+
+	irq_avail = cxl_alloc_irq_vectors(pdev);
+
+	rc = cxl_pci_setup_mailbox(mds, irq_avail);
+	if (rc)
+		return ERR_PTR(rc);
+
+	rc = cxl_enumerate_cmds(mds);
+	if (rc)
+		return ERR_PTR(rc);
+
+	rc = cxl_set_timestamp(mds);
+	if (rc)
+		return ERR_PTR(rc);
+
+	rc = cxl_poison_state_init(mds);
+	if (rc)
+		return ERR_PTR(rc);
+
+	rc = cxl_dev_state_identify(mds);
+	if (rc)
+		return ERR_PTR(rc);
+
+	rc = cxl_mem_dpa_fetch(mds, &range_info);
+	if (rc)
+		return ERR_PTR(rc);
+
+	rc = cxl_dpa_setup(cxlds, &range_info);
+	if (rc)
+		return ERR_PTR(rc);
+
+	rc = devm_cxl_setup_features(cxlds);
+	if (rc)
+		dev_dbg(&pdev->dev, "No CXL Features discovered\n");
+
+	cxlmd = devm_cxl_add_memdev(cxlds, attach);
+	if (IS_ERR(cxlmd))
+		return cxlmd;
+
+	rc = cxl_event_config(host_bridge, mds, irq_avail);
+	if (rc)
+		return ERR_PTR(rc);
+
+	pci_save_state(pdev);
+
+	return cxlmd;
+}
+EXPORT_SYMBOL_NS_GPL(cxl_pci_type3_probe_init, "CXL");
+
 static int cxl_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	struct pci_host_bridge *host_bridge = pci_find_host_bridge(pdev->bus);
