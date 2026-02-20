@@ -2512,6 +2512,27 @@ enum cxl_partition_mode cxl_region_mode(struct cxl_region *cxlr)
 }
 EXPORT_SYMBOL_NS_GPL(cxl_region_mode, "CXL");
 
+/**
+ * cxl_get_region_range - Retrieve the HPA range of a CXL region
+ * @cxlr: The CXL region
+ * @range: Output for the HPA range
+ *
+ * Type2 and VFIO-CXL drivers need to retrieve the HPA range of a CXL region
+ * for memory mapping.  The cxl_region struct internals are private to the CXL
+ * core.
+ *
+ * Return: 0 on success, -ENOENT if the region has no valid range
+ */
+int cxl_get_region_range(struct cxl_region *cxlr, struct range *range)
+{
+	if (range_len(&cxlr->hpa_range) == 0)
+		return -ENOENT;
+
+	*range = cxlr->hpa_range;
+	return 0;
+}
+EXPORT_SYMBOL_NS_GPL(cxl_get_region_range, "CXL");
+
 static void cxl_unregister_region(struct cxl_region *cxlr)
 {
 	struct cxl_region_params *p = &cxlr->params;
