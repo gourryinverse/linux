@@ -2485,6 +2485,33 @@ static struct cxl_region *to_cxl_region(struct device *dev)
 	return container_of(dev, struct cxl_region, dev);
 }
 
+/**
+ * cxl_region_dev - Return the embedded device of a CXL region
+ * @cxlr: The CXL region
+ *
+ * Provides access to the region's struct device for devm allocation,
+ * device_find_child, and dev_name() without exposing the cxl_region struct.
+ *
+ * Return: Pointer to the region's embedded struct device
+ */
+struct device *cxl_region_dev(struct cxl_region *cxlr)
+{
+	return &cxlr->dev;
+}
+EXPORT_SYMBOL_NS_GPL(cxl_region_dev, "CXL");
+
+/**
+ * cxl_region_mode - Return the partition mode of a CXL region
+ * @cxlr: The CXL region
+ *
+ * Return: The partition mode (CXL_PARTMODE_RAM or CXL_PARTMODE_PMEM)
+ */
+enum cxl_partition_mode cxl_region_mode(struct cxl_region *cxlr)
+{
+	return cxlr->mode;
+}
+EXPORT_SYMBOL_NS_GPL(cxl_region_mode, "CXL");
+
 static void cxl_unregister_region(struct cxl_region *cxlr)
 {
 	struct cxl_region_params *p = &cxlr->params;

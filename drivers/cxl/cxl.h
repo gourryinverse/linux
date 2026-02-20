@@ -883,6 +883,8 @@ bool is_cxl_region(struct device *dev);
 struct cxl_endpoint_decoder;
 int cxl_dpa_free(struct cxl_endpoint_decoder *cxled);
 void cxl_destroy_region(struct cxl_region *cxlr);
+struct device *cxl_region_dev(struct cxl_region *cxlr);
+enum cxl_partition_mode cxl_region_mode(struct cxl_region *cxlr);
 
 extern const struct bus_type cxl_bus_type;
 
