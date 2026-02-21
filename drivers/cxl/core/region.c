@@ -4009,6 +4009,7 @@ int cxl_add_to_region(struct cxl_endpoint_decoder *cxled)
 	struct cxl_region_context ctx;
 	struct cxl_region_params *p;
 	bool attach = false;
+	bool newly_created = false;
 	int rc;
 
 	ctx = (struct cxl_region_context) {
@@ -4032,15 +4033,23 @@ int cxl_add_to_region(struct cxl_endpoint_decoder *cxled)
 	mutex_lock(&cxlrd->range_lock);
 	struct cxl_region *cxlr __free(put_cxl_region) =
 		cxl_find_region_by_range(cxlrd, &ctx.hpa_range);
-	if (!cxlr)
+	if (!cxlr) {
 		cxlr = construct_region(cxlrd, &ctx);
+		newly_created = !IS_ERR(cxlr);
+	}
 	mutex_unlock(&cxlrd->range_lock);
 
 	rc = PTR_ERR_OR_ZERO(cxlr);
 	if (rc)
 		return rc;
 
-	attach_target(cxlr, cxled, -1, TASK_UNINTERRUPTIBLE);
+	rc = attach_target(cxlr, cxled, -1, TASK_UNINTERRUPTIBLE);
+	if (rc) {
+		/* If endpoint was just created, tear it down to release HPA */
+		if (newly_created)
+			drop_region(cxlrd, cxlr);
+		return rc;
+	}
 
 	scoped_guard(rwsem_read, &cxl_rwsem.region) {
 		p = &cxlr->params;
@@ -4064,7 +4073,7 @@ int cxl_add_to_region(struct cxl_endpoint_decoder *cxled)
 				p->res);
 	}
 
-	return rc;
+	return 0;
 }
 EXPORT_SYMBOL_NS_GPL(cxl_add_to_region, "CXL");
 
