@@ -81,6 +81,13 @@ static inline bool cma_validate_zones(struct cma *cma)
 int cma_private_claim(const char *name, struct cma **cma);
 void cma_private_release(struct cma *cma);
 void __init cma_private_reserve(void);
+#else
+static inline int cma_private_claim(const char *name, struct cma **cma)
+{
+	return -ENOSYS;
+}
+static inline void cma_private_release(struct cma *cma) { }
+static inline void cma_private_reserve(void) { }
 #endif
 
 #endif

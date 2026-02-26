@@ -9,6 +9,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/pgtable.h>
 #include <linux/slab.h>
+#include <linux/cma.h>
 
 struct cma;
 struct iommu_ops;
@@ -119,6 +120,7 @@ static inline struct cma *dev_get_cma_area(struct device *dev)
 }
 static inline void dma_contiguous_reserve(phys_addr_t limit)
 {
+	cma_private_reserve();
 }
 static inline int dma_contiguous_reserve_area(phys_addr_t size,
 		phys_addr_t base, phys_addr_t limit, struct cma **res_cma,
