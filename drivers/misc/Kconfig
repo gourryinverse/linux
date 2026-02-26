@@ -660,4 +660,16 @@ source "drivers/misc/mchp_pci1xxxx/Kconfig"
 source "drivers/misc/keba/Kconfig"
 source "drivers/misc/amd-sbi/Kconfig"
 source "drivers/misc/rp1/Kconfig"
+
+config CMA_PRIVATE_TEST
+	tristate "CMA Private Node test driver"
+	depends on CMA
+	help
+	  Test driver that claims a cma_private= CMA pool and exposes
+	  basic CMA alloc/free via debugfs. The pool id is specified
+	  via the 'id' module parameter.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called cma_private_test.
+
 endmenu

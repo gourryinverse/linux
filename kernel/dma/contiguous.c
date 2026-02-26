@@ -218,6 +218,9 @@ void __init dma_contiguous_reserve(phys_addr_t limit)
 
 	dma_numa_cma_reserve();
 
+	/* Reserve CMA areas for cma_private= entries */
+	cma_private_reserve();
+
 	pr_debug("%s(limit %08lx)\n", __func__, (unsigned long)limit);
 
 	if (size_cmdline != -1) {

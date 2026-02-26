@@ -41,11 +41,13 @@ phys_addr_t cma_get_base(const struct cma *cma)
 	WARN_ON_ONCE(cma->nranges != 1);
 	return PFN_PHYS(cma->ranges[0].base_pfn);
 }
+EXPORT_SYMBOL_GPL(cma_get_base);
 
 unsigned long cma_get_size(const struct cma *cma)
 {
 	return cma->count << PAGE_SHIFT;
 }
+EXPORT_SYMBOL_GPL(cma_get_size);
 
 const char *cma_get_name(const struct cma *cma)
 {
@@ -929,6 +931,7 @@ struct page *cma_alloc(struct cma *cma, unsigned long count,
 {
 	return __cma_alloc(cma, count, align, GFP_KERNEL | (no_warn ? __GFP_NOWARN : 0));
 }
+EXPORT_SYMBOL_GPL(cma_alloc);
 
 struct folio *cma_alloc_folio(struct cma *cma, int order, gfp_t gfp)
 {
@@ -1016,6 +1019,7 @@ bool cma_release(struct cma *cma, const struct page *pages,
 
 	return true;
 }
+EXPORT_SYMBOL_GPL(cma_release);
 
 bool cma_free_folio(struct cma *cma, const struct folio *folio)
 {
@@ -1121,3 +1125,209 @@ void __init *cma_reserve_early(struct cma *cma, unsigned long size)
 
 	return ret;
 }
+
+/*
+ * Named CMA pool reservation and claim via cma_private= boot parameter.
+ *
+ * cma_private=<size>@<name>[:<nid>] reserves named CMA areas at boot.
+ * Drivers claim pools by name to get the struct cma pointer.
+ */
+
+#define CMA_PRIVATE_MAX		8
+#define CMA_PRIVATE_NAME_MAX	32
+
+struct cma_private_entry {
+	phys_addr_t size;
+	char name[CMA_PRIVATE_NAME_MAX];
+	int src_nid;		/* NUMA node to allocate memory from */
+	struct cma *cma;	/* set during CMA reservation */
+	bool claimed;
+};
+
+static struct cma_private_entry cma_private_entries[CMA_PRIVATE_MAX];
+static int cma_private_count;
+static DEFINE_MUTEX(cma_private_mutex);
+
+static int __init cma_private_setup(char *str)
+{
+	phys_addr_t size;
+	const char *name;
+	char *sep;
+	size_t name_len;
+	int src_nid = NUMA_NO_NODE;
+
+	if (!str)
+		return -EINVAL;
+
+	if (cma_private_count >= CMA_PRIVATE_MAX) {
+		pr_err("cma_private: too many entries (max %d)\n",
+		       CMA_PRIVATE_MAX);
+		return -ENOSPC;
+	}
+
+	size = memparse(str, &str);
+	if (!size) {
+		pr_err("cma_private: invalid size\n");
+		return -EINVAL;
+	}
+
+	if (*str != '@') {
+		pr_err("cma_private: missing @<name>\n");
+		return -EINVAL;
+	}
+
+	name = str + 1;
+
+	/* Check for optional :<nid> suffix */
+	sep = strchr(name, ':');
+	if (sep) {
+		unsigned int nid;
+
+		if (kstrtouint(sep + 1, 0, &nid)) {
+			pr_err("cma_private: invalid nid in '%s'\n", sep + 1);
+			return -EINVAL;
+		}
+		src_nid = nid;
+		name_len = sep - name;
+	} else {
+		name_len = strlen(name);
+	}
+
+	if (!name_len || name_len >= CMA_PRIVATE_NAME_MAX) {
+		pr_err("cma_private: invalid name (max %d chars)\n",
+		       CMA_PRIVATE_NAME_MAX - 1);
+		return -EINVAL;
+	}
+
+	cma_private_entries[cma_private_count].size = size;
+	strscpy(cma_private_entries[cma_private_count].name, name,
+		min(name_len + 1, (size_t)CMA_PRIVATE_NAME_MAX));
+	cma_private_entries[cma_private_count].src_nid = src_nid;
+	cma_private_entries[cma_private_count].cma = NULL;
+	cma_private_entries[cma_private_count].claimed = false;
+	cma_private_count++;
+
+	if (src_nid != NUMA_NO_NODE)
+		pr_info("cma_private: parsed %llu bytes @ %s from node %d\n",
+			(u64)size,
+			cma_private_entries[cma_private_count - 1].name,
+			src_nid);
+	else
+		pr_info("cma_private: parsed %llu bytes @ %s\n",
+			(u64)size,
+			cma_private_entries[cma_private_count - 1].name);
+	return 0;
+}
+early_param("cma_private", cma_private_setup);
+
+static struct cma_private_entry *cma_private_find(const char *name,
+						  bool unclaimed_only)
+{
+	int i;
+
+	for (i = 0; i < cma_private_count; i++) {
+		if (strcmp(cma_private_entries[i].name, name))
+			continue;
+		if (unclaimed_only && cma_private_entries[i].claimed)
+			continue;
+		return &cma_private_entries[i];
+	}
+	return NULL;
+}
+
+static struct cma_private_entry *cma_private_find_by_cma(struct cma *cma)
+{
+	int i;
+
+	for (i = 0; i < cma_private_count; i++)
+		if (cma_private_entries[i].cma == cma)
+			return &cma_private_entries[i];
+	return NULL;
+}
+
+void __init cma_private_reserve(void)
+{
+	int i, ret;
+
+	for (i = 0; i < cma_private_count; i++) {
+		struct cma_private_entry *entry = &cma_private_entries[i];
+
+		ret = cma_declare_contiguous_nid(0, entry->size, 0, 0, 0,
+						 false, entry->name,
+						 &entry->cma, entry->src_nid);
+		if (ret) {
+			pr_err("cma_private: failed to reserve %llu bytes for %s: %d\n",
+			       (u64)entry->size, entry->name, ret);
+			entry->cma = NULL;
+			continue;
+		}
+
+		pr_info("cma_private: reserved %llu bytes for %s\n",
+			(u64)entry->size, entry->name);
+	}
+}
+
+/**
+ * cma_private_claim - Claim a pre-reserved named CMA pool
+ * @name: Pool name (from cma_private=<size>@<name> boot parameter)
+ * @cma: Returns the CMA area pointer
+ *
+ * Claims the next unclaimed pool matching @name.  Multiple pools with
+ * the same name can be reserved (one per device instance); each claim
+ * returns the next available one.
+ *
+ * Returns 0 on success, negative errno on failure.
+ */
+int cma_private_claim(const char *name, struct cma **cma)
+{
+	struct cma_private_entry *entry;
+
+	mutex_lock(&cma_private_mutex);
+
+	entry = cma_private_find(name, true);
+	if (!entry) {
+		mutex_unlock(&cma_private_mutex);
+		return -ENOENT;
+	}
+
+	if (!entry->cma) {
+		mutex_unlock(&cma_private_mutex);
+		return -ENODEV;
+	}
+
+	entry->claimed = true;
+	*cma = entry->cma;
+
+	mutex_unlock(&cma_private_mutex);
+
+	pr_info("cma_private: claimed %s, %lu pages\n",
+		name, cma_get_size(entry->cma) >> PAGE_SHIFT);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(cma_private_claim);
+
+/**
+ * cma_private_release - Release a claimed CMA private pool
+ * @cma: CMA area pointer returned by cma_private_claim()
+ *
+ * Marks the pool as unclaimed so it can be claimed again.
+ */
+void cma_private_release(struct cma *cma)
+{
+	struct cma_private_entry *entry;
+
+	mutex_lock(&cma_private_mutex);
+
+	entry = cma_private_find_by_cma(cma);
+	if (!entry || !entry->claimed) {
+		mutex_unlock(&cma_private_mutex);
+		return;
+	}
+
+	entry->claimed = false;
+
+	mutex_unlock(&cma_private_mutex);
+
+	pr_info("cma_private: released %s\n", entry->name);
+}
+EXPORT_SYMBOL_GPL(cma_private_release);

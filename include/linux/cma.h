@@ -77,4 +77,10 @@ static inline bool cma_validate_zones(struct cma *cma)
 }
 #endif
 
+#ifdef CONFIG_CMA
+int cma_private_claim(const char *name, struct cma **cma);
+void cma_private_release(struct cma *cma);
+void __init cma_private_reserve(void);
+#endif
+
 #endif
