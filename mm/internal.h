@@ -1604,6 +1604,8 @@ static inline void folio_managed_migrate_notify(struct folio *src,
 		ops->folio_migrate(src, dst);
 }
 
+void migrate_filemap_folio(struct folio *folio, gfp_t gfp);
+
 /**
  * node_private_reclaim_policy - invoke the service's reclaim policy callback
  * @nid: NUMA node id

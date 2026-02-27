@@ -2762,3 +2762,47 @@ int migrate_misplaced_folio(struct folio *folio, int node)
 }
 #endif /* CONFIG_NUMA_BALANCING */
 #endif /* CONFIG_NUMA */
+
+static struct folio *alloc_folio_for_migration(struct folio *src,
+					       unsigned long private)
+{
+	return folio_alloc((gfp_t)private, folio_order(src));
+}
+
+/**
+ * migrate_filemap_folio - Migrate a folio off a managed private node
+ * @folio: folio to migrate (referenced, not locked)
+ * @gfp: allocation flags for the destination folio
+ *
+ * Migrates a folio from a private node to regular memory using the standard
+ * migrate_pages() infrastructure, which handles locking, unmapping, data
+ * copy, filesystem private data, and PTE reinstallation.
+ *
+ * Consumes the caller's folio reference unconditionally.  The caller should
+ * retry its page cache lookup after this returns.
+ */
+void migrate_filemap_folio(struct folio *folio, gfp_t gfp)
+{
+	LIST_HEAD(migratepages);
+
+	if (!folio_managed_allows_migrate(folio) ||
+	    !folio_isolate_lru(folio)) {
+		folio_put(folio);
+		return;
+	}
+
+	node_stat_mod_folio(folio, NR_ISOLATED_ANON + folio_is_file_lru(folio),
+			    folio_nr_pages(folio));
+	folio_put(folio);
+
+	list_add(&folio->lru, &migratepages);
+	/*
+	 * MR_NUMA_MISPLACED sets nosplit, keeping large folios intact
+	 * during migration rather than splitting them on failure.
+	 */
+	migrate_pages(&migratepages, alloc_folio_for_migration,
+		      NULL, gfp, MIGRATE_SYNC,
+		      MR_NUMA_MISPLACED, NULL);
+	if (!list_empty(&migratepages))
+		putback_movable_pages(&migratepages);
+}

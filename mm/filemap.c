@@ -1944,6 +1944,19 @@ repeat:
 	if (!folio)
 		goto no_page;
 
+	/*
+	 * If this is a write to a folio on a write-protected private
+	 * node, migrate it to regular memory before locking.
+	 */
+	if ((fgp_flags & FGP_WRITE) && folio_managed_wrprotect(folio)) {
+		if (fgp_flags & FGP_NOWAIT) {
+			folio_put(folio);
+			return ERR_PTR(-EAGAIN);
+		}
+		migrate_filemap_folio(folio, gfp);
+		goto repeat;
+	}
+
 	if (fgp_flags & FGP_LOCK) {
 		if (fgp_flags & FGP_NOWAIT) {
 			if (!folio_trylock(folio)) {
