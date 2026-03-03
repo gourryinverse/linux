@@ -102,10 +102,12 @@ static bool oom_mems_intersect(const struct task_struct *tsk1,
 	int nid;
 
 	for_each_node_state(nid, N_MEMORY) {
+#ifdef CONFIG_CPUSETS
 		if (!node_isset(nid, tsk1->mems_allowed))
 			continue;
 		if (!node_isset(nid, tsk2->mems_allowed))
 			continue;
+#endif
 		if (!node_oom_eligible(nid))
 			continue;
 		return true;
