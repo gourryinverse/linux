@@ -207,7 +207,7 @@ static int dax_kmem_do_hotremove(struct dev_dax *dev_dax,
 static int dax_kmem_do_hotremove(struct dev_dax *dev_dax,
 				 struct dax_kmem_data *data)
 {
-	return -ENOSUPP;
+	return -EOPNOTSUPP;
 }
 #endif /* CONFIG_MEMORY_HOTREMOVE */
 
