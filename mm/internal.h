@@ -1521,6 +1521,8 @@ static inline pte_t folio_managed_fixup_migration_pte(struct page *new,
 						      pte_t old_pte,
 						      struct vm_area_struct *vma)
 {
+#ifdef CONFIG_MIGRATION
+#ifdef CONFIG_DEVICE_PRIVATE
 	if (unlikely(is_device_private_page(new))) {
 		softleaf_t entry;
 
@@ -1535,9 +1537,12 @@ static inline pte_t folio_managed_fixup_migration_pte(struct page *new,
 			pte = pte_swp_mksoft_dirty(pte);
 		if (pte_swp_uffd_wp(old_pte))
 			pte = pte_swp_mkuffd_wp(pte);
-	} else if (folio_managed_wrprotect(page_folio(new))) {
+	} else
+#endif
+	if (folio_managed_wrprotect(page_folio(new))) {
 		pte = pte_wrprotect(pte);
 	}
+#endif
 	return pte;
 }
 
@@ -1560,6 +1565,8 @@ static inline pmd_t folio_managed_fixup_migration_pmd(struct page *new,
 						      pmd_t pmd,
 						      pmd_t old_pmd)
 {
+#ifdef CONFIG_MIGRATION
+#ifdef CONFIG_DEVICE_PRIVATE
 	if (unlikely(is_device_private_page(new))) {
 		swp_entry_t entry;
 
@@ -1574,9 +1581,12 @@ static inline pmd_t folio_managed_fixup_migration_pmd(struct page *new,
 			pmd = pmd_swp_mksoft_dirty(pmd);
 		if (pmd_swp_uffd_wp(old_pmd))
 			pmd = pmd_swp_mkuffd_wp(pmd);
-	} else if (folio_managed_wrprotect(page_folio(new))) {
+	} else
+#endif
+	if (folio_managed_wrprotect(page_folio(new))) {
 		pmd = pmd_wrprotect(pmd);
 	}
+#endif
 	return pmd;
 }
 
