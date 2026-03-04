@@ -136,10 +136,14 @@ static int expand_one_shrinker_info(struct mem_cgroup *memcg, int new_size,
 
 		memcpy(new->unit, old->unit,
 		       shrinker_unit_size(old->map_nr_max));
-		if (shrinker_unit_alloc(new, old, nid)) {
-			kvfree(new);
-			return -ENOMEM;
-		}
+		/*
+		 * New unit[] slots beyond old->map_nr_max are NULL from
+		 * kvzalloc.  Units are allocated lazily on first use via
+		 * ensure_shrinker_info_unit(), which is called from
+		 * memcg_list_lru_alloc() in sleepable context before
+		 * any set_shrinker_bit().  This avoids O(memcgs * nodes)
+		 * sleeping allocations under shrinker_mutex here.
+		 */
 
 		rcu_assign_pointer(pn->shrinker_info, new);
 		kvfree_rcu(old, rcu);
