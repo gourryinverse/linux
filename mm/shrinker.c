@@ -111,7 +111,7 @@ static struct shrinker_info *shrinker_info_protected(struct mem_cgroup *memcg,
 }
 
 static int expand_one_shrinker_info(struct mem_cgroup *memcg, int new_size,
-				    int old_size, int new_nr_max)
+				    int new_nr_max)
 {
 	struct shrinker_info *new, *old;
 	struct mem_cgroup_per_node *pn;
@@ -134,7 +134,8 @@ static int expand_one_shrinker_info(struct mem_cgroup *memcg, int new_size,
 
 		new->map_nr_max = new_nr_max;
 
-		memcpy(new->unit, old->unit, old_size);
+		memcpy(new->unit, old->unit,
+		       shrinker_unit_size(old->map_nr_max));
 		if (shrinker_unit_alloc(new, old, nid)) {
 			kvfree(new);
 			return -ENOMEM;
@@ -151,7 +152,7 @@ static int expand_shrinker_info(int new_id)
 {
 	int ret = 0;
 	int new_nr_max = round_up(new_id + 1, SHRINKER_UNIT_BITS);
-	int new_size, old_size = 0;
+	int new_size;
 	struct mem_cgroup *memcg;
 
 	if (!root_mem_cgroup)
@@ -160,12 +161,10 @@ static int expand_shrinker_info(int new_id)
 	lockdep_assert_held(&shrinker_mutex);
 
 	new_size = shrinker_unit_size(new_nr_max);
-	old_size = shrinker_unit_size(shrinker_nr_max);
 
 	memcg = mem_cgroup_iter(NULL, NULL, NULL);
 	do {
-		ret = expand_one_shrinker_info(memcg, new_size, old_size,
-					       new_nr_max);
+		ret = expand_one_shrinker_info(memcg, new_size, new_nr_max);
 		if (ret) {
 			mem_cgroup_iter_break(NULL, memcg);
 			goto out;
