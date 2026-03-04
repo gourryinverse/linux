@@ -200,11 +200,14 @@ void set_shrinker_bit(struct mem_cgroup *memcg, int nid, int shrinker_id)
 
 		rcu_read_lock();
 		info = rcu_dereference(memcg->nodeinfo[nid]->shrinker_info);
-		unit = info->unit[shrinker_id_to_index(shrinker_id)];
 		if (!WARN_ON_ONCE(shrinker_id >= info->map_nr_max)) {
-			/* Pairs with smp mb in shrink_slab() */
-			smp_mb__before_atomic();
-			set_bit(shrinker_id_to_offset(shrinker_id), unit->map);
+			unit = READ_ONCE(info->unit[shrinker_id_to_index(shrinker_id)]);
+			if (unit) {
+				/* Pairs with smp mb in shrink_slab() */
+				smp_mb__before_atomic();
+				set_bit(shrinker_id_to_offset(shrinker_id),
+					unit->map);
+			}
 		}
 		rcu_read_unlock();
 	}
@@ -257,8 +260,11 @@ static long xchg_nr_deferred_memcg(int nid, struct shrinker *shrinker,
 
 	rcu_read_lock();
 	info = rcu_dereference(memcg->nodeinfo[nid]->shrinker_info);
-	unit = info->unit[shrinker_id_to_index(shrinker->id)];
-	nr_deferred = atomic_long_xchg(&unit->nr_deferred[shrinker_id_to_offset(shrinker->id)], 0);
+	unit = READ_ONCE(info->unit[shrinker_id_to_index(shrinker->id)]);
+	if (unit)
+		nr_deferred = atomic_long_xchg(&unit->nr_deferred[shrinker_id_to_offset(shrinker->id)], 0);
+	else
+		nr_deferred = 0;
 	rcu_read_unlock();
 
 	return nr_deferred;
@@ -273,9 +279,12 @@ static long add_nr_deferred_memcg(long nr, int nid, struct shrinker *shrinker,
 
 	rcu_read_lock();
 	info = rcu_dereference(memcg->nodeinfo[nid]->shrinker_info);
-	unit = info->unit[shrinker_id_to_index(shrinker->id)];
-	nr_deferred =
-		atomic_long_add_return(nr, &unit->nr_deferred[shrinker_id_to_offset(shrinker->id)]);
+	unit = READ_ONCE(info->unit[shrinker_id_to_index(shrinker->id)]);
+	if (unit)
+		nr_deferred =
+			atomic_long_add_return(nr, &unit->nr_deferred[shrinker_id_to_offset(shrinker->id)]);
+	else
+		nr_deferred = 0;
 	rcu_read_unlock();
 
 	return nr_deferred;
@@ -300,7 +309,13 @@ void reparent_shrinker_deferred(struct mem_cgroup *memcg)
 		parent_info = shrinker_info_protected(parent, nid);
 		for (index = 0; index < shrinker_id_to_index(child_info->map_nr_max); index++) {
 			child_unit = child_info->unit[index];
+			if (!child_unit)
+				continue;
+
 			parent_unit = parent_info->unit[index];
+			if (!parent_unit)
+				continue;
+
 			for (offset = 0; offset < SHRINKER_UNIT_BITS; offset++) {
 				nr = atomic_long_read(&child_unit->nr_deferred[offset]);
 				atomic_long_add(nr, &parent_unit->nr_deferred[offset]);
@@ -519,7 +534,12 @@ again:
 	if (index < shrinker_id_to_index(info->map_nr_max)) {
 		struct shrinker_info_unit *unit;
 
-		unit = info->unit[index];
+		unit = READ_ONCE(info->unit[index]);
+		if (!unit) {
+			rcu_read_unlock();
+			index++;
+			goto again;
+		}
 
 		rcu_read_unlock();
 
