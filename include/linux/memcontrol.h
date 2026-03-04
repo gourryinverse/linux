@@ -1619,6 +1619,7 @@ int alloc_shrinker_info(struct mem_cgroup *memcg);
 void free_shrinker_info(struct mem_cgroup *memcg);
 void set_shrinker_bit(struct mem_cgroup *memcg, int nid, int shrinker_id);
 void reparent_shrinker_deferred(struct mem_cgroup *memcg);
+int ensure_shrinker_info_unit(struct mem_cgroup *memcg, int nid, int shrinker_id);
 
 static inline int shrinker_id(struct shrinker *shrinker)
 {
@@ -1654,6 +1655,12 @@ static inline void mem_cgroup_sk_uncharge(const struct sock *sk,
 static inline void set_shrinker_bit(struct mem_cgroup *memcg,
 				    int nid, int shrinker_id)
 {
+}
+
+static inline int ensure_shrinker_info_unit(struct mem_cgroup *memcg,
+					    int nid, int shrinker_id)
+{
+	return 0;
 }
 
 static inline int shrinker_id(struct shrinker *shrinker)

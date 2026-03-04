@@ -485,6 +485,18 @@ void memcg_reparent_list_lrus(struct mem_cgroup *memcg, struct mem_cgroup *paren
 			continue;
 
 		/*
+		 * Ensure the parent memcg has a shrinker_info_unit for
+		 * this shrinker on every node, so that
+		 * memcg_reparent_list_lru_one() -> set_shrinker_bit()
+		 * can safely set the parent's bit.
+		 */
+		if (lru_shrinker_id(lru) >= 0) {
+			for_each_node(i)
+				ensure_shrinker_info_unit(parent, i,
+							  lru_shrinker_id(lru));
+		}
+
+		/*
 		 * With Xarray value set to NULL, holding the lru lock below
 		 * prevents list_lru_{add,del,isolate} from touching the lru,
 		 * safe to reparent.
@@ -520,6 +532,23 @@ int memcg_list_lru_alloc(struct mem_cgroup *memcg, struct list_lru *lru,
 
 	if (!list_lru_memcg_aware(lru) || memcg_list_lru_allocated(memcg, lru))
 		return 0;
+
+	/*
+	 * Ensure that the shrinker_info_unit for this memcg and shrinker
+	 * exists on every node.  Units are allocated lazily, so we must
+	 * guarantee the unit is present before any list_lru_add() can
+	 * call set_shrinker_bit() for this (memcg, shrinker) pair.
+	 */
+	if (lru_shrinker_id(lru) >= 0) {
+		int nid, ret;
+
+		for_each_node(nid) {
+			ret = ensure_shrinker_info_unit(memcg, nid,
+							lru_shrinker_id(lru));
+			if (ret)
+				return ret;
+		}
+	}
 
 	gfp &= GFP_RECLAIM_MASK;
 	/*

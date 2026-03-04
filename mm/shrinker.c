@@ -324,6 +324,43 @@ void reparent_shrinker_deferred(struct mem_cgroup *memcg)
 	}
 	mutex_unlock(&shrinker_mutex);
 }
+
+int ensure_shrinker_info_unit(struct mem_cgroup *memcg, int nid, int shrinker_id)
+{
+	struct shrinker_info *info;
+	struct shrinker_info_unit *unit;
+	int index = shrinker_id_to_index(shrinker_id);
+
+	/* Fast path: check under RCU if unit already exists */
+	rcu_read_lock();
+	info = rcu_dereference(memcg->nodeinfo[nid]->shrinker_info);
+	if (info && shrinker_id < info->map_nr_max &&
+	    READ_ONCE(info->unit[index])) {
+		rcu_read_unlock();
+		return 0;
+	}
+	rcu_read_unlock();
+
+	/* Slow path: allocate and install under shrinker_mutex */
+	unit = kzalloc_node(sizeof(*unit), GFP_KERNEL, nid);
+	if (!unit)
+		return -ENOMEM;
+
+	mutex_lock(&shrinker_mutex);
+	info = shrinker_info_protected(memcg, nid);
+	if (!info || shrinker_id >= info->map_nr_max ||
+	    info->unit[index]) {
+		/* Already populated or info gone/shrank—nothing to do */
+		mutex_unlock(&shrinker_mutex);
+		kfree(unit);
+		return 0;
+	}
+	/* Pairs with READ_ONCE in set_shrinker_bit / shrink_slab_memcg */
+	smp_store_release(&info->unit[index], unit);
+	mutex_unlock(&shrinker_mutex);
+	return 0;
+}
+
 #else
 static int shrinker_memcg_alloc(struct shrinker *shrinker)
 {
