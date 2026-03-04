@@ -31,7 +31,7 @@ static inline void shrinker_unit_free(struct shrinker_info *info, int start)
 
 	for (i = start; i < nr; i++) {
 		if (!unit[i])
-			break;
+			continue;
 
 		kfree(unit[i]);
 		unit[i] = NULL;
