@@ -30,6 +30,41 @@ static void enable_suspend(void *data)
 	cxl_mem_active_dec();
 }
 
+static int cxl_mem_probe_rcd_attach(struct cxl_memdev *cxlmd)
+{
+	struct cxl_dev_state *cxlds = cxlmd->cxlds;
+	struct device *dev = &cxlmd->dev;
+	struct cxl_endpoint_dvsec_info *info = &cxlds->dvsec_info;
+	int rc;
+
+	rc = cxl_dvsec_rr_decode(cxlds, info);
+	if (rc) {
+		dev_err(dev, "RCD fallback: failed to read DVSEC ranges: %d\n",
+			rc);
+		return rc;
+	}
+
+	if (!info->mem_enabled) {
+		dev_err(dev, "RCD fallback: memory not enabled in DVSEC\n");
+		return -ENXIO;
+	}
+
+	if (info->ranges == 0) {
+		dev_err(dev, "RCD fallback: no DVSEC ranges found\n");
+		return -ENXIO;
+	}
+
+	dev_info(dev, "RCD fallback: using %d DVSEC range(s) for attach\n",
+		 info->ranges);
+
+	rc = cxlmd->attach->probe(cxlmd);
+	if (rc)
+		return rc;
+
+	cxl_mem_active_inc();
+	return devm_add_action_or_reset(dev, enable_suspend, NULL);
+}
+
 static void remove_debugfs(void *dentry)
 {
 	debugfs_remove_recursive(dentry);
@@ -110,6 +145,8 @@ static int cxl_mem_probe(struct device *dev)
 	struct cxl_port *parent_port __free(put_cxl_port) =
 		cxl_mem_find_port(cxlmd, &dport);
 	if (!parent_port) {
+		if (cxlds->rcd && cxlmd->attach)
+			return cxl_mem_probe_rcd_attach(cxlmd);
 		dev_err(dev, "CXL port topology not found\n");
 		return -ENXIO;
 	}

@@ -993,6 +993,8 @@ struct cxl_dax_region *to_cxl_dax_region(struct device *dev);
 struct cxl_sysram *to_cxl_sysram(struct device *dev);
 struct device *cxl_sysram_dev(struct cxl_sysram *sysram);
 int devm_cxl_add_sysram(struct cxl_region *cxlr, bool private, enum mmop online_type);
+int devm_cxl_add_sysram_range(struct device *parent, struct range *hpa,
+			      bool private, enum mmop online_type);
 int cxl_sysram_offline_and_remove(struct cxl_sysram *sysram);
 u64 cxl_port_get_spa_cache_alias(struct cxl_port *endpoint, u64 spa);
 #else
@@ -1018,6 +1020,12 @@ static inline struct cxl_sysram *to_cxl_sysram(struct device *dev)
 }
 static inline int devm_cxl_add_sysram(struct cxl_region *cxlr, bool private,
 				      enum mmop online_type)
+{
+	return -ENXIO;
+}
+static inline int devm_cxl_add_sysram_range(struct device *parent,
+					    struct range *hpa, bool private,
+					    enum mmop online_type)
 {
 	return -ENXIO;
 }

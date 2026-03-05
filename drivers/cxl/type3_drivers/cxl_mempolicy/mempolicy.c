@@ -162,12 +162,67 @@ static int setup_private_node(struct cxl_memdev *cxlmd,
 	return 0;
 }
 
+static int cxl_mempolicy_attach_dvsec(struct cxl_memdev *cxlmd)
+{
+	struct cxl_mempolicy_ctx *ctx = memdev_to_ctx(cxlmd);
+	struct pci_dev *pdev = to_pci_dev(cxlmd->dev.parent);
+	struct cxl_dev_state *cxlds = cxlmd->cxlds;
+	struct cxl_endpoint_dvsec_info *info = &cxlds->dvsec_info;
+	int i, rc;
+
+	dev_info(&cxlmd->dev,
+		 "DVSEC fallback: %d range(s) available\n", info->ranges);
+
+	for (i = 0; i < info->ranges; i++) {
+		struct range *hpa = &info->dvsec_range[i];
+		int nid;
+
+		if (range_len(hpa) == 0)
+			continue;
+
+		dev_info(&cxlmd->dev,
+			 "DVSEC fallback: adding range %d [%#llx-%#llx]\n",
+			 i, (u64)hpa->start, (u64)hpa->end);
+
+		rc = devm_cxl_add_sysram_range(&pdev->dev, hpa, true,
+					       MMOP_ONLINE_MOVABLE);
+		if (rc) {
+			dev_err(&cxlmd->dev,
+				"DVSEC range %d: failed to add sysram: %d\n",
+				i, rc);
+			return rc;
+		}
+
+		nid = phys_to_target_node(hpa->start);
+		if (nid == NUMA_NO_NODE)
+			nid = memory_add_physaddr_to_nid(hpa->start);
+
+		rc = node_private_set_ops(nid, &cxl_mempolicy_ops);
+		if (rc) {
+			dev_err(&cxlmd->dev,
+				"failed to set ops on node %d: %d\n", nid, rc);
+			return rc;
+		}
+
+		ctx->nid = nid;
+		dev_info(&cxlmd->dev,
+			 "node %d registered as private mempolicy memory (DVSEC)\n",
+			 nid);
+	}
+
+	return 0;
+}
+
 static int cxl_mempolicy_attach_probe(struct cxl_memdev *cxlmd)
 {
 	struct cxl_region *regions[8];
 	struct cxl_region *cxlr;
 	int nr, i;
 	int rc;
+
+	/* RCD fallback: no endpoint port, use DVSEC ranges directly */
+	if (!cxlmd->endpoint)
+		return cxl_mempolicy_attach_dvsec(cxlmd);
 
 	dev_info(&cxlmd->dev,
 		 "cxl_mempolicy attach: looking for regions\n");

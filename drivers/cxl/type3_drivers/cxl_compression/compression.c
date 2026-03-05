@@ -603,6 +603,250 @@ static irqreturn_t cxl_compression_hthresh_irq(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
+static int convert_dvsec_to_sysram(struct range *hpa, struct pci_dev *pdev)
+{
+	struct cxl_compression_ctx *comp_ctx = pdev_to_comp_ctx(pdev);
+	struct device *dev = &pdev->dev;
+	struct cxl_compression_wm_ctx *wm_ctx;
+	struct cxl_teardown_ctx *tctx;
+	struct cxl_flush_ctx *flush_ctx;
+	struct cxl_pcpu_flush *pcpu;
+	struct cxl_sysram *sysram;
+	struct device *sdev;
+	resource_size_t region_start, region_size;
+	char sname[64];
+	int nid;
+	int irq;
+	int cpu;
+	int rc;
+
+	dev_info(dev, "DVSEC fallback: converting range [%#llx-%#llx] to sysram\n",
+		 (u64)hpa->start, (u64)hpa->end);
+
+	rc = devm_cxl_add_sysram_range(dev, hpa, true, MMOP_ONLINE_MOVABLE);
+	if (rc) {
+		dev_err(dev, "failed to add sysram range: %d\n", rc);
+		return rc;
+	}
+
+	/* Find the sysram child device we just created */
+	snprintf(sname, sizeof(sname), "sysram_%s", dev_name(dev));
+	sdev = device_find_child_by_name(dev, sname);
+	if (!sdev) {
+		dev_err(dev, "failed to find sysram device %s\n", sname);
+		return -ENODEV;
+	}
+	sysram = to_cxl_sysram(sdev);
+	comp_ctx->sysram = sysram;
+
+	tctx = devm_kzalloc(dev, sizeof(*tctx), GFP_KERNEL);
+	if (!tctx) {
+		put_device(sdev);
+		return -ENOMEM;
+	}
+
+	rc = devm_add_action_or_reset(dev, cxl_compression_post_teardown, tctx);
+	if (rc) {
+		put_device(sdev);
+		return rc;
+	}
+
+	tctx->sysram = sysram;
+
+	nid = sysram->numa_node;
+	region_start = hpa->start;
+	region_size = range_len(hpa);
+
+	flush_ctx = devm_kzalloc(dev, sizeof(*flush_ctx), GFP_KERNEL);
+	if (!flush_ctx) {
+		put_device(sdev);
+		return -ENOMEM;
+	}
+
+	flush_ctx->base_pfn = PHYS_PFN(region_start);
+	flush_ctx->nr_pages = region_size >> PAGE_SHIFT;
+	flush_ctx->flush_record = flush_record_alloc(flush_ctx->nr_pages,
+						     &flush_ctx->flush_record_pages);
+	if (!flush_ctx->flush_record) {
+		put_device(sdev);
+		return -ENOMEM;
+	}
+
+	flush_ctx->mbox = comp_ctx->mbox;
+	flush_ctx->dev = dev;
+	flush_ctx->nid = nid;
+	flush_ctx->media_ops_supported = comp_ctx->media_ops_supported;
+
+	flush_ctx->buf_max = (flush_ctx->mbox->payload_size -
+			      sizeof(struct cxl_media_op_input)) /
+			     sizeof(struct cxl_dpa_range);
+	if (flush_buf_size && flush_buf_size < flush_ctx->buf_max)
+		flush_ctx->buf_max = flush_buf_size;
+	if (flush_ctx->buf_max == 0)
+		flush_ctx->buf_max = 1;
+
+	dev_info(dev,
+		 "flush buffer: %u DPA ranges per command (payload %zu bytes, media_ops %s)\n",
+		 flush_ctx->buf_max, flush_ctx->mbox->payload_size,
+		 flush_ctx->media_ops_supported ? "yes" : "no");
+
+	flush_ctx->pcpu = alloc_percpu(struct cxl_pcpu_flush);
+	if (!flush_ctx->pcpu) {
+		put_device(sdev);
+		return -ENOMEM;
+	}
+
+	flush_ctx->kthread_spares = kcalloc(nr_cpu_ids,
+					    sizeof(struct cxl_flush_buf *),
+					    GFP_KERNEL);
+	if (!flush_ctx->kthread_spares)
+		goto err_pcpu_init;
+
+	for_each_possible_cpu(cpu) {
+		struct cxl_flush_buf *active_buf, *overflow_buf, *spare_buf;
+
+		active_buf = cxl_flush_buf_alloc(flush_ctx->buf_max, nid);
+		if (!active_buf)
+			goto err_pcpu_init;
+
+		overflow_buf = cxl_flush_buf_alloc(flush_ctx->buf_max, nid);
+		if (!overflow_buf) {
+			cxl_flush_buf_free(active_buf);
+			goto err_pcpu_init;
+		}
+
+		spare_buf = cxl_flush_buf_alloc(flush_ctx->buf_max, nid);
+		if (!spare_buf) {
+			cxl_flush_buf_free(active_buf);
+			cxl_flush_buf_free(overflow_buf);
+			goto err_pcpu_init;
+		}
+
+		pcpu = per_cpu_ptr(flush_ctx->pcpu, cpu);
+		pcpu->ctx = flush_ctx;
+		rcu_assign_pointer(pcpu->active, active_buf);
+		pcpu->overflow_spare = overflow_buf;
+		INIT_WORK(&pcpu->overflow_work, cxl_flush_overflow_work);
+
+		flush_ctx->kthread_spares[cpu] = spare_buf;
+	}
+
+	flush_ctx->flush_thread = kthread_create_on_node(
+		cxl_flush_kthread_fn, flush_ctx, nid, "cxl-flush/%d", nid);
+	if (IS_ERR(flush_ctx->flush_thread)) {
+		rc = PTR_ERR(flush_ctx->flush_thread);
+		flush_ctx->flush_thread = NULL;
+		goto err_pcpu_init;
+	}
+	wake_up_process(flush_ctx->flush_thread);
+
+	/* Use sysram device pointer as owner key (no region) */
+	rc = cram_register_private_node(nid, sysram,
+					cxl_compression_flush_cb, flush_ctx);
+	if (rc) {
+		dev_err(dev, "failed to register cram node %d: %d\n", nid, rc);
+		goto err_pcpu_init;
+	}
+
+	tctx->flush_ctx = flush_ctx;
+	tctx->nid = nid;
+
+	rc = devm_add_action_or_reset(dev, cxl_compression_pre_teardown, tctx);
+	if (rc) {
+		put_device(sdev);
+		return rc;
+	}
+
+	comp_ctx->flush_ctx = flush_ctx;
+	comp_ctx->tctx = tctx;
+	comp_ctx->nid = nid;
+
+	/* Register watermark IRQ handlers */
+	wm_ctx = devm_kzalloc(dev, sizeof(*wm_ctx), GFP_KERNEL);
+	if (!wm_ctx) {
+		put_device(sdev);
+		return -ENOMEM;
+	}
+
+	wm_ctx->dev = dev;
+	wm_ctx->nid = nid;
+
+	irq = pci_irq_vector(pdev, CXL_CT3_MSIX_LTHRESH);
+	if (irq >= 0) {
+		rc = devm_request_threaded_irq(dev, irq, NULL,
+					       cxl_compression_lthresh_irq,
+					       IRQF_ONESHOT,
+					       "cxl-lthresh", wm_ctx);
+		if (rc)
+			dev_warn(dev, "failed to register lthresh IRQ: %d\n",
+				 rc);
+	}
+
+	irq = pci_irq_vector(pdev, CXL_CT3_MSIX_HTHRESH);
+	if (irq >= 0) {
+		rc = devm_request_threaded_irq(dev, irq, NULL,
+					       cxl_compression_hthresh_irq,
+					       IRQF_ONESHOT,
+					       "cxl-hthresh", wm_ctx);
+		if (rc)
+			dev_warn(dev, "failed to register hthresh IRQ: %d\n",
+				 rc);
+	}
+
+	put_device(sdev);
+	return 0;
+
+err_pcpu_init:
+	put_device(sdev);
+	if (flush_ctx->flush_thread)
+		kthread_stop(flush_ctx->flush_thread);
+	for_each_possible_cpu(cpu) {
+		struct cxl_flush_buf *buf;
+
+		pcpu = per_cpu_ptr(flush_ctx->pcpu, cpu);
+
+		buf = rcu_dereference_raw(pcpu->active);
+		cxl_flush_buf_free(buf);
+
+		cxl_flush_buf_free(pcpu->overflow_spare);
+
+		if (flush_ctx->kthread_spares)
+			cxl_flush_buf_free(flush_ctx->kthread_spares[cpu]);
+	}
+	kfree(flush_ctx->kthread_spares);
+	free_percpu(flush_ctx->pcpu);
+	flush_record_free(flush_ctx->flush_record, flush_ctx->flush_record_pages);
+	return rc ? rc : -ENOMEM;
+}
+
+static int cxl_compression_attach_dvsec(struct cxl_memdev *cxlmd)
+{
+	struct pci_dev *pdev = to_pci_dev(cxlmd->dev.parent);
+	struct cxl_dev_state *cxlds = cxlmd->cxlds;
+	struct cxl_endpoint_dvsec_info *info = &cxlds->dvsec_info;
+	int i, rc;
+
+	dev_info(&cxlmd->dev,
+		 "DVSEC fallback: %d range(s) available\n", info->ranges);
+
+	for (i = 0; i < info->ranges; i++) {
+		struct range *hpa = &info->dvsec_range[i];
+
+		if (range_len(hpa) == 0)
+			continue;
+
+		rc = convert_dvsec_to_sysram(hpa, pdev);
+		if (rc) {
+			dev_err(&cxlmd->dev,
+				"DVSEC range %d conversion failed: %d\n",
+				i, rc);
+			return rc;
+		}
+	}
+
+	return 0;
+}
+
 static int convert_region_to_sysram(struct cxl_region *cxlr,
 				    struct pci_dev *pdev)
 {
@@ -885,6 +1129,10 @@ static int cxl_compression_attach_probe(struct cxl_memdev *cxlmd)
 	comp_ctx->media_ops_supported =
 		cxl_probe_media_ops_zero(comp_ctx->mbox,
 					 &cxlmd->dev);
+
+	/* RCD fallback: no endpoint port, use DVSEC ranges directly */
+	if (!cxlmd->endpoint)
+		return cxl_compression_attach_dvsec(cxlmd);
 
 	dev_info(&cxlmd->dev, "compression attach: looking for regions\n");
 
