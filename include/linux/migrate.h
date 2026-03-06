@@ -71,6 +71,9 @@ void folio_migrate_flags(struct folio *newfolio, struct folio *folio);
 int folio_migrate_mapping(struct address_space *mapping,
 		struct folio *newfolio, struct folio *folio, int extra_count);
 int set_movable_ops(const struct movable_operations *ops, enum pagetype type);
+int migrate_folios_to_node(struct list_head *folios, int nid,
+				    enum migrate_mode mode,
+				    enum migrate_reason reason);
 
 #else
 
@@ -93,6 +96,13 @@ static inline int migrate_huge_page_move_mapping(struct address_space *mapping,
 	return -ENOSYS;
 }
 static inline int set_movable_ops(const struct movable_operations *ops, enum pagetype type)
+{
+	return -ENOSYS;
+}
+static inline int migrate_folios_to_node(struct list_head *folios,
+						  int nid,
+						  enum migrate_mode mode,
+						  enum migrate_reason reason)
 {
 	return -ENOSYS;
 }

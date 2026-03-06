@@ -9,6 +9,7 @@
 
 #include <linux/fs.h>
 #include <linux/khugepaged.h>
+#include <linux/memremap.h>
 #include <linux/mm.h>
 #include <linux/mm_inline.h>
 #include <linux/node_device.h>
@@ -1470,6 +1471,73 @@ static inline bool folio_managed_free_cb(struct folio *folio)
 		return pgmap->ops->free_node_folio(folio);
 
 	return false;
+}
+
+/**
+ * folio_managed_allows_migrate - Check if a managed folio supports migration
+ * @folio: The folio to check
+ *
+ * Returns true if the folio can be migrated.  For zone_device folios, only
+ * device_private and device_coherent support migration.  For device_managed
+ * folios (buddy-managed on private nodes), migration requires
+ * PGMAP_OPS_MIGRATION.  Normal folios always return true.
+ */
+static inline bool folio_managed_allows_migrate(struct folio *folio)
+{
+	if (folio_is_zone_device(folio))
+		return folio_is_device_private(folio) ||
+		       folio_is_device_coherent(folio);
+	if (folio_is_device_managed(folio))
+		return node_device_has_flag(folio_nid(folio),
+					   PGMAP_OPS_MIGRATION);
+	return true;
+}
+
+/**
+ * folio_managed_allows_user_migrate - Check if user migration is allowed
+ * @folio: The folio to check
+ *
+ * Returns the folio's nid if user migration is allowed (for do_pages_stat),
+ * or -ENOENT if not.
+ */
+static inline int folio_managed_allows_user_migrate(struct folio *folio)
+{
+	if (folio_is_zone_device(folio))
+		return -ENOENT;
+	if (folio_is_device_managed(folio)) {
+		if (node_device_has_flag(folio_nid(folio),
+					PGMAP_OPS_MIGRATION))
+			return folio_nid(folio);
+		return -ENOENT;
+	}
+	return folio_nid(folio);
+}
+
+/**
+ * folio_managed_migrate_notify - Notify service that a folio changed location
+ * @src: the old folio (about to be freed)
+ * @dst: the new folio (data already copied, migration entries still in place)
+ *
+ * Called from migrate_folio_move() after data has been copied but before
+ * remove_migration_ptes() installs real PTEs pointing to @dst.  While
+ * migration entries are in place, faults block in migration_entry_wait(),
+ * so the service can safely update PFN-based metadata before any access
+ * through the page tables.  Both @src and @dst are locked.
+ */
+static inline void folio_managed_migrate_notify(struct folio *src,
+						struct folio *dst)
+{
+	struct dev_pagemap *pgmap;
+
+	if (!folio_is_device_managed(src))
+		return;
+
+	rcu_read_lock();
+	pgmap = node_device_find_pgmap(folio_nid(src), folio_pfn(src));
+	rcu_read_unlock();
+
+	if (pgmap && pgmap->ops && pgmap->ops->folio_migrate)
+		pgmap->ops->folio_migrate(src, dst);
 }
 
 struct vm_struct *__get_vm_area_node(unsigned long size,

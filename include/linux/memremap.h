@@ -125,9 +125,20 @@ struct dev_pagemap_ops {
 	 * Used for device_private and device_managed memory types.
 	 */
 	void (*folio_split)(struct folio *head, struct folio *tail);
+
+	/*
+	 * Post-migration notification that a managed folio changed physical
+	 * location.  Called from migrate_folio_move() after data has been
+	 * copied but before migration entries are replaced with real PTEs.
+	 * Both @src and @dst are locked.  Faults block in
+	 * migration_entry_wait() so the service can safely update PFN-based
+	 * metadata before any access through the page tables.
+	 */
+	void (*folio_migrate)(struct folio *src, struct folio *dst);
 };
 
 #define PGMAP_ALTMAP_VALID	(1 << 0)
+#define PGMAP_OPS_MIGRATION	(1 << 1)
 
 /**
  * struct dev_pagemap - metadata for ZONE_DEVICE mappings

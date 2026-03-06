@@ -111,6 +111,7 @@
 #include <linux/mmu_notifier.h>
 #include <linux/printk.h>
 #include <linux/leafops.h>
+#include <linux/node_device.h>
 #include <linux/gcd.h>
 
 #include <asm/tlbflush.h>
@@ -1282,11 +1283,6 @@ static long migrate_to_node(struct mm_struct *mm, int source, int dest,
 	LIST_HEAD(pagelist);
 	long nr_failed;
 	long err = 0;
-	struct migration_target_control mtc = {
-		.nid = dest,
-		.gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_THISNODE,
-		.reason = MR_SYSCALL,
-	};
 
 	nodes_clear(nmask);
 	node_set(source, nmask);
@@ -1311,8 +1307,8 @@ static long migrate_to_node(struct mm_struct *mm, int source, int dest,
 	mmap_read_unlock(mm);
 
 	if (!list_empty(&pagelist)) {
-		err = migrate_pages(&pagelist, alloc_migration_target, NULL,
-			(unsigned long)&mtc, MIGRATE_SYNC, MR_SYSCALL, NULL);
+		err = migrate_folios_to_node(&pagelist, dest, MIGRATE_SYNC,
+					     MR_SYSCALL);
 		if (err)
 			putback_movable_pages(&pagelist);
 	}

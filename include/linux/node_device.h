@@ -4,6 +4,7 @@
 
 #include <linux/completion.h>
 #include <linux/memremap.h>
+#include <linux/migrate_mode.h>
 #include <linux/mm.h>
 #include <linux/nodemask.h>
 #include <linux/refcount.h>
@@ -38,6 +39,9 @@ struct vm_fault;
  * @pgmaps: Dynamic array of dev_pagemap pointers (one per hotplug range)
  * @nr_pgmaps: Number of pgmaps currently registered
  * @flags: Union of all PGMAP_OPS_* flags from registered pgmaps
+ * @migrate_to: Migrate folios TO this node.  Returns 0 on full success,
+ *      >0 = number of folios that failed, <0 = error.
+ *      Matches migrate_pages() semantics.
  * @refcount: Reference count (1 = registered; 0 = fully released)
  * @released: Signaled when refcount drops to 0; unregister waits on this
  */
@@ -46,6 +50,10 @@ struct node_device {
 	struct dev_pagemap **pgmaps;
 	int nr_pgmaps;
 	unsigned long flags;
+	int (*migrate_to)(struct list_head *folios, int nid,
+			  enum migrate_mode mode,
+			  enum migrate_reason reason,
+			  unsigned int *nr_succeeded);
 	refcount_t refcount;
 	struct completion released;
 };
@@ -132,6 +140,46 @@ static inline struct dev_pagemap *node_device_find_pgmap(int nid,
 	return NULL;
 }
 
+/**
+ * node_device_migrate_to - Migrate folios to a managed device node
+ * @folios: list of folios to migrate
+ * @nid: target node
+ * @mode: migration mode (MIGRATE_ASYNC, MIGRATE_SYNC, etc.)
+ * @reason: migration reason (MR_DEMOTION, MR_SYSCALL, etc.)
+ * @nr_succeeded: optional output for number of successfully migrated folios
+ *
+ * If @nid has a node_device with a migrate_to callback, invokes it.
+ * Returns 0 on full success, >0 = failure count, <0 = error.
+ * Returns -ENODEV if the node has no node_device or no migrate_to callback.
+ */
+static inline int node_device_migrate_to(struct list_head *folios, int nid,
+					 enum migrate_mode mode,
+					 enum migrate_reason reason,
+					 unsigned int *nr_succeeded)
+{
+	int (*fn)(struct list_head *, int, enum migrate_mode,
+		  enum migrate_reason, unsigned int *);
+	struct node_device *nd;
+	int ret;
+
+	rcu_read_lock();
+	nd = rcu_dereference(NODE_DATA(nid)->node_dev);
+	if (!nd || !nd->migrate_to ||
+	    !refcount_inc_not_zero(&nd->refcount)) {
+		rcu_read_unlock();
+		return -ENODEV;
+	}
+	fn = nd->migrate_to;
+	rcu_read_unlock();
+
+	ret = fn(folios, nid, mode, reason, nr_succeeded);
+
+	if (refcount_dec_and_test(&nd->refcount))
+		complete(&nd->released);
+
+	return ret;
+}
+
 #else /* !CONFIG_NUMA */
 
 static inline unsigned long node_device_flags(int nid)
@@ -153,6 +201,14 @@ static inline struct dev_pagemap *node_device_find_pgmap(int nid,
 							 unsigned long pfn)
 {
 	return NULL;
+}
+
+static inline int node_device_migrate_to(struct list_head *folios, int nid,
+					 enum migrate_mode mode,
+					 enum migrate_reason reason,
+					 unsigned int *nr_succeeded)
+{
+	return -ENODEV;
 }
 
 #endif /* CONFIG_NUMA */
