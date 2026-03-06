@@ -57,6 +57,9 @@ static int cxl_mem_probe_rcd_attach(struct cxl_memdev *cxlmd)
 	dev_info(dev, "RCD fallback: using %d DVSEC range(s) for attach\n",
 		 info->ranges);
 
+	/* Clear the ERR_PTR(-ENXIO) sentinel — there is no endpoint port */
+	cxlmd->endpoint = NULL;
+
 	rc = cxlmd->attach->probe(cxlmd);
 	if (rc)
 		return rc;
