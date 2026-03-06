@@ -14,6 +14,20 @@ struct vm_area_struct;
 struct vm_fault;
 
 /**
+ * struct node_reclaim_policy - Per-balance reclaim tunables from driver
+ * @active: true if a callback was invoked
+ * @may_swap: allow swap writeback during boosted reclaim
+ * @may_writepage: allow writepage during boosted reclaim
+ * @managed_watermarks: service owns watermark_boost lifecycle
+ */
+struct node_reclaim_policy {
+	bool active;
+	bool may_swap;
+	bool may_writepage;
+	bool managed_watermarks;
+};
+
+/**
  * struct node_device - Per-node container for managed device nodes
  *
  * Tracks multiple dev_pagemap instances per node and holds per-node state
@@ -43,6 +57,7 @@ struct vm_fault;
  *      >0 = number of folios that failed, <0 = error.
  *      Matches migrate_pages() semantics.
  * @alloc_blocked: Backpressure flag — set by driver to reject new demotions
+ * @reclaim_policy: Callback to fill in per-balance reclaim tunables
  * @refcount: Reference count (1 = registered; 0 = fully released)
  * @released: Signaled when refcount drops to 0; unregister waits on this
  */
@@ -56,6 +71,7 @@ struct node_device {
 			  enum migrate_reason reason,
 			  unsigned int *nr_succeeded);
 	bool alloc_blocked;
+	void (*reclaim_policy)(int nid, struct node_reclaim_policy *policy);
 	refcount_t refcount;
 	struct completion released;
 };

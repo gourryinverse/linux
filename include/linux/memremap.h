@@ -151,6 +151,7 @@ struct dev_pagemap_ops {
 #define PGMAP_OPS_MEMPOLICY	(1 << 2)
 #define PGMAP_OPS_DEMOTION	(1 << 3)
 #define PGMAP_OPS_PROTECT_WRITE	(1 << 4)
+#define PGMAP_OPS_RECLAIM	(1 << 5)
 
 /**
  * struct dev_pagemap - metadata for ZONE_DEVICE mappings

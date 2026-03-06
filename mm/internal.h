@@ -1688,6 +1688,43 @@ static inline void folio_managed_migrate_notify(struct folio *src,
 		pgmap->ops->folio_migrate(src, dst);
 }
 
+/**
+ * node_device_reclaim_policy - invoke the service's reclaim policy callback
+ * @nid: NUMA node id
+ * @policy: reclaim policy struct to fill in
+ *
+ * Called by kswapd and __setup_per_zone_wmarks to query the managed device
+ * node's reclaim policy.  Zeroes @policy, then if the managed device node
+ * provides a reclaim_policy callback, invokes it and sets policy->active
+ * to true.
+ */
+#ifdef CONFIG_NUMA
+static inline void node_device_reclaim_policy(int nid,
+					      struct node_reclaim_policy *policy)
+{
+	struct node_device *nd;
+
+	memset(policy, 0, sizeof(*policy));
+
+	if (!node_is_private(nid))
+		return;
+
+	rcu_read_lock();
+	nd = rcu_dereference(NODE_DATA(nid)->node_dev);
+	if (nd && nd->reclaim_policy) {
+		nd->reclaim_policy(nid, policy);
+		policy->active = true;
+	}
+	rcu_read_unlock();
+}
+#else
+static inline void node_device_reclaim_policy(int nid,
+					      struct node_reclaim_policy *policy)
+{
+	memset(policy, 0, sizeof(*policy));
+}
+#endif
+
 struct vm_struct *__get_vm_area_node(unsigned long size,
 				     unsigned long align, unsigned long shift,
 				     unsigned long vm_flags, unsigned long start,
