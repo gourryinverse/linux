@@ -3690,6 +3690,25 @@ static bool zone_allows_reclaim(struct zone *local_zone, struct zone *zone)
 	return node_distance(zone_to_nid(local_zone), zone_to_nid(zone)) <=
 				node_reclaim_distance;
 }
+
+/* Returns true if allocation from this zone is permitted */
+bool numa_zone_alloc_allowed(int alloc_flags, struct zone *zone, gfp_t gfp_mask)
+{
+	/* If cpusets is being used, check mems_allowed */
+	if (cpusets_enabled() && (alloc_flags & ALLOC_CPUSET))
+		if (!cpuset_zone_allowed(zone, gfp_mask))
+			return false;
+
+	/*
+	 * Private nodes require __GFP_PRIVATE to allocate from.  Without it,
+	 * the buddy allocator skips zones on N_MEMORY_PRIVATE nodes.
+	 */
+	if (node_is_private(zone_to_nid(zone)) &&
+	    !(gfp_mask & __GFP_PRIVATE))
+		return false;
+
+	return true;
+}
 #else	/* CONFIG_NUMA */
 static bool zone_allows_reclaim(struct zone *local_zone, struct zone *zone)
 {
@@ -3781,10 +3800,8 @@ retry:
 		struct page *page;
 		unsigned long mark;
 
-		if (cpusets_enabled() &&
-			(alloc_flags & ALLOC_CPUSET) &&
-			!__cpuset_zone_allowed(zone, gfp_mask))
-				continue;
+		if (!numa_zone_alloc_allowed(alloc_flags, zone, gfp_mask))
+			continue;
 		/*
 		 * When allocating a page cache page for writing, we
 		 * want to get it from a node that is within its dirty
@@ -4585,10 +4602,8 @@ should_reclaim_retry(gfp_t gfp_mask, unsigned order,
 		unsigned long min_wmark = min_wmark_pages(zone);
 		bool wmark;
 
-		if (cpusets_enabled() &&
-			(alloc_flags & ALLOC_CPUSET) &&
-			!__cpuset_zone_allowed(zone, gfp_mask))
-				continue;
+		if (!numa_zone_alloc_allowed(alloc_flags, zone, gfp_mask))
+			continue;
 
 		available = reclaimable = zone_reclaimable_pages(zone);
 		available += zone_page_state_snapshot(zone, NR_FREE_PAGES);
@@ -5084,10 +5099,8 @@ unsigned long alloc_pages_bulk_noprof(gfp_t gfp, int preferred_nid,
 	for_next_zone_zonelist_nodemask(zone, z, ac.highest_zoneidx, ac.nodemask) {
 		unsigned long mark;
 
-		if (cpusets_enabled() && (alloc_flags & ALLOC_CPUSET) &&
-		    !__cpuset_zone_allowed(zone, gfp)) {
+		if (!numa_zone_alloc_allowed(alloc_flags, zone, gfp))
 			continue;
-		}
 
 		if (nr_online_nodes > 1 && zone != zonelist_zone(ac.preferred_zoneref) &&
 		    zone_to_nid(zone) != zonelist_node_idx(ac.preferred_zoneref)) {
@@ -5675,6 +5688,27 @@ static void build_zonelists(pg_data_t *pgdat)
 	prev_node = local_node;
 
 	memset(node_order, 0, sizeof(node_order));
+
+	/*
+	 * Private nodes need N_MEMORY nodes as fallback for kernel allocations
+	 * (e.g., slab objects allocated on behalf of this node).
+	 */
+	if (node_state(local_node, N_MEMORY_PRIVATE)) {
+		node_order[nr_nodes++] = local_node;
+		node_set(local_node, used_mask);
+
+		while ((node = find_next_best_node(local_node, &used_mask)) >= 0)
+			node_order[nr_nodes++] = node;
+
+		build_zonelists_in_node_order(pgdat, node_order, nr_nodes);
+		build_thisnode_zonelists(pgdat);
+		pr_info("Fallback order for Node %d (private):", local_node);
+		for (node = 0; node < nr_nodes; node++)
+			pr_cont(" %d", node_order[node]);
+		pr_cont("\n");
+		return;
+	}
+
 	while ((node = find_next_best_node(local_node, &used_mask)) >= 0) {
 		/*
 		 * We don't want to pressure a particular node.
