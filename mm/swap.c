@@ -101,6 +101,9 @@ void __folio_put(struct folio *folio)
 		return;
 	}
 
+	if (folio_managed_free_cb(folio))
+		return;
+
 	if (folio_test_hugetlb(folio)) {
 		free_huge_folio(folio);
 		return;
@@ -972,6 +975,9 @@ void folios_put_refs(struct folio_batch *folios, unsigned int *refs)
 		}
 
 		if (!folio_ref_sub_and_test(folio, nr_refs))
+			continue;
+
+		if (folio_managed_free_cb(folio))
 			continue;
 
 		/* hugetlb has its own memcg */

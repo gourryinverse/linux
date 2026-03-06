@@ -95,6 +95,14 @@ struct dev_pagemap_ops {
 	void (*folio_free)(struct folio *folio);
 
 	/*
+	 * Called when a managed (node device) folio's refcount reaches 0.
+	 * Returns true if the driver defers freeing (holds its own ref),
+	 * false if the folio should continue through the normal buddy
+	 * free path.  Not used by zone_device folios.
+	 */
+	bool (*free_node_folio)(struct folio *folio);
+
+	/*
 	 * Used for private (un-addressable) device memory only.  Must migrate
 	 * the page back to a CPU accessible page.
 	 */
@@ -286,7 +294,8 @@ static inline void zone_device_private_split_cb(struct folio *original_folio,
 	/*
 	 * Buddy-managed private node pages (folio_is_device_managed) do not
 	 * have per-page pgmap pointers.  Split callbacks for these pages are
-	 * handled through the node_device infrastructure, not here.
+	 * dispatched via folio_managed_split_cb() using node_device_find_pgmap()
+	 * to look up the pgmap by PFN.
 	 */
 }
 

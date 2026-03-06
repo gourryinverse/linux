@@ -11,6 +11,7 @@
 #include <linux/khugepaged.h>
 #include <linux/mm.h>
 #include <linux/mm_inline.h>
+#include <linux/node_device.h>
 #include <linux/pagemap.h>
 #include <linux/pagewalk.h>
 #include <linux/rmap.h>
@@ -1411,6 +1412,65 @@ int numa_migrate_check(struct folio *folio, struct vm_fault *vmf,
 
 void free_zone_device_folio(struct folio *folio);
 int migrate_device_coherent_folio(struct folio *folio);
+
+/**
+ * folio_managed_split_cb - Notify service that a managed folio was split
+ * @original_folio: the folio being split
+ * @new_folio: the new sub-folio (NULL for the head portion)
+ *
+ * Managed folios are buddy-managed and don't have per-page pgmap pointers.
+ * Look up the pgmap via node_device_find_pgmap() and call the driver's
+ * folio_split callback if present.
+ */
+static inline void folio_managed_split_cb(struct folio *original_folio,
+					  struct folio *new_folio)
+{
+	struct dev_pagemap *pgmap;
+
+	if (!folio_is_device_managed(original_folio))
+		return;
+
+	rcu_read_lock();
+	pgmap = node_device_find_pgmap(folio_nid(original_folio),
+				       folio_pfn(original_folio));
+	rcu_read_unlock();
+
+	if (pgmap && pgmap->ops && pgmap->ops->folio_split)
+		pgmap->ops->folio_split(original_folio, new_folio);
+}
+
+/**
+ * folio_managed_free_cb - Notify service that a managed folio is being freed
+ * @folio: the folio being freed
+ *
+ * Managed folios are buddy-managed and don't have per-page pgmap pointers.
+ * Look up the pgmap via node_device_find_pgmap() and call the driver's
+ * free_node_folio callback if present.
+ *
+ * Returns true if the caller should skip the buddy free path (the driver
+ * deferred freeing), false if the folio should continue to be freed normally.
+ * Zone device folios always return true (they are never buddy-managed).
+ */
+static inline bool folio_managed_free_cb(struct folio *folio)
+{
+	struct dev_pagemap *pgmap;
+
+	if (folio_is_zone_device(folio))
+		return true;
+
+	if (!folio_is_device_managed(folio))
+		return false;
+
+	rcu_read_lock();
+	pgmap = node_device_find_pgmap(folio_nid(folio),
+				       folio_pfn(folio));
+	rcu_read_unlock();
+
+	if (pgmap && pgmap->ops && pgmap->ops->free_node_folio)
+		return pgmap->ops->free_node_folio(folio);
+
+	return false;
+}
 
 struct vm_struct *__get_vm_area_node(unsigned long size,
 				     unsigned long align, unsigned long shift,
