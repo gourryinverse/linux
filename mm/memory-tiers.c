@@ -3,6 +3,7 @@
 #include <linux/lockdep.h>
 #include <linux/sysfs.h>
 #include <linux/kobject.h>
+#include <linux/node_device.h>
 #include <linux/memory.h>
 #include <linux/memory-tiers.h>
 #include <linux/notifier.h>
@@ -421,6 +422,7 @@ static void establish_demotion_targets(void)
 	int target = NUMA_NO_NODE, node;
 	int distance, best_distance;
 	nodemask_t tier_nodes, lower_tier;
+	nodemask_t all_memory;
 
 	lockdep_assert_held_once(&memory_tier_lock);
 
@@ -428,6 +430,18 @@ static void establish_demotion_targets(void)
 		return;
 
 	disable_all_demotion_targets();
+
+	/*
+	 * Include private nodes that have opted in to demotion.
+	 * Private nodes are already in N_MEMORY; remove those without
+	 * PGMAP_OPS_DEMOTION so they don't appear in demotion targets.
+	 */
+	all_memory = node_states[N_MEMORY];
+	for_each_node_state(node, N_MEMORY) {
+		if (node_is_private(node) &&
+		    !node_device_has_flag(node, PGMAP_OPS_DEMOTION))
+			node_clear(node, all_memory);
+	}
 
 	for_each_node_state(node, N_MEMORY) {
 		best_distance = -1;
@@ -442,12 +456,12 @@ static void establish_demotion_targets(void)
 		memtier = list_next_entry(memtier, list);
 		tier_nodes = get_memtier_nodemask(memtier);
 		/*
-		 * find_next_best_node, use 'used' nodemask as a skip list.
+		 * find_next_best_node_in, use 'used' nodemask as a skip list.
 		 * Add all memory nodes except the selected memory tier
 		 * nodelist to skip list so that we find the best node from the
 		 * memtier nodelist.
 		 */
-		nodes_andnot(tier_nodes, node_states[N_MEMORY], tier_nodes);
+		nodes_andnot(tier_nodes, all_memory, tier_nodes);
 
 		/*
 		 * Find all the nodes in the memory tier node list of same best distance.
@@ -455,7 +469,8 @@ static void establish_demotion_targets(void)
 		 * in the preferred mask when allocating pages during demotion.
 		 */
 		do {
-			target = find_next_best_node(node, &tier_nodes);
+			target = find_next_best_node_in(node, &tier_nodes,
+							&all_memory);
 			if (target == NUMA_NO_NODE)
 				break;
 
@@ -495,7 +510,7 @@ static void establish_demotion_targets(void)
 	 * allocation to a set of nodes that is closer the above selected
 	 * preferred node.
 	 */
-	lower_tier = node_states[N_MEMORY];
+	lower_tier = all_memory;
 	list_for_each_entry(memtier, &memory_tiers, list) {
 		/*
 		 * Keep removing current tier from lower_tier nodes,
@@ -864,6 +879,30 @@ int mt_calc_adistance(int node, int *adist)
 	return blocking_notifier_call_chain(&mt_adistance_algorithms, node, adist);
 }
 EXPORT_SYMBOL_GPL(mt_calc_adistance);
+
+/**
+ * memory_tier_refresh_demotion() - Re-establish demotion targets
+ *
+ * Called by services after registering or unregistering ops->migrate_to on
+ * a private node, so that establish_demotion_targets() picks up the change.
+ */
+void memory_tier_refresh_demotion(void)
+{
+	int nid;
+
+	mutex_lock(&memory_tier_lock);
+	/*
+	 * Ensure private nodes are registered with a tier, otherwise
+	 * they won't show up in any node's demotion targets nodemask.
+	 */
+	for_each_node_state(nid, N_MEMORY) {
+		if (node_is_private(nid) && !__node_get_memory_tier(nid))
+			set_node_memory_tier(nid);
+	}
+	establish_demotion_targets();
+	mutex_unlock(&memory_tier_lock);
+}
+EXPORT_SYMBOL_GPL(memory_tier_refresh_demotion);
 
 static int __meminit memtier_hotplug_callback(struct notifier_block *self,
 					      unsigned long action, void *_arg)

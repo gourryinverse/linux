@@ -42,6 +42,7 @@ struct vm_fault;
  * @migrate_to: Migrate folios TO this node.  Returns 0 on full success,
  *      >0 = number of folios that failed, <0 = error.
  *      Matches migrate_pages() semantics.
+ * @alloc_blocked: Backpressure flag — set by driver to reject new demotions
  * @refcount: Reference count (1 = registered; 0 = fully released)
  * @released: Signaled when refcount drops to 0; unregister waits on this
  */
@@ -54,6 +55,7 @@ struct node_device {
 			  enum migrate_mode mode,
 			  enum migrate_reason reason,
 			  unsigned int *nr_succeeded);
+	bool alloc_blocked;
 	refcount_t refcount;
 	struct completion released;
 };
@@ -138,6 +140,25 @@ static inline struct dev_pagemap *node_device_find_pgmap(int nid,
 	}
 
 	return NULL;
+}
+
+/**
+ * node_device_alloc_blocked - Check if a node has blocked allocations
+ * @nid: Node identifier
+ *
+ * Returns true if the node's driver has signaled backpressure.
+ */
+static inline bool node_device_alloc_blocked(int nid)
+{
+	struct node_device *nd;
+	bool blocked;
+
+	rcu_read_lock();
+	nd = rcu_dereference(NODE_DATA(nid)->node_dev);
+	blocked = nd && READ_ONCE(nd->alloc_blocked);
+	rcu_read_unlock();
+
+	return blocked;
 }
 
 /**
@@ -239,6 +260,11 @@ static inline struct dev_pagemap *node_device_find_pgmap(int nid,
 							 unsigned long pfn)
 {
 	return NULL;
+}
+
+static inline bool node_device_alloc_blocked(int nid)
+{
+	return false;
 }
 
 static inline int node_device_migrate_to(struct list_head *folios, int nid,
