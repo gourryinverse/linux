@@ -180,6 +180,44 @@ static inline int node_device_migrate_to(struct list_head *folios, int nid,
 	return ret;
 }
 
+/**
+ * node_mpol_eligible - Check if a node is eligible for mempolicy
+ * @nid: Node identifier
+ *
+ * Returns true if the node can be used as a mempolicy target.
+ * Regular N_MEMORY nodes are always eligible.  Private nodes
+ * are eligible only if they have PGMAP_OPS_MEMPOLICY.
+ */
+static inline bool node_mpol_eligible(int nid)
+{
+	if (!node_is_private(nid))
+		return node_state(nid, N_MEMORY);
+
+	return node_device_has_flag(nid, PGMAP_OPS_MEMPOLICY);
+}
+
+/**
+ * nodes_private_mpol_allowed - Check if all private nodes in mask support mempolicy
+ * @nodes: Nodemask to check
+ *
+ * Returns true if every private node in @nodes has PGMAP_OPS_MEMPOLICY set.
+ * Returns false if no private nodes are present or any lack the flag.
+ */
+static inline bool nodes_private_mpol_allowed(const nodemask_t *nodes)
+{
+	int nid;
+	bool has_private = false;
+
+	for_each_node_mask(nid, *nodes) {
+		if (!node_is_private(nid))
+			continue;
+		if (!node_device_has_flag(nid, PGMAP_OPS_MEMPOLICY))
+			return false;
+		has_private = true;
+	}
+	return has_private;
+}
+
 #else /* !CONFIG_NUMA */
 
 static inline unsigned long node_device_flags(int nid)
@@ -209,6 +247,16 @@ static inline int node_device_migrate_to(struct list_head *folios, int nid,
 					 unsigned int *nr_succeeded)
 {
 	return -ENODEV;
+}
+
+static inline bool node_mpol_eligible(int nid)
+{
+	return node_state(nid, N_MEMORY);
+}
+
+static inline bool nodes_private_mpol_allowed(const nodemask_t *nodes)
+{
+	return false;
 }
 
 #endif /* CONFIG_NUMA */

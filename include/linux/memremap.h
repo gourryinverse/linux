@@ -139,6 +139,7 @@ struct dev_pagemap_ops {
 
 #define PGMAP_ALTMAP_VALID	(1 << 0)
 #define PGMAP_OPS_MIGRATION	(1 << 1)
+#define PGMAP_OPS_MEMPOLICY	(1 << 2)
 
 /**
  * struct dev_pagemap - metadata for ZONE_DEVICE mappings

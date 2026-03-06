@@ -1172,6 +1172,21 @@ static ssize_t show_node_state(struct device *dev,
 			  nodemask_pr_args(&node_states[na->state]));
 }
 
+/* has_memory hides private nodes that don't support mempolicy. */
+static ssize_t show_has_memory(struct device *dev,
+			       struct device_attribute *attr, char *buf)
+{
+	nodemask_t mask = node_states[N_MEMORY];
+	int nid;
+
+	for_each_node_state(nid, N_MEMORY_PRIVATE) {
+		if (!node_mpol_eligible(nid))
+			node_clear(nid, mask);
+	}
+
+	return sysfs_emit(buf, "%*pbl\n", nodemask_pr_args(&mask));
+}
+
 #define _NODE_ATTR(name, state) \
 	{ __ATTR(name, 0444, show_node_state, NULL), state }
 
@@ -1182,7 +1197,8 @@ static struct node_attr node_state_attr[] = {
 #ifdef CONFIG_HIGHMEM
 	[N_HIGH_MEMORY] = _NODE_ATTR(has_high_memory, N_HIGH_MEMORY),
 #endif
-	[N_MEMORY] = _NODE_ATTR(has_memory, N_MEMORY),
+	[N_MEMORY] = { __ATTR(has_memory, 0444, show_has_memory, NULL),
+		       N_MEMORY },
 	[N_MEMORY_PRIVATE] = _NODE_ATTR(has_private_memory, N_MEMORY_PRIVATE),
 	[N_CPU] = _NODE_ATTR(has_cpu, N_CPU),
 	[N_GENERIC_INITIATOR] = _NODE_ATTR(has_generic_initiator,
