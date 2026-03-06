@@ -868,6 +868,22 @@ static DEFINE_MUTEX(node_device_lock);
 static bool node_device_initialized;
 
 /**
+ * node_device_allows_longterm_pin - Check if a managed device node allows
+ *                                   longterm pinning
+ * @nid: Node identifier
+ *
+ * Out-of-line helper for folio_is_longterm_pinnable() since mm.h cannot
+ * include node_device.h (circular dependency).
+ *
+ * Returns true if the node has PGMAP_OPS_LONGTERM_PIN set.
+ */
+bool node_device_allows_longterm_pin(int nid)
+{
+	return node_device_has_flag(nid, PGMAP_OPS_LONGTERM_PIN);
+}
+EXPORT_SYMBOL_GPL(node_device_allows_longterm_pin);
+
+/**
  * node_device_register - Register a managed device node
  * @nid: Node identifier
  * @nd: The node_device structure (driver-allocated, driver-owned)

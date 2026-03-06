@@ -154,6 +154,7 @@ struct dev_pagemap_ops {
 #define PGMAP_OPS_RECLAIM	(1 << 5)
 #define PGMAP_OPS_NUMA_BALANCING (1 << 6)
 #define PGMAP_OPS_COMPACTION	(1 << 7)
+#define PGMAP_OPS_LONGTERM_PIN	(1 << 8)
 #define PGMAP_OPS_OOM_ELIGIBLE	(PGMAP_OPS_RECLAIM | PGMAP_OPS_DEMOTION)
 
 /**
