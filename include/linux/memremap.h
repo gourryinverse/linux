@@ -135,12 +135,22 @@ struct dev_pagemap_ops {
 	 * metadata before any access through the page tables.
 	 */
 	void (*folio_migrate)(struct folio *src, struct folio *dst);
+
+	/*
+	 * Handle a write fault on a write-protected managed folio.
+	 * Called from handle_pte_fault() (PTE level) or do_huge_pmd_wp_page()
+	 * (PMD level) with PTL held.  The callback MUST release PTL on ALL
+	 * paths.  Returns vm_fault_t result (0, VM_FAULT_RETRY, etc.).
+	 */
+	vm_fault_t (*handle_fault)(struct folio *folio, struct vm_fault *vmf,
+				   unsigned int level);
 };
 
 #define PGMAP_ALTMAP_VALID	(1 << 0)
 #define PGMAP_OPS_MIGRATION	(1 << 1)
 #define PGMAP_OPS_MEMPOLICY	(1 << 2)
 #define PGMAP_OPS_DEMOTION	(1 << 3)
+#define PGMAP_OPS_PROTECT_WRITE	(1 << 4)
 
 /**
  * struct dev_pagemap - metadata for ZONE_DEVICE mappings

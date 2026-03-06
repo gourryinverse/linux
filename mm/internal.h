@@ -1520,6 +1520,147 @@ static inline int folio_managed_allows_user_migrate(struct folio *folio)
 	return folio_nid(folio);
 }
 
+/*
+ * folio_managed_handle_fault - Dispatch fault on managed-memory folio
+ * @folio: the faulting folio (must not be NULL)
+ * @vmf: the vm_fault descriptor (PTL held: vmf->ptl locked)
+ * @level: page table level (PGTABLE_LEVEL_PTE or PGTABLE_LEVEL_PMD)
+ * @ret: output fault result if handled
+ *
+ * Called with PTL held.  If a handle_fault callback exists, it is invoked
+ * with PTL still held.  The callback is responsible for releasing PTL on
+ * all paths.
+ *
+ * Returns true if the service handled the fault (PTL released by callback,
+ * caller returns *ret).  Returns false if no handler exists (PTL still held,
+ * caller continues with normal fault handling).
+ */
+static inline bool folio_managed_handle_fault(struct folio *folio,
+					      struct vm_fault *vmf,
+					      enum pgtable_level level,
+					      vm_fault_t *ret)
+{
+	struct dev_pagemap *pgmap;
+
+	if (!folio_is_device_managed(folio))
+		return false;
+
+	rcu_read_lock();
+	pgmap = node_device_find_pgmap(folio_nid(folio),
+				       folio_pfn(folio));
+	rcu_read_unlock();
+
+	if (pgmap && pgmap->ops && pgmap->ops->handle_fault) {
+		*ret = pgmap->ops->handle_fault(folio, vmf, level);
+		return true;
+	}
+	return false;
+}
+
+/**
+ * folio_managed_wrprotect - Should this folio's mappings stay write-protected?
+ * @folio: the folio to check
+ *
+ * Returns true if the folio is on a managed device node with
+ * PGMAP_OPS_PROTECT_WRITE, meaning page table entries (PTE or PMD)
+ * should not be made writable.  Write faults are intercepted by the
+ * service's handle_fault callback to promote the folio to DRAM.
+ */
+static inline bool folio_managed_wrprotect(struct folio *folio)
+{
+	return unlikely(folio_is_device_managed(folio) &&
+			node_device_has_flag(folio_nid(folio),
+					    PGMAP_OPS_PROTECT_WRITE));
+}
+
+/**
+ * folio_managed_fixup_migration_pte - Fixup PTE after migration for
+ *                                     managed memory pages.
+ * @new: the destination page
+ * @pte: the PTE being installed (normal PTE built by caller)
+ * @old_pte: the original PTE (before migration, for swap entry flags)
+ *
+ * For MEMORY_DEVICE_PRIVATE pages: replaces the PTE with a device-private
+ * swap entry, preserving soft_dirty and uffd_wp from old_pte.
+ *
+ * For managed device pages with PGMAP_OPS_PROTECT_WRITE: strips the write
+ * bit so the next write triggers the fault handler for promotion.
+ *
+ * For normal pages: returns pte unmodified.
+ */
+static inline pte_t folio_managed_fixup_migration_pte(struct page *new,
+						      pte_t pte,
+						      pte_t old_pte)
+{
+#ifdef CONFIG_MIGRATION
+#ifdef CONFIG_DEVICE_PRIVATE
+	if (unlikely(is_device_private_page(new))) {
+		softleaf_t entry;
+
+		if (pte_write(pte))
+			entry = make_writable_device_private_entry(
+						page_to_pfn(new));
+		else
+			entry = make_readable_device_private_entry(
+						page_to_pfn(new));
+		pte = softleaf_to_pte(entry);
+		if (pte_swp_soft_dirty(old_pte))
+			pte = pte_swp_mksoft_dirty(pte);
+		if (pte_swp_uffd_wp(old_pte))
+			pte = pte_swp_mkuffd_wp(pte);
+	} else
+#endif
+	if (folio_managed_wrprotect(page_folio(new))) {
+		pte = pte_wrprotect(pte);
+	}
+#endif
+	return pte;
+}
+
+/**
+ * folio_managed_fixup_migration_pmd - Fixup PMD after migration for
+ *                                     managed memory pages.
+ * @new: the destination page
+ * @pmd: the PMD being installed (normal PMD built by caller)
+ * @old_pmd: the original PMD (before migration, for swap entry flags)
+ *
+ * For MEMORY_DEVICE_PRIVATE pages: replaces the PMD with a device-private
+ * swap entry, preserving soft_dirty and uffd_wp from old_pmd.
+ *
+ * For managed device pages with PGMAP_OPS_PROTECT_WRITE: strips the write
+ * bit so the next write triggers the fault handler for promotion.
+ *
+ * For normal pages: returns pmd unmodified.
+ */
+static inline pmd_t folio_managed_fixup_migration_pmd(struct page *new,
+						      pmd_t pmd,
+						      pmd_t old_pmd)
+{
+#ifdef CONFIG_MIGRATION
+#ifdef CONFIG_DEVICE_PRIVATE
+	if (unlikely(is_device_private_page(new))) {
+		swp_entry_t entry;
+
+		if (pmd_write(pmd))
+			entry = make_writable_device_private_entry(
+						page_to_pfn(new));
+		else
+			entry = make_readable_device_private_entry(
+						page_to_pfn(new));
+		pmd = swp_entry_to_pmd(entry);
+		if (pmd_swp_soft_dirty(old_pmd))
+			pmd = pmd_swp_mksoft_dirty(pmd);
+		if (pmd_swp_uffd_wp(old_pmd))
+			pmd = pmd_swp_mkuffd_wp(pmd);
+	} else
+#endif
+	if (folio_managed_wrprotect(page_folio(new))) {
+		pmd = pmd_wrprotect(pmd);
+	}
+#endif
+	return pmd;
+}
+
 /**
  * folio_managed_migrate_notify - Notify service that a folio changed location
  * @src: the old folio (about to be freed)

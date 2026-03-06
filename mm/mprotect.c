@@ -30,6 +30,7 @@
 #include <linux/mm_inline.h>
 #include <linux/pgtable.h>
 #include <linux/userfaultfd_k.h>
+#include <linux/memremap.h>
 #include <uapi/linux/mman.h>
 #include <asm/cacheflush.h>
 #include <asm/mmu_context.h>
@@ -59,10 +60,8 @@ static bool maybe_change_pte_writable(struct vm_area_struct *vma, pte_t pte)
 }
 
 static bool can_change_private_pte_writable(struct vm_area_struct *vma,
-					    unsigned long addr, pte_t pte)
+					    struct page *page, pte_t pte)
 {
-	struct page *page;
-
 	if (!maybe_change_pte_writable(vma, pte))
 		return false;
 
@@ -72,12 +71,12 @@ static bool can_change_private_pte_writable(struct vm_area_struct *vma,
 	 * write-fault handler similarly would map them writable without
 	 * any additional checks while holding the PT lock.
 	 */
-	page = vm_normal_page(vma, addr, pte);
-	return page && PageAnon(page) && PageAnonExclusive(page);
+	return page && PageAnon(page) && PageAnonExclusive(page) &&
+	       !folio_managed_wrprotect(page_folio(page));
 }
 
 static bool can_change_shared_pte_writable(struct vm_area_struct *vma,
-					   pte_t pte)
+					   struct page *page, pte_t pte)
 {
 	if (!maybe_change_pte_writable(vma, pte))
 		return false;
@@ -91,16 +90,21 @@ static bool can_change_shared_pte_writable(struct vm_area_struct *vma,
 	 * FS was already notified and we can simply mark the PTE writable
 	 * just like the write-fault handler would do.
 	 */
-	return pte_dirty(pte);
+	if (!pte_dirty(pte))
+		return false;
+
+	return !(page && folio_managed_wrprotect(page_folio(page)));
 }
 
 bool can_change_pte_writable(struct vm_area_struct *vma, unsigned long addr,
 			     pte_t pte)
 {
-	if (!(vma->vm_flags & VM_SHARED))
-		return can_change_private_pte_writable(vma, addr, pte);
+	struct page *page = vm_normal_page(vma, addr, pte);
 
-	return can_change_shared_pte_writable(vma, pte);
+	if (!(vma->vm_flags & VM_SHARED))
+		return can_change_private_pte_writable(vma, page, pte);
+
+	return can_change_shared_pte_writable(vma, page, pte);
 }
 
 static int mprotect_folio_pte_batch(struct folio *folio, pte_t *ptep,
@@ -195,14 +199,15 @@ static void set_write_prot_commit_flush_ptes(struct vm_area_struct *vma,
 	bool set_write;
 
 	if (vma->vm_flags & VM_SHARED) {
-		set_write = can_change_shared_pte_writable(vma, ptent);
+		set_write = can_change_shared_pte_writable(vma, page, ptent);
 		prot_commit_flush_ptes(vma, addr, ptep, oldpte, ptent, nr_ptes,
 				       /* idx = */ 0, set_write, tlb);
 		return;
 	}
 
 	set_write = maybe_change_pte_writable(vma, ptent) &&
-		    (folio && folio_test_anon(folio));
+		    (folio && folio_test_anon(folio)) &&
+		    !folio_managed_wrprotect(folio);
 	if (!set_write) {
 		prot_commit_flush_ptes(vma, addr, ptep, oldpte, ptent, nr_ptes,
 				       /* idx = */ 0, set_write, tlb);
