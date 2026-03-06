@@ -1520,6 +1520,25 @@ static inline int folio_managed_allows_user_migrate(struct folio *folio)
 	return folio_nid(folio);
 }
 
+/**
+ * folio_managed_allows_numa - Check if NUMA balancing can scan this folio
+ * @folio: The folio to check
+ *
+ * Returns true if NUMA balancing can scan and migrate this folio.
+ * zone_device folios are never eligible.  For device_managed folios
+ * (buddy-managed on private nodes), NUMA balancing requires
+ * PGMAP_OPS_NUMA_BALANCING.  Normal folios always return true.
+ */
+static inline bool folio_managed_allows_numa(struct folio *folio)
+{
+	if (folio_is_zone_device(folio))
+		return false;
+	if (folio_is_device_managed(folio))
+		return node_device_has_flag(folio_nid(folio),
+					   PGMAP_OPS_NUMA_BALANCING);
+	return true;
+}
+
 /*
  * folio_managed_handle_fault - Dispatch fault on managed-memory folio
  * @folio: the faulting folio (must not be NULL)
