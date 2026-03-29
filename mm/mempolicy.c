@@ -1735,9 +1735,12 @@ SYSCALL_DEFINE4(set_mempolicy_home_node, unsigned long, start, unsigned long, le
 
 	/*
 	 * Check home_node is online to avoid accessing uninitialized
-	 * NODE_DATA.
+	 * NODE_DATA.  Reject private nodes unless they opted into
+	 * mempolicy via NP_OPS_MEMPOLICY.
 	 */
 	if (home_node >= MAX_NUMNODES || !node_online(home_node))
+		return -EINVAL;
+	if (node_is_private(home_node) && !node_mpol_eligible(home_node))
 		return -EINVAL;
 
 	len = PAGE_ALIGN(len);
