@@ -5,6 +5,7 @@
 #include <linux/kobject.h>
 #include <linux/memory.h>
 #include <linux/memory-tiers.h>
+#include <linux/node_private.h>
 #include <linux/notifier.h>
 #include <linux/sched/sysctl.h>
 
@@ -432,6 +433,10 @@ static void establish_demotion_targets(void)
 	for_each_node_state(node, N_MEMORY) {
 		best_distance = -1;
 		nd = &node_demotion[node];
+
+		/* Private nodes manage their own migration */
+		if (node_is_private(node))
+			continue;
 
 		memtier = __node_get_memory_tier(node);
 		if (!memtier || list_is_last(&memtier->list, &memory_tiers))
