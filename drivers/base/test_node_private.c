@@ -303,12 +303,24 @@ static int __init test_node_private_init(void)
 	test_alloc_gating();
 	test_memory_hotplug();
 	test_alloc_private_pages();
-	test_cleanup_ops();
+
+	/*
+	 * When built-in, keep ops registered so syzkaller can exercise
+	 * private node code paths (NP_OPS_MEMPOLICY, NP_OPS_MIGRATION).
+	 * When loadable, test cleanup now; full teardown happens in exit.
+	 */
+	if (!IS_BUILTIN(CONFIG_TEST_NODE_PRIVATE))
+		test_cleanup_ops();
 
 	pr_info("=== RESULTS: %d passed, %d failed ===\n", passed, failed);
 
-	if (failed)
+	if (failed) {
+		if (IS_BUILTIN(CONFIG_TEST_NODE_PRIVATE)) {
+			pr_warn("Tests failed but continuing (built-in)\n");
+			return 0;
+		}
 		return -EINVAL;
+	}
 
 	return 0;
 }
