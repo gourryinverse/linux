@@ -326,7 +326,7 @@ static unsigned long global_dirtyable_memory(void)
 {
 	unsigned long x;
 
-	x = global_zone_page_state(NR_FREE_PAGES);
+	x = global_zone_page_state(NR_FREE_PAGES) - totalprivate_free_pages();
 	/*
 	 * Pages reserved for the kernel should not be considered
 	 * dirtyable, to prevent a situation where reclaim has to

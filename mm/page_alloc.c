@@ -5993,10 +5993,36 @@ static void setup_per_zone_lowmem_reserve(void);
 void adjust_managed_page_count(struct page *page, long count)
 {
 	atomic_long_add(count, &page_zone(page)->managed_pages);
-	totalram_pages_add(count);
+	/*
+	 * Private node pages are managed by their owner and should not
+	 * inflate global memory accounting (totalram_pages, OOM scoring,
+	 * dirty thresholds, etc.).  Check pgdat->private rather than
+	 * node_is_private() because N_MEMORY_PRIVATE is not yet set
+	 * during the online_pages() path.
+	 */
+	if (!rcu_access_pointer(NODE_DATA(page_to_nid(page))->private))
+		totalram_pages_add(count);
 	setup_per_zone_lowmem_reserve();
 }
 EXPORT_SYMBOL(adjust_managed_page_count);
+
+unsigned long totalprivate_free_pages(void)
+{
+	unsigned long total = 0;
+#ifdef CONFIG_NUMA
+	int nid;
+
+	for_each_node_state(nid, N_MEMORY_PRIVATE) {
+		pg_data_t *pgdat = NODE_DATA(nid);
+		enum zone_type i;
+
+		for (i = 0; i < MAX_NR_ZONES; i++)
+			total += zone_page_state(&pgdat->node_zones[i],
+						 NR_FREE_PAGES);
+	}
+#endif
+	return total;
+}
 
 unsigned long free_reserved_area(void *start, void *end, int poison, const char *s)
 {
@@ -6108,6 +6134,10 @@ static void calculate_totalreserve_pages(void)
 	for_each_online_pgdat(pgdat) {
 
 		pgdat->totalreserve_pages = 0;
+
+		/* Private nodes manage their own reserves */
+		if (node_is_private(pgdat->node_id))
+			continue;
 
 		for (i = 0; i < MAX_NR_ZONES; i++) {
 			struct zone *zone = pgdat->node_zones + i;

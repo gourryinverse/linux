@@ -716,6 +716,7 @@ extern void memblock_free_pages(struct page *page, unsigned long pfn,
 					unsigned int order);
 extern void __free_pages_core(struct page *page, unsigned int order,
 		enum meminit_context context);
+extern unsigned long totalprivate_free_pages(void);
 
 /*
  * This will have no effect, other than possibly generating a warning, if the
