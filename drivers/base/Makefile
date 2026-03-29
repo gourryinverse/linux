@@ -28,6 +28,7 @@ obj-$(CONFIG_GENERIC_ARCH_TOPOLOGY) += arch_topology.o
 obj-$(CONFIG_GENERIC_ARCH_NUMA) += arch_numa.o
 obj-$(CONFIG_ACPI) += physical_location.o
 
+obj-$(CONFIG_TEST_NODE_PRIVATE) += test_node_private.o
 obj-y			+= test/
 
 ccflags-$(CONFIG_DEBUG_DRIVER) := -DDEBUG

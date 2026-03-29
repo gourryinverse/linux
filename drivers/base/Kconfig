@@ -175,6 +175,17 @@ config HMEM_REPORTING
 	  Enable reporting for heterogeneous memory access attributes under
 	  their non-uniform memory nodes.
 
+config TEST_NODE_PRIVATE
+	tristate "Test private NUMA node infrastructure"
+	depends on NUMA && MEMORY_HOTPLUG
+	help
+	  This module tests the private NUMA node infrastructure including
+	  node_private_register/unregister, callback invocation, and
+	  allocation gating via __GFP_PRIVATE.
+
+	  Say M to build as a loadable module (test_node_private).
+	  If unsure, say N.
+
 source "drivers/base/test/Kconfig"
 
 config SYS_HYPERVISOR
