@@ -5996,11 +5996,11 @@ void adjust_managed_page_count(struct page *page, long count)
 	/*
 	 * Private node pages are managed by their owner and should not
 	 * inflate global memory accounting (totalram_pages, OOM scoring,
-	 * dirty thresholds, etc.).  Check pgdat->private rather than
-	 * node_is_private() because N_MEMORY_PRIVATE is not yet set
+	 * dirty thresholds, etc.).  Check pgdat_is_private() rather than
+	 * node_state(N_MEMORY_PRIVATE) because the state is not yet set
 	 * during the online_pages() path.
 	 */
-	if (!rcu_access_pointer(NODE_DATA(page_to_nid(page))->private))
+	if (!pgdat_is_private(NODE_DATA(page_to_nid(page))))
 		totalram_pages_add(count);
 	setup_per_zone_lowmem_reserve();
 }
@@ -6136,7 +6136,7 @@ static void calculate_totalreserve_pages(void)
 		pgdat->totalreserve_pages = 0;
 
 		/* Private nodes manage their own reserves */
-		if (node_is_private(pgdat->node_id))
+		if (pgdat_is_private(pgdat))
 			continue;
 
 		for (i = 0; i < MAX_NR_ZONES; i++) {
@@ -6975,7 +6975,7 @@ struct page *alloc_contig_pages_noprof(unsigned long nr_pages, gfp_t gfp_mask,
 	zonelist = node_zonelist(nid, gfp_mask);
 	for_each_zone_zonelist_nodemask(zone, z, zonelist,
 					gfp_zone(gfp_mask), nodemask) {
-		if (!zone_private_alloc_allowed(zone, gfp_mask))
+		if (!numa_zone_alloc_allowed(0, zone, gfp_mask))
 			continue;
 		spin_lock_irqsave(&zone->lock, flags);
 

@@ -46,6 +46,8 @@
 #include <linux/cred.h>
 #include <linux/nmi.h>
 
+#include <linux/node_private.h>
+
 #include <asm/tlb.h>
 #include "internal.h"
 #include "slab.h"
@@ -246,6 +248,22 @@ static const char * const oom_constraint_text[] = {
 	[CONSTRAINT_MEMCG] = "CONSTRAINT_MEMCG",
 };
 
+/**
+ * node_oom_eligible - Can killing a task free memory on this node?
+ * @nid: node id to check
+ *
+ * Regular nodes are always eligible.  Private nodes are only eligible
+ * if they have both migration and mempolicy support — killing a task
+ * frees memory that can reach the node only if both hold.
+ */
+static inline bool node_oom_eligible(int nid)
+{
+	if (!node_state(nid, N_MEMORY_PRIVATE))
+		return true;
+	return (node_private_flags(nid) & NP_OPS_OOM_ELIGIBLE) ==
+		NP_OPS_OOM_ELIGIBLE;
+}
+
 /*
  * Determine the type of allocation constraint.
  */
@@ -264,6 +282,17 @@ static enum oom_constraint constrained_alloc(struct oom_control *oc)
 
 	/* Default to all available memory */
 	oc->totalpages = totalram_pages() + total_swap_pages;
+
+	/*
+	 * Private node pages are excluded from totalram_pages to avoid
+	 * inflating global accounting.  Add back pages from OOM-eligible
+	 * private nodes so oom_badness() scoring accounts for memory
+	 * that can actually be freed by killing tasks.
+	 */
+	for_each_node_state(nid, N_MEMORY_PRIVATE) {
+		if (node_oom_eligible(nid))
+			oc->totalpages += node_present_pages(nid);
+	}
 
 	if (!IS_ENABLED(CONFIG_NUMA))
 		return CONSTRAINT_NONE;
