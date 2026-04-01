@@ -411,9 +411,12 @@ static int mpol_set_nodemask(struct mempolicy *pol,
 	if (!pol || pol->mode == MPOL_LOCAL)
 		return 0;
 
-	/* Private nodes are now part of N_MEMORY */
+	/* Check N_MEMORY and N_MEMORY_PRIVATE */
 	nodes_and(nsc->mask1,
 		  cpuset_current_mems_allowed, node_states[N_MEMORY]);
+	nodes_and(nsc->mask2, cpuset_current_mems_allowed,
+		  node_states[N_MEMORY_PRIVATE]);
+	nodes_or(nsc->mask1, nsc->mask1, nsc->mask2);
 
 	VM_BUG_ON(!nodes);
 
@@ -428,16 +431,10 @@ static int mpol_set_nodemask(struct mempolicy *pol,
 		pol->w.cpuset_mems_allowed = cpuset_current_mems_allowed;
 
 	/* All private nodes in the mask must have NP_OPS_MEMPOLICY. */
-	if (nodes_private_mpol_allowed(&nsc->mask2)) {
+	if (nodes_private_mpol_allowed(&nsc->mask2))
 		pol->flags |= MPOL_F_PRIVATE;
-	} else {
-		int nid;
-
-		for_each_node_mask(nid, nsc->mask2) {
-			if (node_is_private(nid))
-				return -EINVAL;
-		}
-	}
+	else if (nodes_intersects(nsc->mask2, node_states[N_MEMORY_PRIVATE]))
+		return -EINVAL;
 
 	return mpol_ops[pol->mode].create(pol, &nsc->mask2);
 }
@@ -522,7 +519,7 @@ static void mpol_rebind_nodemask(struct mempolicy *pol, const nodemask_t *nodes)
 
 	/*
 	 * Drop private nodes w/o mempolicy support. cpusets guarantees at
-	 * least one non-private N_MEMORY node, so dropping nodes here is safe
+	 * least one N_MEMORY node, so dropping nodes here is safe
 	 */
 	for_each_node_mask(nid, tmp) {
 		if (node_is_private(nid) &&
