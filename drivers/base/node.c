@@ -1015,6 +1015,16 @@ int node_private_clear_ops(int nid, const struct node_private_ops *ops)
 		np->ops = NULL;
 	mutex_unlock(&node_private_lock);
 
+	/*
+	 * Wait for any in-flight RCU readers that may have obtained
+	 * a non-NULL ops pointer via folio_node_private_ops() before
+	 * we cleared it.  Without this, "folio-referenced" callbacks
+	 * (split, free, migrate, memory_failure) could dereference
+	 * the ops pointer after the caller frees or unloads it.
+	 */
+	if (!ret)
+		synchronize_rcu();
+
 	/* Recalculate watermarks and totalreserve_pages */
 	if (!ret)
 		setup_per_zone_wmarks();
