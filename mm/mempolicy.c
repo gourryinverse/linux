@@ -526,7 +526,27 @@ static void mpol_rebind_nodemask(struct mempolicy *pol, const nodemask_t *nodes)
 		    !node_private_has_flag(nid, NP_OPS_MEMPOLICY))
 			node_clear(nid, tmp);
 	}
-	if (nodes_private_mpol_allowed(&tmp))
+
+	/*
+	 * Clear home_node if the node was hot-unplugged.  A stale
+	 * home_node pointing to a re-onlined private node could see
+	 * N_MEMORY_PRIVATE before ops are re-registered, causing
+	 * allocations without __GFP_PRIVATE.
+	 */
+	if (pol->home_node != NUMA_NO_NODE &&
+	    !node_online(pol->home_node))
+		pol->home_node = NUMA_NO_NODE;
+
+	/*
+	 * Update MPOL_F_PRIVATE: set if the new nodemask or the home node
+	 * includes an eligible private node.  home_node is not required to
+	 * be in pol->nodes, so it must be checked separately.
+	 */
+	if (nodes_intersects(tmp, node_states[N_MEMORY_PRIVATE]))
+		pol->flags |= MPOL_F_PRIVATE;
+	else if (pol->home_node != NUMA_NO_NODE &&
+		 node_state(pol->home_node, N_MEMORY_PRIVATE) &&
+		 node_private_has_flag(pol->home_node, NP_OPS_MEMPOLICY))
 		pol->flags |= MPOL_F_PRIVATE;
 	else
 		pol->flags &= ~MPOL_F_PRIVATE;
