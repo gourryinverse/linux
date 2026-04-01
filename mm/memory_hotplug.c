@@ -725,7 +725,8 @@ static void node_states_set_node(int node, struct memory_notify *arg)
 	if (arg->status_change_nid >= 0) {
 		if (rcu_access_pointer(NODE_DATA(node)->private))
 			node_set_state(node, N_MEMORY_PRIVATE);
-		node_set_state(node, N_MEMORY);
+		else
+			node_set_state(node, N_MEMORY);
 	}
 }
 

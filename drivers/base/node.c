@@ -1127,9 +1127,9 @@ static ssize_t show_has_memory(struct device *dev,
 	nodemask_t mask = node_states[N_MEMORY];
 	int nid;
 
-	for_each_node_mask(nid, mask) {
-		if (!node_mpol_eligible(nid))
-			node_clear(nid, mask);
+	for_each_node(nid) {
+		if (node_is_private(nid) && node_mpol_eligible(nid))
+			node_set(nid, mask);
 	}
 
 	return sysfs_emit(buf, "%*pbl\n", nodemask_pr_args(&mask));
