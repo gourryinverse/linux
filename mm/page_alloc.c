@@ -6209,9 +6209,15 @@ static void __setup_per_zone_wmarks(void)
 	struct zone *zone;
 	unsigned long flags;
 
-	/* Calculate total number of !ZONE_HIGHMEM and !ZONE_MOVABLE pages */
+	/*
+	 * Calculate total number of !ZONE_HIGHMEM and !ZONE_MOVABLE pages,
+	 * excluding private nodes.  Private node zones are not in the regular
+	 * allocation fallback path, so including them dilutes DRAM watermarks
+	 * and delays kswapd wakeup on allocatable nodes.
+	 */
 	for_each_zone(zone) {
-		if (!is_highmem(zone) && zone_idx(zone) != ZONE_MOVABLE)
+		if (!is_highmem(zone) && zone_idx(zone) != ZONE_MOVABLE &&
+		    !pgdat_is_private(zone->zone_pgdat))
 			lowmem_pages += zone_managed_pages(zone);
 	}
 

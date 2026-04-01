@@ -972,6 +972,15 @@ int node_private_set_ops(int nid, const struct node_private_ops *ops)
 	else
 		np->ops = ops;
 	mutex_unlock(&node_private_lock);
+
+	/*
+	 * Ops changes affect which zones contribute to global accounting.
+	 * Recalculate watermarks and totalreserve_pages so that private
+	 * node zones are properly excluded from DRAM watermark proportions.
+	 */
+	if (!ret)
+		setup_per_zone_wmarks();
+
 	return ret;
 }
 EXPORT_SYMBOL_GPL(node_private_set_ops);
@@ -1005,6 +1014,11 @@ int node_private_clear_ops(int nid, const struct node_private_ops *ops)
 	else
 		np->ops = NULL;
 	mutex_unlock(&node_private_lock);
+
+	/* Recalculate watermarks and totalreserve_pages */
+	if (!ret)
+		setup_per_zone_wmarks();
+
 	return ret;
 }
 EXPORT_SYMBOL_GPL(node_private_clear_ops);
