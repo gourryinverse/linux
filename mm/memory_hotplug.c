@@ -711,7 +711,7 @@ static void node_states_check_changes_online(unsigned long nr_pages,
 	arg->status_change_nid = NUMA_NO_NODE;
 	arg->status_change_nid_normal = NUMA_NO_NODE;
 
-	if (!node_state(nid, N_MEMORY))
+	if (!node_state(nid, N_MEMORY) && !node_state(nid, N_MEMORY_PRIVATE))
 		arg->status_change_nid = nid;
 	if (zone_idx(zone) <= ZONE_NORMAL && !node_state(nid, N_NORMAL_MEMORY))
 		arg->status_change_nid_normal = nid;
