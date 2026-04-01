@@ -1069,11 +1069,10 @@ int node_private_unregister(int nid)
 	}
 
 	/*
-	 * Only unregister if all memory is offline and N_MEMORY is
-	 * cleared. N_MEMORY is cleared by offline_pages() when the
-	 * last memory block is offlined.
+	 * Only unregister if all memory is offline.  Private nodes use
+	 * N_MEMORY_PRIVATE instead of N_MEMORY, so check both.
 	 */
-	if (node_state(nid, N_MEMORY)) {
+	if (node_state(nid, N_MEMORY) || node_state(nid, N_MEMORY_PRIVATE)) {
 		mutex_unlock(&node_private_lock);
 		return -EBUSY;
 	}

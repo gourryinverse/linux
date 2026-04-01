@@ -1512,7 +1512,7 @@ static inline unsigned long pgdat_end_pfn(pg_data_t *pgdat)
 #ifdef CONFIG_NUMA
 static inline bool pgdat_is_private(pg_data_t *pgdat)
 {
-	return pgdat->private;
+	return rcu_access_pointer(pgdat->private);
 }
 #else
 static inline bool pgdat_is_private(pg_data_t *pgdat)
