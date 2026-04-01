@@ -51,6 +51,7 @@
 #include <linux/psi.h>
 #include <linux/pagewalk.h>
 #include <linux/shmem_fs.h>
+#include <linux/node_private.h>
 #include <linux/ctype.h>
 #include <linux/debugfs.h>
 #include <linux/khugepaged.h>
@@ -6324,6 +6325,25 @@ static void shrink_zones(struct zonelist *zonelist, struct scan_control *sc)
 			continue;
 		last_pgdat = zone->zone_pgdat;
 		shrink_node(zone->zone_pgdat, sc);
+	}
+
+	/*
+	 * Private nodes are not in regular nodes' zonelists, so the loop
+	 * above never visits them.  For memcg reclaim, pages demoted to
+	 * private nodes are still charged to the memcg but unreachable
+	 * by the zonelist walk — scan private nodes with NP_OPS_RECLAIM
+	 * so those pages can be reclaimed.
+	 */
+	if (cgroup_reclaim(sc)) {
+		int nid;
+
+		for_each_node_state(nid, N_MEMORY_PRIVATE) {
+			if (!node_private_has_flag(nid, NP_OPS_RECLAIM))
+				continue;
+			if (!first_pgdat)
+				first_pgdat = NODE_DATA(nid);
+			shrink_node(NODE_DATA(nid), sc);
+		}
 	}
 
 	if (first_pgdat)
