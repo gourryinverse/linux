@@ -94,6 +94,15 @@ struct node_private_ops {
 #define NP_OPS_MIGRATION		BIT(0)
 /* Allow mempolicy-directed allocation and mbind migration to this node */
 #define NP_OPS_MEMPOLICY		BIT(1)
+/* Allow memcg reclaim to scan pages on this node */
+#define NP_OPS_RECLAIM			BIT(2)
+
+/*
+ * A private node is OOM-eligible when killing a task can free memory
+ * that reaches this node — requires both migration and mempolicy so
+ * freed pages can be allocated and placed here.
+ */
+#define NP_OPS_OOM_ELIGIBLE		(NP_OPS_MIGRATION | NP_OPS_MEMPOLICY)
 
 /**
  * struct node_private - Per-node container for private nodes
