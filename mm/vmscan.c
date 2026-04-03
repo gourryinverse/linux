@@ -6268,6 +6268,10 @@ static void shrink_zones(struct zonelist *zonelist, struct scan_control *sc)
 
 	for_each_zone_zonelist_nodemask(zone, z, zonelist,
 					sc->reclaim_idx, sc->nodemask) {
+		/* Skip zones offlined concurrently (private node removal). */
+		if (!managed_zone(zone))
+			continue;
+
 		/*
 		 * Take care memory controller reclaiming has small influence
 		 * to global LRU.
@@ -6424,6 +6428,15 @@ retry:
 	last_pgdat = NULL;
 	for_each_zone_zonelist_nodemask(zone, z, zonelist, sc->reclaim_idx,
 					sc->nodemask) {
+		/*
+		 * Skip zones on nodes that were offlined concurrently.
+		 * The zonelist is rebuilt in-place by build_all_zonelists()
+		 * during memory offline, but we may be iterating a snapshot
+		 * that still includes stale entries.  A zone with zero
+		 * managed pages is either offlined or never initialized.
+		 */
+		if (!managed_zone(zone))
+			continue;
 		if (zone->zone_pgdat == last_pgdat)
 			continue;
 		last_pgdat = zone->zone_pgdat;
@@ -6576,6 +6589,8 @@ static bool throttle_direct_reclaim(gfp_t gfp_mask, struct zonelist *zonelist,
 	 */
 	for_each_zone_zonelist_nodemask(zone, z, zonelist,
 					gfp_zone(gfp_mask), nodemask) {
+		if (!managed_zone(zone))
+			continue;
 		if (zone_idx(zone) > ZONE_NORMAL)
 			continue;
 
