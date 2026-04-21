@@ -2465,6 +2465,9 @@ bool compaction_zonelist_suitable(struct alloc_context *ac, int order,
 		    !__cpuset_zone_allowed(zone, gfp_mask))
 			continue;
 
+		if (node_is_private(zone_to_nid(zone)))
+			continue;
+
 		/*
 		 * Do not consider all the reclaimable memory because we do not
 		 * want to trash just for a single high order allocation which
@@ -2856,6 +2859,9 @@ enum compact_result try_to_compact_pages(gfp_t gfp_mask, unsigned int order,
 			!__cpuset_zone_allowed(zone, gfp_mask))
 				continue;
 
+		if (node_is_private(zone_to_nid(zone)))
+			continue;
+
 		if (prio > MIN_COMPACT_PRIORITY
 					&& compaction_deferred(zone, order)) {
 			rc = max_t(enum compact_result, COMPACT_DEFERRED, rc);
@@ -2924,6 +2930,9 @@ static int compact_node(pg_data_t *pgdat, bool proactive)
 		.gfp_mask = GFP_KERNEL,
 		.proactive_compaction = proactive,
 	};
+
+	if (node_is_private(pgdat->node_id))
+		return 0;
 
 	for (zoneid = 0; zoneid < MAX_NR_ZONES; zoneid++) {
 		zone = &pgdat->node_zones[zoneid];
@@ -3019,6 +3028,9 @@ static ssize_t compact_store(struct device *dev,
 			     const char *buf, size_t count)
 {
 	int nid = dev->id;
+
+	if (node_is_private(nid))
+		return -EINVAL;
 
 	if (nid >= 0 && nid < nr_node_ids && node_online(nid)) {
 		/* Flush pending updates to the LRU lists */
