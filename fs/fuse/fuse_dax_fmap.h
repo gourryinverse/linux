@@ -33,4 +33,8 @@ struct fuse_dax_devlist {
 	struct fuse_daxdev *devlist;
 };
 
+struct fuse_conn;
+int fuse_dax_fmap_resolve_one_device(struct fuse_conn *fc, u32 idx,
+				     const char *name);
+
 #endif /* FUSE_DAX_FMAP_H */

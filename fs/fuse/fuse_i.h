@@ -230,7 +230,6 @@ struct fuse_inode {
 	struct {
 		void                    *meta;
 		u32                      meta_size;
-		u64                      file_size;
 	} dax_fmap;
 #endif
 };

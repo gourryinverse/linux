@@ -243,9 +243,7 @@
  *
  *  7.46
  *  - Add FUSE_DAX_FMAP capability for in-kernel fsdax maps via BPF struct_ops
- *  - Add FUSE_GET_FMAP and FUSE_GET_DAXDEV opcodes
  *  - Add ops_name field to fuse_init_out for BPF struct_ops negotiation
- *  - Add struct fuse_get_fmap_out, fuse_get_daxdev_in, fuse_get_daxdev_out
  */
 
 #ifndef _LINUX_FUSE_H
@@ -671,8 +669,7 @@ enum fuse_opcode {
 	FUSE_TMPFILE		= 51,
 	FUSE_STATX		= 52,
 	FUSE_COPY_FILE_RANGE_64	= 53,
-	FUSE_GET_FMAP		= 54,
-	FUSE_GET_DAXDEV		= 55,
+	/* 54-55 reserved (formerly FUSE_GET_FMAP, FUSE_GET_DAXDEV) */
 
 	/* CUSE specific operations */
 	CUSE_INIT		= 4096,
@@ -1317,22 +1314,6 @@ struct fuse_uring_cmd_req {
 	/* queue the command is for (queue index) */
 	uint16_t qid;
 	uint8_t padding[6];
-};
-
-/* FUSE DAX fmap opcodes */
-
-struct fuse_get_fmap_out {
-	uint32_t	meta_size;
-	uint32_t	reserved;
-};
-
-struct fuse_get_daxdev_in {
-	uint32_t	daxdev_index;
-	uint32_t	reserved;
-};
-
-struct fuse_get_daxdev_out {
-	char		name[256];
 };
 
 #endif /* _LINUX_FUSE_H */

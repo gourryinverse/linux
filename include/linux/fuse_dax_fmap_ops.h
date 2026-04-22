@@ -7,6 +7,8 @@
 #define FUSE_DAX_FMAP_OPS_NAME_LEN 16
 #define FUSE_DAX_FMAP_META_MAX (64 * 1024)
 
+struct fuse_conn;
+
 struct fuse_iomap_io {
 	__u64 offset;
 	__u64 length;
@@ -17,20 +19,18 @@ struct fuse_iomap_io {
 };
 
 /*
- * Context passed to the BPF dax_fmap_parse() callback at file open time.
+ * Context passed to the BPF iomap_setup() callback at file open time.
  * Process context, sleepable. Called once per file open.
  *
- * The raw GET_FMAP response blob and meta_buf are NOT directly accessible
- * as pointer fields. BPF programs use kfuncs to get bounded pointers:
- *   bpf_fuse_dax_parse_get_blob() - read the GET_FMAP response blob
- *   bpf_fuse_dax_parse_get_meta() - write the metadata buffer
+ * The meta_buf is NOT directly accessible as a pointer field. BPF
+ * programs use kfuncs to get bounded pointers:
+ *   bpf_fuse_dax_setup_get_meta() - write the metadata buffer
  *
  * Scalar OUT fields are written directly by the BPF program.
  */
 struct fuse_dax_fmap_parse_ctx {
-	__u32 blob_size;
+	__u64 nodeid;		/* IN: FUSE node ID for hashmap lookup */
 	__u32 meta_buf_size;
-	__u64 file_size;		/* OUT: file size from fmap */
 	__u64 dev_bitmap;		/* OUT: bitmap of referenced dev indices */
 };
 
@@ -47,18 +47,20 @@ struct fuse_dax_fmap_resolve_ctx {
 	__u32 meta_buf_size;
 	__u64 file_offset;
 	__u64 length;
-	__u64 file_size;
 };
 
 /*
  * BPF struct_ops for FUSE DAX fmap extent resolution.
  *
- * dax_fmap_parse() is called at file open in process context (sleepable).
+ * iomap_setup() is called at file open in process context (sleepable).
+ *   Reads from BPF hashmap (populated by FUSE server), writes meta_buf.
  * iomap_begin() is called at iomap_begin in fault context (non-sleepable).
+ *   Reads meta_buf cached on the fuse_inode.
  */
 struct fuse_dax_fmap_ops {
 	char name[FUSE_DAX_FMAP_OPS_NAME_LEN];
-	int (*dax_fmap_parse)(struct fuse_dax_fmap_parse_ctx *ctx);
+	__u32 meta_size;
+	int (*iomap_setup)(struct fuse_dax_fmap_parse_ctx *ctx);
 	int (*iomap_begin)(struct fuse_dax_fmap_resolve_ctx *ctx,
 			   struct fuse_iomap_io *io);
 };
@@ -71,8 +73,8 @@ struct fuse_dax_fmap_ops {
  */
 struct fuse_dax_fmap_parse_ctx_kern {
 	struct fuse_dax_fmap_parse_ctx ctx;
-	const void *blob;
 	void *meta_buf;
+	struct fuse_conn *fc;
 };
 
 struct fuse_dax_fmap_resolve_ctx_kern {

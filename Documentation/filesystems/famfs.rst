@@ -32,34 +32,20 @@ implementations.
 Metadata Delivery
 -----------------
 
-File mapping metadata is delivered via two FUSE opcodes:
+File mapping metadata is delivered via BPF hashmaps populated by the FUSE
+server. At file open time, the server pushes per-file extent metadata into
+a BPF hashmap (keyed by FUSE node ID). The kernel's BPF ``iomap_setup()``
+callback reads this hashmap entry and populates an opaque per-inode
+metadata buffer.
 
-**FUSE_GET_FMAP** (opcode 54) — sent by the kernel on file open.
-The server responds with a ``fuse_get_fmap_out`` header followed by an
-opaque blob::
+Device information is similarly pushed into a separate BPF hashmap (keyed
+by device index) at mount time. The BPF ``iomap_setup()`` callback
+resolves devices by reading the device map and calling the
+``bpf_fuse_dax_setup_add_device()`` kfunc.
 
-    struct fuse_get_fmap_out {
-        uint32_t meta_size;  /* BPF metadata buffer size to allocate */
-        uint32_t reserved;
-    };
-    /* Remaining bytes are opaque — passed to BPF dax_fmap_parse() */
-
-The ``meta_size`` field tells the kernel how large a metadata buffer to
-allocate for the BPF program to populate. The blob format is defined
-entirely by the BPF program — the kernel treats it as opaque.
-
-**FUSE_GET_DAXDEV** (opcode 55) — sent after parse to resolve device
-paths. The kernel sends a ``fuse_get_daxdev_in`` with the device index
-and receives a ``fuse_get_daxdev_out`` with the device path::
-
-    struct fuse_get_daxdev_in {
-        uint32_t daxdev_index;
-        uint32_t reserved;
-    };
-
-    struct fuse_get_daxdev_out {
-        char name[256];  /* e.g., "/dev/dax0.0" */
-    };
+The ``meta_size`` for metadata buffer allocation comes from the
+``fuse_dax_fmap_ops.meta_size`` field set by the BPF program at
+registration time.
 
 FUSE_INIT Negotiation
 ---------------------
@@ -84,24 +70,25 @@ BPF programs implement the ``fuse_dax_fmap_ops`` interface::
 
     struct fuse_dax_fmap_ops {
         char name[16];
-        int (*dax_fmap_parse)(struct fuse_dax_fmap_parse_ctx *ctx);
+        __u32 meta_size;
+        int (*iomap_setup)(struct fuse_dax_fmap_parse_ctx *ctx);
         int (*iomap_begin)(struct fuse_dax_fmap_resolve_ctx *ctx,
                            struct fuse_iomap_io *io);
     };
 
-**dax_fmap_parse()** — called once per file open in process context
-(sleepable). Reads the opaque GET_FMAP blob, populates a metadata
-buffer for later use by iomap_begin(), and sets a device bitmap
-indicating which devices need to be resolved. Uses kfuncs:
+**iomap_setup()** — called once per file open in process context
+(sleepable). Reads per-file metadata from a BPF hashmap (populated by
+the FUSE server), populates a metadata buffer for later use by
+iomap_begin(), resolves devices, and sets a device bitmap. Uses kfuncs:
 
-- ``bpf_fuse_dax_parse_get_blob(ctx, offset, size)`` — read GET_FMAP blob
-- ``bpf_fuse_dax_parse_get_meta(ctx, offset, size)`` — write metadata buffer
+- ``bpf_fuse_dax_setup_get_meta(ctx, offset, size)`` — write metadata buffer
+- ``bpf_fuse_dax_setup_add_device(ctx, dev_index, path, path_len)`` — resolve DAX device
 
-Sets output fields on the parse context: ``file_size``, ``dev_bitmap``.
+Sets output field on the parse context: ``dev_bitmap``.
 
 **iomap_begin()** — called on every page fault and I/O in fault context
 (non-sleepable, hot path). Translates a file offset to a physical
-device offset using the metadata buffer populated by dax_fmap_parse().
+device offset using the metadata buffer populated by iomap_setup().
 Uses:
 
 - ``bpf_fuse_dax_resolve_get_meta(ctx, offset, size)`` — read metadata buffer
@@ -122,13 +109,12 @@ Data Flow
 
 File open (cold path)::
 
-    FUSE_GET_FMAP(nodeid)
-    → read fuse_get_fmap_out header (meta_size) + opaque blob
-    → allocate metadata buffer (meta_size bytes)
-    → BPF ops->dax_fmap_parse(parse_ctx)
-    → iterate dev_bitmap bits
-    → for each uncached device: FUSE_GET_DAXDEV(index) → resolve path
-    → store {meta, meta_size, file_size} on inode
+    allocate metadata buffer (ops->meta_size bytes)
+    → BPF ops->iomap_setup(parse_ctx)
+      → read BPF hashmap for nodeid
+      → populate meta_buf via kfunc
+      → resolve devices via bpf_fuse_dax_setup_add_device()
+    → store {meta, meta_size} on inode
     → set S_DAX flag
 
 Page fault / I/O (hot path)::
@@ -141,13 +127,14 @@ Page fault / I/O (hot path)::
 Device Resolution
 -----------------
 
-Device indices are communicated by BPF dax_fmap_parse() programs through
-the ``dev_bitmap`` output field. For each set bit, the kernel sends a
-FUSE_GET_DAXDEV request to the server, which responds with the device
-path (e.g., ``/dev/dax0.0``). The kernel resolves each path to a
-``dax_device`` pointer via ``kern_path()`` + ``dax_dev_get()``
-+ ``fs_dax_get()``. Resolved devices are cached on the ``fuse_conn``
-for the lifetime of the connection.
+Device resolution is handled directly by BPF ``iomap_setup()`` programs.
+The FUSE server populates a BPF hashmap with device paths (keyed by
+device index) at mount time. During ``iomap_setup()``, the BPF program
+reads device paths from the hashmap and calls
+``bpf_fuse_dax_setup_add_device(ctx, dev_index, path, path_len)`` to
+resolve each device. This kfunc calls ``kern_path()`` + ``dax_dev_get()``
++ ``fs_dax_get()`` internally. Resolved devices are cached on the
+``fuse_conn`` for the lifetime of the connection.
 
 Reference BPF Programs
 ======================

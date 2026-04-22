@@ -14,7 +14,6 @@
 #include <linux/fs.h>
 #include <linux/mm.h>
 #include <linux/dax.h>
-#include <linux/fuse.h>
 #include <linux/fuse_dax_fmap_ops.h>
 #include <linux/iomap.h>
 #include <linux/limits.h>
@@ -147,12 +146,16 @@ fuse_dax_fmap_alloc_devlist(struct fuse_conn *fc)
 	return 0;
 }
 
-static int
+int
 fuse_dax_fmap_resolve_one_device(struct fuse_conn *fc, u32 idx,
 				 const char *name)
 {
 	struct fuse_daxdev *daxdev;
 	int rc;
+
+	rc = fuse_dax_fmap_alloc_devlist(fc);
+	if (rc)
+		return rc;
 
 	if (idx >= fc->dax_devlist->nslots) {
 		pr_err("%s: dev_index %u >= nslots %d\n",
@@ -192,86 +195,6 @@ fuse_dax_fmap_resolve_one_device(struct fuse_conn *fc, u32 idx,
 
 		wmb();
 		daxdev->valid = 1;
-	}
-
-	return 0;
-}
-
-static ssize_t
-fuse_dax_send_get_fmap(struct fuse_mount *fm, u64 nodeid,
-		       void *buf, size_t bufsize)
-{
-	FUSE_ARGS(args);
-
-	args.opcode = FUSE_GET_FMAP;
-	args.nodeid = nodeid;
-	args.in_numargs = 0;
-	args.out_numargs = 1;
-	args.out_argvar = true;
-	args.out_args[0].size = bufsize;
-	args.out_args[0].value = buf;
-
-	return fuse_simple_request(fm, &args);
-}
-
-static int
-fuse_dax_send_get_daxdev(struct fuse_mount *fm, u32 daxdev_index,
-			 struct fuse_get_daxdev_out *out)
-{
-	FUSE_ARGS(args);
-	struct fuse_get_daxdev_in inarg = {
-		.daxdev_index = daxdev_index,
-	};
-
-	args.opcode = FUSE_GET_DAXDEV;
-	args.nodeid = 0;
-	args.in_numargs = 1;
-	args.in_args[0].size = sizeof(inarg);
-	args.in_args[0].value = &inarg;
-	args.out_numargs = 1;
-	args.out_args[0].size = sizeof(*out);
-	args.out_args[0].value = out;
-
-	return fuse_simple_request(fm, &args);
-}
-
-static int
-fuse_dax_fmap_resolve_dev_bitmap(struct fuse_mount *fm, u64 dev_bitmap)
-{
-	struct fuse_conn *fc = fm->fc;
-	int rc;
-
-	rc = fuse_dax_fmap_alloc_devlist(fc);
-	if (rc)
-		return rc;
-
-	while (dev_bitmap) {
-		u32 idx = __ffs(dev_bitmap);
-		struct fuse_daxdev *dd;
-
-		if (idx >= fc->dax_devlist->nslots) {
-			pr_err("%s: dev_bitmap bit %u >= nslots %d\n",
-			       __func__, idx, fc->dax_devlist->nslots);
-			return -EINVAL;
-		}
-
-		dd = &fc->dax_devlist->devlist[idx];
-		if (!dd->valid) {
-			struct fuse_get_daxdev_out daxdev_out = {};
-
-			rc = fuse_dax_send_get_daxdev(fm, idx, &daxdev_out);
-			if (rc)
-				return rc;
-
-			daxdev_out.name[sizeof(daxdev_out.name) - 1] = '\0';
-
-			rc = fuse_dax_fmap_resolve_one_device(fc, idx,
-							      daxdev_out.name);
-			if (rc)
-				return rc;
-		}
-
-		dev_bitmap &= ~(1ULL << idx);
 	}
 
 	return 0;
@@ -364,7 +287,6 @@ fuse_dax_fmap_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 		.meta_buf_size = fi->dax_fmap.meta_size,
 		.file_offset   = offset,
 		.length        = length,
-		.file_size     = fi->dax_fmap.file_size,
 	};
 
 	rc = ops->iomap_begin(&kern.ctx, &io);
@@ -560,19 +482,14 @@ fuse_dax_fmap_mmap(struct file *file, struct vm_area_struct *vma)
 	return 0;
 }
 
-#define FUSE_GET_FMAP_BUF_MAX (256 * 1024)
-
 int fuse_dax_fmap_open(struct fuse_mount *fm, struct inode *inode)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
 	struct fuse_conn *fc = fm->fc;
 	struct fuse_dax_fmap_ops *ops = fc->dax_fmap_ops;
 	struct fuse_dax_fmap_parse_ctx_kern kern;
-	struct fuse_get_fmap_out *fmap_hdr;
 	void *meta_buf = NULL;
-	ssize_t fmap_size;
 	u32 meta_size;
-	u32 blob_size;
 	int rc;
 
 	if (fi->dax_fmap.meta)
@@ -581,31 +498,7 @@ int fuse_dax_fmap_open(struct fuse_mount *fm, struct inode *inode)
 	if (!ops)
 		return -EOPNOTSUPP;
 
-	void *fmap_buf __free(kfree) = kmalloc(FUSE_GET_FMAP_BUF_MAX,
-					       GFP_KERNEL);
-	if (!fmap_buf)
-		return -ENOMEM;
-
-	fmap_size = fuse_dax_send_get_fmap(fm, get_node_id(inode),
-					   fmap_buf, FUSE_GET_FMAP_BUF_MAX);
-	if (fmap_size < 0)
-		return fmap_size;
-
-	if (fmap_size < sizeof(*fmap_hdr)) {
-		pr_err("%s: GET_FMAP response too small (%zd < %zu)\n",
-		       __func__, fmap_size, sizeof(*fmap_hdr));
-		return -EINVAL;
-	}
-
-	fmap_hdr = fmap_buf;
-	meta_size = fmap_hdr->meta_size;
-	blob_size = fmap_size - sizeof(*fmap_hdr);
-
-	if (meta_size > FUSE_DAX_FMAP_META_MAX) {
-		pr_err("%s: meta_size %u exceeds max %u\n",
-		       __func__, meta_size, FUSE_DAX_FMAP_META_MAX);
-		return -EINVAL;
-	}
+	meta_size = ops->meta_size;
 
 	meta_buf = kzalloc(meta_size, GFP_KERNEL);
 	if (!meta_buf)
@@ -613,22 +506,18 @@ int fuse_dax_fmap_open(struct fuse_mount *fm, struct inode *inode)
 
 	kern = (struct fuse_dax_fmap_parse_ctx_kern){
 		.ctx = {
-			.blob_size     = blob_size,
+			.nodeid        = get_node_id(inode),
 			.meta_buf_size = meta_size,
 		},
-		.blob     = (const char *)fmap_buf + sizeof(*fmap_hdr),
 		.meta_buf = meta_buf,
+		.fc       = fc,
 	};
 
-	rc = ops->dax_fmap_parse(&kern.ctx);
+	rc = ops->iomap_setup(&kern.ctx);
 	if (rc) {
-		pr_err("%s: BPF dax_fmap_parse failed: %d\n", __func__, rc);
+		pr_err("%s: BPF iomap_setup failed: %d\n", __func__, rc);
 		goto err_free_meta;
 	}
-
-	rc = fuse_dax_fmap_resolve_dev_bitmap(fm, kern.ctx.dev_bitmap);
-	if (rc)
-		goto err_free_meta;
 
 	inode_lock(inode);
 
@@ -640,8 +529,6 @@ int fuse_dax_fmap_open(struct fuse_mount *fm, struct inode *inode)
 
 	fi->dax_fmap.meta      = meta_buf;
 	fi->dax_fmap.meta_size = meta_size;
-	fi->dax_fmap.file_size = kern.ctx.file_size;
-	i_size_write(inode, kern.ctx.file_size);
 	inode->i_flags |= S_DAX;
 	inode->i_data.a_ops = &fuse_dax_fmap_aops;
 
