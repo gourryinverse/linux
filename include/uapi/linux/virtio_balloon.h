@@ -77,7 +77,18 @@ struct virtio_balloon_config {
 #define VIRTIO_BALLOON_S_DIRECT_SCAN   13 /* Amount of memory scanned directly */
 #define VIRTIO_BALLOON_S_ASYNC_RECLAIM 14 /* Amount of memory reclaimed asynchronously */
 #define VIRTIO_BALLOON_S_DIRECT_RECLAIM 15 /* Amount of memory reclaimed directly */
-#define VIRTIO_BALLOON_S_NR       16
+#define VIRTIO_BALLOON_S_DIRTY	       16 /* Dirty pages (bytes) */
+#define VIRTIO_BALLOON_S_WRITEBACK     17 /* Pages under writeback (bytes) */
+#define VIRTIO_BALLOON_S_ANON	       18 /* Anonymous pages (bytes) */
+#define VIRTIO_BALLOON_S_INACTIVE_FILE 19 /* Inactive file LRU pages (bytes) */
+#define VIRTIO_BALLOON_S_SLAB_RECLAIM  20 /* Reclaimable slab (bytes) */
+#define VIRTIO_BALLOON_S_WS_REFAULT_A  21 /* Workingset refaults anon (count) */
+#define VIRTIO_BALLOON_S_WS_REFAULT_F  22 /* Workingset refaults file (count) */
+#define VIRTIO_BALLOON_S_PSI_MEM_SOME  23 /* PSI memory some total (us) */
+#define VIRTIO_BALLOON_S_PSI_MEM_FULL  24 /* PSI memory full total (us) */
+#define VIRTIO_BALLOON_S_PSI_IO_SOME   25 /* PSI IO some total (us) */
+#define VIRTIO_BALLOON_S_PSI_IO_FULL   26 /* PSI IO full total (us) */
+#define VIRTIO_BALLOON_S_NR	       27
 
 #define VIRTIO_BALLOON_S_NAMES_WITH_PREFIX(VIRTIO_BALLOON_S_NAMES_prefix) { \
 	VIRTIO_BALLOON_S_NAMES_prefix "swap-in", \
@@ -95,7 +106,18 @@ struct virtio_balloon_config {
 	VIRTIO_BALLOON_S_NAMES_prefix "async-scans", \
 	VIRTIO_BALLOON_S_NAMES_prefix "direct-scans", \
 	VIRTIO_BALLOON_S_NAMES_prefix "async-reclaims", \
-	VIRTIO_BALLOON_S_NAMES_prefix "direct-reclaims" \
+	VIRTIO_BALLOON_S_NAMES_prefix "direct-reclaims", \
+	VIRTIO_BALLOON_S_NAMES_prefix "dirty", \
+	VIRTIO_BALLOON_S_NAMES_prefix "writeback", \
+	VIRTIO_BALLOON_S_NAMES_prefix "anon-pages", \
+	VIRTIO_BALLOON_S_NAMES_prefix "inactive-file", \
+	VIRTIO_BALLOON_S_NAMES_prefix "slab-reclaimable", \
+	VIRTIO_BALLOON_S_NAMES_prefix "ws-refault-anon", \
+	VIRTIO_BALLOON_S_NAMES_prefix "ws-refault-file", \
+	VIRTIO_BALLOON_S_NAMES_prefix "psi-mem-some-us", \
+	VIRTIO_BALLOON_S_NAMES_prefix "psi-mem-full-us", \
+	VIRTIO_BALLOON_S_NAMES_prefix "psi-io-some-us", \
+	VIRTIO_BALLOON_S_NAMES_prefix "psi-io-full-us" \
 }
 
 #define VIRTIO_BALLOON_S_NAMES VIRTIO_BALLOON_S_NAMES_WITH_PREFIX("")

@@ -18,6 +18,8 @@
 #include <linux/wait.h>
 #include <linux/mm.h>
 #include <linux/page_reporting.h>
+#include <linux/vmstat.h>
+#include <linux/psi.h>
 
 /*
  * Balloon device works in 4K page units.  So each page is pointed to by
@@ -413,6 +415,37 @@ static unsigned int update_balloon_stats(struct virtio_balloon *vb)
 				pages_to_bytes(available));
 	update_stat(vb, idx++, VIRTIO_BALLOON_S_CACHES,
 				pages_to_bytes(caches));
+
+	update_stat(vb, idx++, VIRTIO_BALLOON_S_DIRTY,
+		    pages_to_bytes(global_node_page_state(NR_FILE_DIRTY)));
+	update_stat(vb, idx++, VIRTIO_BALLOON_S_WRITEBACK,
+		    pages_to_bytes(global_node_page_state(NR_WRITEBACK)));
+	update_stat(vb, idx++, VIRTIO_BALLOON_S_ANON,
+		    pages_to_bytes(global_node_page_state(NR_ANON_MAPPED)));
+	update_stat(vb, idx++, VIRTIO_BALLOON_S_INACTIVE_FILE,
+		    pages_to_bytes(global_node_page_state(NR_INACTIVE_FILE)));
+	update_stat(vb, idx++, VIRTIO_BALLOON_S_SLAB_RECLAIM,
+		    pages_to_bytes(
+			global_node_page_state_pages(NR_SLAB_RECLAIMABLE_B)));
+	update_stat(vb, idx++, VIRTIO_BALLOON_S_WS_REFAULT_A,
+		    global_node_page_state(WORKINGSET_REFAULT_ANON));
+	update_stat(vb, idx++, VIRTIO_BALLOON_S_WS_REFAULT_F,
+		    global_node_page_state(WORKINGSET_REFAULT_FILE));
+
+#ifdef CONFIG_PSI
+	update_stat(vb, idx++, VIRTIO_BALLOON_S_PSI_MEM_SOME,
+		    div_u64(psi_system.total[PSI_AVGS][PSI_MEM_SOME],
+			    NSEC_PER_USEC));
+	update_stat(vb, idx++, VIRTIO_BALLOON_S_PSI_MEM_FULL,
+		    div_u64(psi_system.total[PSI_AVGS][PSI_MEM_FULL],
+			    NSEC_PER_USEC));
+	update_stat(vb, idx++, VIRTIO_BALLOON_S_PSI_IO_SOME,
+		    div_u64(psi_system.total[PSI_AVGS][PSI_IO_SOME],
+			    NSEC_PER_USEC));
+	update_stat(vb, idx++, VIRTIO_BALLOON_S_PSI_IO_FULL,
+		    div_u64(psi_system.total[PSI_AVGS][PSI_IO_FULL],
+			    NSEC_PER_USEC));
+#endif
 
 	return idx;
 }
