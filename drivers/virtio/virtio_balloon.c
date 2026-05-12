@@ -112,6 +112,10 @@ struct virtio_balloon {
 	/* Memory statistics */
 	struct virtio_balloon_stat stats[VIRTIO_BALLOON_S_NR];
 
+	/* Stats push mode */
+	struct delayed_work stats_push_work;
+	uint32_t stats_push_interval_ms;
+
 	/* Shrinker to return free pages - VIRTIO_BALLOON_F_FREE_PAGE_HINT */
 	struct shrinker *shrinker;
 
@@ -463,6 +467,13 @@ static void stats_request(struct virtqueue *vq)
 {
 	struct virtio_balloon *vb = vq->vdev->priv;
 
+	/*
+	 * In push mode, the push timer owns the VQ. Ignore pull
+	 * requests to avoid racing on buffer submission.
+	 */
+	if (vb->stats_push_interval_ms)
+		return;
+
 	spin_lock(&vb->stop_update_lock);
 	if (!vb->stop_update) {
 		start_wakeup_event(vb, VIRTIO_BALLOON_WAKEUP_SIGNAL_STATS);
@@ -558,6 +569,20 @@ static void virtballoon_changed(struct virtio_device *vdev)
 		virtio_balloon_queue_free_page_work(vb);
 	}
 	spin_unlock_irqrestore(&vb->stop_update_lock, flags);
+
+	if (virtio_has_feature(vdev, VIRTIO_BALLOON_F_STATS_PUSH)) {
+		uint32_t interval;
+
+		virtio_cread_le(vdev, struct virtio_balloon_config,
+				stats_push_interval_ms, &interval);
+		if (interval != vb->stats_push_interval_ms) {
+			vb->stats_push_interval_ms = interval;
+			cancel_delayed_work(&vb->stats_push_work);
+			if (interval)
+				schedule_delayed_work(&vb->stats_push_work,
+					msecs_to_jiffies(interval));
+		}
+	}
 }
 
 static void update_balloon_size(struct virtio_balloon *vb)
@@ -579,6 +604,32 @@ static void update_balloon_stats_func(struct work_struct *work)
 	process_wakeup_event(vb, VIRTIO_BALLOON_WAKEUP_SIGNAL_STATS);
 	stats_handle_request(vb);
 	finish_wakeup_event(vb);
+}
+
+static void stats_push_func(struct work_struct *work)
+{
+	struct virtio_balloon *vb = container_of(work, struct virtio_balloon,
+						 stats_push_work.work);
+	struct virtqueue *vq;
+	struct scatterlist sg;
+	unsigned int num_stats, len;
+
+	if (!vb->stats_push_interval_ms)
+		return;
+
+	vq = vb->stats_vq;
+
+	/* Reclaim previous buffer */
+	while (virtqueue_get_buf(vq, &len))
+		;
+
+	num_stats = update_balloon_stats(vb);
+	sg_init_one(&sg, vb->stats, sizeof(vb->stats[0]) * num_stats);
+	virtqueue_add_outbuf(vq, &sg, 1, vb, GFP_KERNEL);
+	virtqueue_kick(vq);
+
+	schedule_delayed_work(&vb->stats_push_work,
+			      msecs_to_jiffies(vb->stats_push_interval_ms));
 }
 
 static void update_balloon_size_func(struct work_struct *work)
@@ -967,6 +1018,7 @@ static int virtballoon_probe(struct virtio_device *vdev)
 	}
 
 	INIT_WORK(&vb->update_balloon_stats_work, update_balloon_stats_func);
+	INIT_DELAYED_WORK(&vb->stats_push_work, stats_push_func);
 	INIT_WORK(&vb->update_balloon_size_work, update_balloon_size_func);
 	spin_lock_init(&vb->stop_update_lock);
 	mutex_init(&vb->balloon_lock);
@@ -1094,6 +1146,19 @@ static int virtballoon_probe(struct virtio_device *vdev)
 
 	if (towards_target(vb))
 		virtballoon_changed(vdev);
+
+	if (virtio_has_feature(vdev, VIRTIO_BALLOON_F_STATS_PUSH)) {
+		uint32_t interval;
+
+		virtio_cread_le(vdev, struct virtio_balloon_config,
+				stats_push_interval_ms, &interval);
+		if (interval) {
+			vb->stats_push_interval_ms = interval;
+			schedule_delayed_work(&vb->stats_push_work,
+					      msecs_to_jiffies(interval));
+		}
+	}
+
 	return 0;
 
 out_unregister_oom:
@@ -1145,6 +1210,7 @@ static void virtballoon_remove(struct virtio_device *vdev)
 	spin_unlock_irq(&vb->stop_update_lock);
 	cancel_work_sync(&vb->update_balloon_size_work);
 	cancel_work_sync(&vb->update_balloon_stats_work);
+	cancel_delayed_work_sync(&vb->stats_push_work);
 
 	if (virtio_has_feature(vdev, VIRTIO_BALLOON_F_FREE_PAGE_HINT)) {
 		cancel_work_sync(&vb->report_free_page_work);
@@ -1199,6 +1265,10 @@ static int virtballoon_validate(struct virtio_device *vdev)
 	else if (!virtio_has_feature(vdev, VIRTIO_BALLOON_F_PAGE_POISON))
 		__virtio_clear_bit(vdev, VIRTIO_BALLOON_F_REPORTING);
 
+	if (virtio_has_feature(vdev, VIRTIO_BALLOON_F_STATS_PUSH) &&
+	    !virtio_has_feature(vdev, VIRTIO_BALLOON_F_STATS_VQ))
+		__virtio_clear_bit(vdev, VIRTIO_BALLOON_F_STATS_PUSH);
+
 	__virtio_clear_bit(vdev, VIRTIO_F_ACCESS_PLATFORM);
 	return 0;
 }
@@ -1210,6 +1280,7 @@ static unsigned int features[] = {
 	VIRTIO_BALLOON_F_FREE_PAGE_HINT,
 	VIRTIO_BALLOON_F_PAGE_POISON,
 	VIRTIO_BALLOON_F_REPORTING,
+	VIRTIO_BALLOON_F_STATS_PUSH,
 };
 
 static struct virtio_driver virtio_balloon_driver = {
