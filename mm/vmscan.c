@@ -6149,6 +6149,13 @@ static void shrink_node(pg_data_t *pgdat, struct scan_control *sc)
 	struct lruvec *target_lruvec;
 	bool reclaimable = false;
 
+	/* 
+	 * Private nodes do not support reclaim by default, filtering here
+	 * captures all normal reclaim paths that may attempt eviction.
+	 */
+	if (node_is_private(pgdat->node_id))
+		return;
+
 	if ((lru_gen_enabled() || lru_gen_switching()) && root_reclaim(sc)) {
 		memset(&sc->nr, 0, sizeof(sc->nr));
 		lru_gen_shrink_node(pgdat, sc);
@@ -6759,6 +6766,16 @@ unsigned long mem_cgroup_shrink_node(struct mem_cgroup *memcg,
 	return sc.nr_reclaimed;
 }
 
+static struct zonelist *memcg_reclaim_zonelist(int nid, gfp_t gfp_mask)
+{
+	enum alloc_zonelist zlsel = ALLOC_ZONELIST_DEFAULT;
+
+	if (unlikely(!nodes_empty(node_states[N_MEMORY_PRIVATE])))
+		zlsel = ALLOC_ZONELIST_PRIVATE;
+
+	return select_zonelist(nid, gfp_mask, zlsel);
+}
+
 unsigned long try_to_free_mem_cgroup_pages(struct mem_cgroup *memcg,
 					   unsigned long nr_pages,
 					   gfp_t gfp_mask,
@@ -6780,12 +6797,8 @@ unsigned long try_to_free_mem_cgroup_pages(struct mem_cgroup *memcg,
 		.may_swap = !!(reclaim_options & MEMCG_RECLAIM_MAY_SWAP),
 		.proactive = !!(reclaim_options & MEMCG_RECLAIM_PROACTIVE),
 	};
-	/*
-	 * Traverse the ZONELIST_FALLBACK zonelist of the current node to put
-	 * equal pressure on all the nodes. This is based on the assumption that
-	 * the reclaim does not bail out early.
-	 */
-	struct zonelist *zonelist = node_zonelist(numa_node_id(), sc.gfp_mask);
+	struct zonelist *zonelist = memcg_reclaim_zonelist(numa_node_id(),
+							   sc.gfp_mask);
 
 	set_task_reclaim_state(current, &sc.reclaim_state);
 	trace_mm_vmscan_memcg_reclaim_begin(sc.gfp_mask, 0, memcg);
