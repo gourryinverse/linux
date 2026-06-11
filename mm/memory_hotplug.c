@@ -1237,8 +1237,7 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 	/* reinitialise watermarks and update pcp limits */
 	init_per_zone_wmark_min();
 
-	/* Private nodes opt-out of reclaim/compaction by default */
-	if (!node_is_private(nid)) {
+	if (node_allows_reclaim(nid)) {
 		kswapd_run(nid);
 		kcompactd_run(nid);
 	}

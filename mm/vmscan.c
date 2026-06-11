@@ -5411,6 +5411,21 @@ static const struct attribute_group lru_gen_attr_group = {
  *                          debugfs interface
  ******************************************************************************/
 
+/*
+ * Nodes the lru_gen debugfs interface lists: ordinary memory nodes plus any
+ * N_MEMORY_PRIVATE nodes opted into reclaim.  run_cmd() already accepts the
+ * latter, so keep the listing in sync with what it accepts.
+ */
+static void lru_gen_seq_nodes(nodemask_t *nodes)
+{
+	int nid;
+
+	*nodes = node_states[N_MEMORY];
+	for_each_node_state(nid, N_MEMORY_PRIVATE)
+		if (node_allows_reclaim(nid))
+			node_set(nid, *nodes);
+}
+
 static void *lru_gen_seq_start(struct seq_file *m, loff_t *pos)
 {
 	struct mem_cgroup *memcg;
@@ -5422,9 +5437,11 @@ static void *lru_gen_seq_start(struct seq_file *m, loff_t *pos)
 
 	memcg = mem_cgroup_iter(NULL, NULL, NULL);
 	do {
+		nodemask_t nodes;
 		int nid;
 
-		for_each_node_state(nid, N_MEMORY) {
+		lru_gen_seq_nodes(&nodes);
+		for_each_node_mask(nid, nodes) {
 			if (!nr_to_skip--)
 				return get_lruvec(memcg, nid);
 		}
@@ -5446,16 +5463,18 @@ static void *lru_gen_seq_next(struct seq_file *m, void *v, loff_t *pos)
 {
 	int nid = lruvec_pgdat(v)->node_id;
 	struct mem_cgroup *memcg = lruvec_memcg(v);
+	nodemask_t nodes;
 
 	++*pos;
 
-	nid = next_memory_node(nid);
+	lru_gen_seq_nodes(&nodes);
+	nid = next_node(nid, nodes);
 	if (nid == MAX_NUMNODES) {
 		memcg = mem_cgroup_iter(NULL, memcg, NULL);
 		if (!memcg)
 			return NULL;
 
-		nid = first_memory_node;
+		nid = first_node(nodes);
 	}
 
 	return get_lruvec(memcg, nid);
@@ -5524,10 +5543,12 @@ static int lru_gen_seq_show(struct seq_file *m, void *v)
 	struct lru_gen_folio *lrugen = &lruvec->lrugen;
 	int nid = lruvec_pgdat(lruvec)->node_id;
 	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
+	nodemask_t nodes;
 	DEFINE_MAX_SEQ(lruvec);
 	DEFINE_MIN_SEQ(lruvec);
 
-	if (nid == first_memory_node) {
+	lru_gen_seq_nodes(&nodes);
+	if (nid == first_node(nodes)) {
 		const char *path = memcg ? m->private : "";
 
 #ifdef CONFIG_MEMCG
@@ -5627,7 +5648,9 @@ static int run_cmd(char cmd, u64 memcg_id, int nid, unsigned long seq,
 	int err = -EINVAL;
 	struct mem_cgroup *memcg = NULL;
 
-	if (nid < 0 || nid >= MAX_NUMNODES || !node_state(nid, N_MEMORY))
+	if (nid < 0 || nid >= MAX_NUMNODES ||
+	    !(node_state(nid, N_MEMORY) ||
+	      (node_is_private(nid) && node_allows_reclaim(nid))))
 		return -EINVAL;
 
 	if (!mem_cgroup_disabled()) {
@@ -6160,7 +6183,7 @@ static void shrink_node(pg_data_t *pgdat, struct scan_control *sc)
 	 * Private nodes do not support reclaim by default, filtering here
 	 * captures all normal reclaim paths that may attempt eviction.
 	 */
-	if (node_is_private(pgdat->node_id))
+	if (!node_allows_reclaim(pgdat->node_id))
 		return;
 
 	if ((lru_gen_enabled() || lru_gen_switching()) && root_reclaim(sc)) {
@@ -6773,6 +6796,16 @@ unsigned long mem_cgroup_shrink_node(struct mem_cgroup *memcg,
 	return sc.nr_reclaimed;
 }
 
+static struct zonelist *memcg_reclaim_zonelist(int nid, gfp_t gfp_mask)
+{
+	unsigned int aflags = ALLOC_DEFAULT;
+
+	if (unlikely(!nodes_empty(node_states[N_MEMORY_PRIVATE])))
+		aflags = ALLOC_ZONELIST_PRIVATE;
+
+	return select_zonelist(nid, gfp_mask, aflags);
+}
+
 unsigned long try_to_free_mem_cgroup_pages(struct mem_cgroup *memcg,
 					   unsigned long nr_pages,
 					   gfp_t gfp_mask,
@@ -6799,7 +6832,8 @@ unsigned long try_to_free_mem_cgroup_pages(struct mem_cgroup *memcg,
 	 * equal pressure on all the nodes. This is based on the assumption that
 	 * the reclaim does not bail out early.
 	 */
-	struct zonelist *zonelist = node_zonelist(numa_node_id(), sc.gfp_mask);
+	struct zonelist *zonelist = memcg_reclaim_zonelist(numa_node_id(),
+							   sc.gfp_mask);
 
 	set_task_reclaim_state(current, &sc.reclaim_state);
 	trace_mm_vmscan_memcg_reclaim_begin(sc.gfp_mask, 0, memcg);
