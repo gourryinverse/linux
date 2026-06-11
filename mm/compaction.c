@@ -24,6 +24,7 @@
 #include <linux/page_owner.h>
 #include <linux/psi.h>
 #include <linux/cpuset.h>
+#include <linux/node_private.h>
 #include "internal.h"
 
 #ifdef CONFIG_COMPACTION
@@ -2465,7 +2466,7 @@ bool compaction_zonelist_suitable(struct alloc_context *ac, int order,
 		    !__cpuset_zone_allowed(zone, gfp_mask))
 			continue;
 
-		if (node_is_private(zone_to_nid(zone)))
+		if (!node_allows_reclaim(zone_to_nid(zone)))
 			continue;
 
 		/*
@@ -2859,7 +2860,7 @@ enum compact_result try_to_compact_pages(gfp_t gfp_mask, unsigned int order,
 			!__cpuset_zone_allowed(zone, gfp_mask))
 				continue;
 
-		if (node_is_private(zone_to_nid(zone)))
+		if (!node_allows_reclaim(zone_to_nid(zone)))
 			continue;
 
 		if (prio > MIN_COMPACT_PRIORITY
@@ -2931,7 +2932,7 @@ static int compact_node(pg_data_t *pgdat, bool proactive)
 		.proactive_compaction = proactive,
 	};
 
-	if (node_is_private(pgdat->node_id))
+	if (!node_allows_reclaim(pgdat->node_id))
 		return 0;
 
 	for (zoneid = 0; zoneid < MAX_NR_ZONES; zoneid++) {
@@ -3029,7 +3030,7 @@ static ssize_t compact_store(struct device *dev,
 {
 	int nid = dev->id;
 
-	if (node_is_private(nid))
+	if (!node_allows_reclaim(nid))
 		return -EINVAL;
 
 	if (nid >= 0 && nid < nr_node_ids && node_online(nid)) {

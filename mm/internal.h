@@ -37,6 +37,19 @@ static inline bool page_is_private_managed(struct page *page)
 }
 
 /*
+ * folio_allows_madvise() - may madvise reclaim hints act on this folio?
+ *
+ * madvise reclaim hints (COLD/PAGEOUT/FREE) are userland-driven reclaim, so
+ * they follow reclaim opt-in: false for ZONE_DEVICE and for N_MEMORY_PRIVATE
+ * nodes without CAP_RECLAIM, true for all other normal folios.
+ */
+static inline bool folio_allows_madvise(struct folio *folio)
+{
+	return !folio_is_zone_device(folio) &&
+	       node_allows_reclaim(folio_nid(folio));
+}
+
+/*
  * folio_allows_longterm_pin() - may this folio be long-term GUP-pinned?
  *
  * checks folio_is_longterm_pinnable() rules plus private node permissions.

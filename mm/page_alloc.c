@@ -6584,7 +6584,7 @@ static void __setup_per_zone_wmarks(void)
 		u64 tmp;
 
 		spin_lock_irqsave(&zone->lock, flags);
-		if (node_is_private(zone_to_nid(zone))) {
+		if (!node_allows_reclaim(zone_to_nid(zone))) {
 			zone->_watermark[WMARK_MIN] = 0;
 			zone->_watermark[WMARK_LOW] = 0;
 			zone->_watermark[WMARK_HIGH] = 0;
@@ -6600,7 +6600,7 @@ static void __setup_per_zone_wmarks(void)
 			/*
 			 * __GFP_HIGH and PF_MEMALLOC allocations usually don't
 			 * need highmem and movable zones pages, so cap pages_min
-			 * to a small  value here.
+			 * to a small value here.
 			 *
 			 * The WMARK_HIGH-WMARK_LOW and (WMARK_LOW-WMARK_MIN)
 			 * deltas control async page reclaim, and so should
