@@ -431,6 +431,10 @@ static int mpol_set_nodemask(struct mempolicy *pol,
 	else
 		pol->w.cpuset_mems_allowed = cpuset_current_mems_allowed;
 
+	/* If any private nodes left in the nodemask - add the private flag */
+	if (nodes_intersects(nsc->mask2, node_states[N_MEMORY_PRIVATE]))
+		pol->flags |= MPOL_F_PRIVATE;
+
 	ret = mpol_ops[pol->mode].create(pol, &nsc->mask2);
 	return ret;
 }
@@ -504,22 +508,33 @@ static void mpol_rebind_default(struct mempolicy *pol, const nodemask_t *nodes)
 
 static void mpol_rebind_nodemask(struct mempolicy *pol, const nodemask_t *nodes)
 {
-	nodemask_t tmp;
+	nodemask_t tmp, priv;
+
+	/* preserve online private nodes to re-add later */
+	nodes_and(priv, pol->nodes, node_states[N_MEMORY_PRIVATE]);
 
 	if (pol->flags & MPOL_F_STATIC_NODES)
 		nodes_and(tmp, pol->w.user_nodemask, *nodes);
-	else if (pol->flags & MPOL_F_RELATIVE_NODES)
-		mpol_relative_nodemask(&tmp, &pol->w.user_nodemask, nodes);
-	else {
+	else if (pol->flags & MPOL_F_RELATIVE_NODES) {
+		/* fold only the public part: a private node must not take a slot */
+		nodes_and(tmp, pol->w.user_nodemask, node_states[N_MEMORY]);
+		mpol_relative_nodemask(&tmp, &tmp, nodes);
+	} else {
 		nodes_remap(tmp, pol->nodes, pol->w.cpuset_mems_allowed,
 								*nodes);
 		pol->w.cpuset_mems_allowed = *nodes;
 	}
 
-	if (nodes_empty(tmp))
+	/* private nodes are identity-mapped during remap, drop them here */
+	nodes_and(tmp, tmp, node_states[N_MEMORY]);
+	if (nodes_empty(tmp) && nodes_empty(priv))
 		tmp = *nodes;
 
-	pol->nodes = tmp;
+	/* If any online private nodes remain, add them back */
+	nodes_or(pol->nodes, tmp, priv);
+	/* If no online private nodes remain, strip the private flag */
+	if (nodes_empty(priv))
+		pol->flags &= ~MPOL_F_PRIVATE;
 }
 
 static void mpol_rebind_preferred(struct mempolicy *pol,
@@ -2417,7 +2432,8 @@ bool mempolicy_in_oom_domain(struct task_struct *tsk,
 }
 
 static struct page *alloc_pages_preferred_many(gfp_t gfp, unsigned int order,
-						int nid, nodemask_t *nodemask)
+						int nid, nodemask_t *nodemask,
+						enum alloc_zonelist zlsel)
 {
 	struct page *page;
 	gfp_t preferred_gfp;
@@ -2430,9 +2446,11 @@ static struct page *alloc_pages_preferred_many(gfp_t gfp, unsigned int order,
 	 */
 	preferred_gfp = gfp | __GFP_NOWARN;
 	preferred_gfp &= ~(__GFP_DIRECT_RECLAIM | __GFP_NOFAIL);
-	page = __alloc_frozen_pages_noprof(preferred_gfp, order, nid, nodemask);
+	page = __alloc_frozen_pages_zonelist_noprof(preferred_gfp, order, nid, nodemask,
+					     zlsel);
 	if (!page)
-		page = __alloc_frozen_pages_noprof(gfp, order, nid, NULL);
+		page = __alloc_frozen_pages_zonelist_noprof(gfp, order, nid, NULL,
+						     zlsel);
 
 	return page;
 }
@@ -2452,11 +2470,14 @@ static struct page *alloc_pages_mpol(gfp_t gfp, unsigned int order,
 {
 	nodemask_t *nodemask;
 	struct page *page;
+	enum alloc_zonelist zlsel = (pol->flags & MPOL_F_PRIVATE) ?
+		ALLOC_ZONELIST_PRIVATE : ALLOC_ZONELIST_DEFAULT;
 
 	nodemask = policy_nodemask(gfp, pol, ilx, &nid);
 
 	if (pol->mode == MPOL_PREFERRED_MANY)
-		return alloc_pages_preferred_many(gfp, order, nid, nodemask);
+		return alloc_pages_preferred_many(gfp, order, nid, nodemask,
+						  zlsel);
 
 	if (IS_ENABLED(CONFIG_TRANSPARENT_HUGEPAGE) &&
 	    /* filter "hugepage" allocation, unless from alloc_pages() */
@@ -2478,9 +2499,9 @@ static struct page *alloc_pages_mpol(gfp_t gfp, unsigned int order,
 			 * First, try to allocate THP only on local node, but
 			 * don't reclaim unnecessarily, just compact.
 			 */
-			page = __alloc_frozen_pages_noprof(
+			page = __alloc_frozen_pages_zonelist_noprof(
 				gfp | __GFP_THISNODE | __GFP_NORETRY, order,
-				nid, NULL);
+				nid, NULL, zlsel);
 			if (page || !(gfp & __GFP_DIRECT_RECLAIM))
 				return page;
 			/*
@@ -2492,7 +2513,7 @@ static struct page *alloc_pages_mpol(gfp_t gfp, unsigned int order,
 		}
 	}
 
-	page = __alloc_frozen_pages_noprof(gfp, order, nid, nodemask);
+	page = __alloc_frozen_pages_zonelist_noprof(gfp, order, nid, nodemask, zlsel);
 
 	if (unlikely(pol->mode == MPOL_INTERLEAVE ||
 		     pol->mode == MPOL_WEIGHTED_INTERLEAVE) && page) {
