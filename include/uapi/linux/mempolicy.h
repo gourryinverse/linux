@@ -67,6 +67,7 @@ enum mempolicy_mode {
 #define MPOL_F_SHARED  (1 << 0)	/* identify shared policies */
 #define MPOL_F_MOF	(1 << 3) /* this policy wants migrate on fault */
 #define MPOL_F_MORON	(1 << 4) /* Migrate On protnone Reference On Node */
+#define MPOL_F_PRIVATE	(1 << 5) /* nodemask contains private nodes */
 
 /*
  * Enabling zone reclaim means the page allocator will attempt to fulfill
