@@ -5029,7 +5029,7 @@ static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
 		unsigned int *alloc_flags)
 {
 	ac->highest_zoneidx = gfp_zone(gfp_mask);
-	ac->zonelist = node_zonelist(preferred_nid, gfp_mask);
+	ac->zonelist = select_zonelist(preferred_nid, gfp_mask, ac->zlsel);
 	ac->nodemask = nodemask;
 	ac->migratetype = gfp_migratetype(gfp_mask);
 
@@ -5092,7 +5092,8 @@ static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
  * @page_array were set to %NULL on entry, the slots from 0 to the return value
  * - 1 will be filled.
  */
-unsigned long alloc_pages_bulk_noprof(gfp_t gfp, int preferred_nid,
+unsigned long alloc_pages_bulk_zonelist_noprof(gfp_t gfp,
+			enum alloc_zonelist zlsel, int preferred_nid,
 			nodemask_t *nodemask, int nr_pages,
 			struct page **page_array)
 {
@@ -5142,6 +5143,7 @@ unsigned long alloc_pages_bulk_noprof(gfp_t gfp, int preferred_nid,
 
 	/* May set ALLOC_NOFRAGMENT, fragmentation will return 1 page. */
 	gfp &= gfp_allowed_mask;
+	ac.zlsel = zlsel;
 	if (!prepare_alloc_pages(gfp, 0, preferred_nid, nodemask, &ac, &gfp, &alloc_flags))
 		goto out;
 
@@ -5227,10 +5229,22 @@ out:
 	return nr_populated;
 
 failed:
-	page = __alloc_pages_noprof(gfp, 0, preferred_nid, nodemask);
-	if (page)
+	page = __alloc_frozen_pages_zonelist_noprof(gfp, 0, preferred_nid,
+						    nodemask, zlsel);
+	if (page) {
+		set_page_refcounted(page);
 		page_array[nr_populated++] = page;
+	}
 	goto out;
+}
+
+unsigned long alloc_pages_bulk_noprof(gfp_t gfp, int preferred_nid,
+			nodemask_t *nodemask, int nr_pages,
+			struct page **page_array)
+{
+	return alloc_pages_bulk_zonelist_noprof(gfp, ALLOC_ZONELIST_DEFAULT,
+						preferred_nid, nodemask, nr_pages,
+						page_array);
 }
 EXPORT_SYMBOL_GPL(alloc_pages_bulk_noprof);
 
@@ -5265,13 +5279,14 @@ void free_pages_bulk(struct page **page_array, unsigned long nr_pages)
 /*
  * This is the 'heart' of the zoned buddy allocator.
  */
-struct page *__alloc_frozen_pages_noprof(gfp_t gfp, unsigned int order,
-		int preferred_nid, nodemask_t *nodemask)
+static struct page *__alloc_frozen_pages_core(gfp_t gfp, unsigned int order,
+		int preferred_nid, nodemask_t *nodemask,
+		enum alloc_zonelist zlsel)
 {
 	struct page *page;
 	unsigned int alloc_flags = ALLOC_WMARK_LOW;
 	gfp_t alloc_gfp; /* The gfp_t that was actually used for allocation */
-	struct alloc_context ac = { };
+	struct alloc_context ac = { .zlsel = zlsel };
 
 	/*
 	 * There are several places where we assume that the order value is sane
@@ -5328,7 +5343,22 @@ out:
 
 	return page;
 }
+
+struct page *__alloc_frozen_pages_noprof(gfp_t gfp, unsigned int order,
+		int preferred_nid, nodemask_t *nodemask)
+{
+	return __alloc_frozen_pages_core(gfp, order, preferred_nid, nodemask,
+					 ALLOC_ZONELIST_DEFAULT);
+}
 EXPORT_SYMBOL(__alloc_frozen_pages_noprof);
+
+struct page *__alloc_frozen_pages_zonelist_noprof(gfp_t gfp, unsigned int order,
+		int preferred_nid, nodemask_t *nodemask,
+		enum alloc_zonelist zlsel)
+{
+	return __alloc_frozen_pages_core(gfp, order, preferred_nid, nodemask,
+					 zlsel);
+}
 
 struct page *__alloc_pages_noprof(gfp_t gfp, unsigned int order,
 		int preferred_nid, nodemask_t *nodemask)
@@ -5342,14 +5372,32 @@ struct page *__alloc_pages_noprof(gfp_t gfp, unsigned int order,
 }
 EXPORT_SYMBOL(__alloc_pages_noprof);
 
+static struct folio *__folio_alloc_core(gfp_t gfp, unsigned int order,
+		int preferred_nid, nodemask_t *nodemask,
+		enum alloc_zonelist zlsel)
+{
+	struct page *page = __alloc_frozen_pages_core(gfp | __GFP_COMP, order,
+					preferred_nid, nodemask, zlsel);
+	if (page)
+		set_page_refcounted(page);
+	return page_rmappable_folio(page);
+}
+
 struct folio *__folio_alloc_noprof(gfp_t gfp, unsigned int order, int preferred_nid,
 		nodemask_t *nodemask)
 {
-	struct page *page = __alloc_pages_noprof(gfp | __GFP_COMP, order,
-					preferred_nid, nodemask);
-	return page_rmappable_folio(page);
+	return __folio_alloc_core(gfp, order, preferred_nid, nodemask,
+				  ALLOC_ZONELIST_DEFAULT);
 }
 EXPORT_SYMBOL(__folio_alloc_noprof);
+
+struct folio *__folio_alloc_zonelist_noprof(gfp_t gfp, unsigned int order,
+		int preferred_nid, nodemask_t *nodemask,
+		enum alloc_zonelist zlsel)
+{
+	return __folio_alloc_core(gfp, order, preferred_nid, nodemask,
+				  zlsel);
+}
 
 /*
  * Common helper functions. Never use with __GFP_HIGHMEM because the returned

@@ -171,15 +171,6 @@ static inline enum zone_type gfp_zone(gfp_t flags)
  * virtual kernel addresses to the allocated page(s).
  */
 
-static inline int gfp_zonelist(gfp_t flags)
-{
-#ifdef CONFIG_NUMA
-	if (unlikely(flags & __GFP_THISNODE))
-		return ZONELIST_NOFALLBACK;
-#endif
-	return ZONELIST_FALLBACK;
-}
-
 /*
  * gfp flag masking for nested internal allocations.
  *
@@ -205,6 +196,18 @@ static inline gfp_t gfp_nested_mask(gfp_t flags)
 		(__GFP_NORETRY | __GFP_NOMEMALLOC | __GFP_NOWARN));
 }
 
+/* Resolve an allocation's zonelist. Defaults to gfp-based selection. */
+static inline struct zonelist *
+select_zonelist(int nid, gfp_t flags, enum alloc_zonelist zlsel)
+{
+	int idx = ZONELIST_FALLBACK;
+
+#ifdef CONFIG_NUMA
+	idx = zlsel * 2 + !!(flags & __GFP_THISNODE);
+#endif
+	return &NODE_DATA(nid)->node_zonelists[idx];
+}
+
 /*
  * We get the zone list from the current node and the gfp_mask.
  * This zone list contains a maximum of MAX_NUMNODES*MAX_NR_ZONES zones.
@@ -216,7 +219,7 @@ static inline gfp_t gfp_nested_mask(gfp_t flags)
  */
 static inline struct zonelist *node_zonelist(int nid, gfp_t flags)
 {
-	return NODE_DATA(nid)->node_zonelists + gfp_zonelist(flags);
+	return select_zonelist(nid, flags, ALLOC_ZONELIST_DEFAULT);
 }
 
 #ifndef HAVE_ARCH_FREE_PAGE
@@ -234,10 +237,21 @@ struct folio *__folio_alloc_noprof(gfp_t gfp, unsigned int order, int preferred_
 		nodemask_t *nodemask);
 #define __folio_alloc(...)			alloc_hooks(__folio_alloc_noprof(__VA_ARGS__))
 
+struct folio *__folio_alloc_zonelist_noprof(gfp_t gfp, unsigned int order,
+		int preferred_nid, nodemask_t *nodemask,
+		enum alloc_zonelist zlsel);
+#define __folio_alloc_zonelist(...)		alloc_hooks(__folio_alloc_zonelist_noprof(__VA_ARGS__))
+
 unsigned long alloc_pages_bulk_noprof(gfp_t gfp, int preferred_nid,
 				nodemask_t *nodemask, int nr_pages,
 				struct page **page_array);
 #define __alloc_pages_bulk(...)			alloc_hooks(alloc_pages_bulk_noprof(__VA_ARGS__))
+
+/* Bulk allocate from a selectable zonelist (e.g. the private zonelist). */
+unsigned long alloc_pages_bulk_zonelist_noprof(gfp_t gfp,
+				enum alloc_zonelist zlsel, int preferred_nid,
+				nodemask_t *nodemask, int nr_pages,
+				struct page **page_array);
 
 void free_pages_bulk(struct page **page_array, unsigned long nr_pages);
 
