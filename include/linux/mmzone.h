@@ -1392,12 +1392,21 @@ enum {
 #ifdef CONFIG_NUMA
 	/*
 	 * The NUMA zonelists are doubled because we need zonelists that
-	 * restrict the allocations to a single node for __GFP_THISNODE.
+	 * restrict the allocations to a single node for __GFP_THISNODE
+	 * and N_MEMORY_PRIVATE nodes (isolated from default lists).
 	 */
 	ZONELIST_NOFALLBACK,	/* zonelist without fallback (__GFP_THISNODE) */
+	ZONELIST_PRIVATE,	/* N_MEMORY_PRIVATE access, falls back to DRAM */
+	ZONELIST_PRIVATE_NOFALLBACK, /* N_MEMORY_PRIVATE access, __GFP_THISNODE */
 #endif
 	MAX_ZONELISTS
 };
+
+#ifndef CONFIG_NUMA
+/* Without NUMA only ZONELIST_FALLBACK exists so everything collapses there */
+#define ZONELIST_PRIVATE		ZONELIST_FALLBACK
+#define ZONELIST_PRIVATE_NOFALLBACK	ZONELIST_FALLBACK
+#endif
 
 /*
  * This struct contains information about a zone in a zonelist. It is stored
