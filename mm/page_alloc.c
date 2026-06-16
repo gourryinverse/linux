@@ -3816,6 +3816,11 @@ retry:
 			(alloc_flags & ALLOC_CPUSET) &&
 			!__cpuset_zone_allowed(zone, gfp_mask))
 				continue;
+		/* Re-impose __GFP_THISNODE to non-default zonelists */
+		if (unlikely(ac->zlsel != ALLOC_ZONELIST_DEFAULT &&
+			     (gfp_mask & __GFP_THISNODE)) &&
+		    zone_to_nid(zone) != zonelist_node_idx(ac->preferred_zoneref))
+			continue;
 		/*
 		 * When allocating a page cache page for writing, we
 		 * want to get it from a node that is within its dirty
@@ -5385,6 +5390,25 @@ struct folio *__folio_alloc_zonelist_noprof(gfp_t gfp, unsigned int order,
 				  zlsel);
 }
 
+struct page *alloc_pages_node_private_noprof(gfp_t gfp, unsigned int order,
+		int nid)
+{
+	struct page *page = __alloc_frozen_pages_core(gfp, order, nid, NULL,
+						      ALLOC_ZONELIST_PRIVATE);
+	if (page)
+		set_page_refcounted(page);
+	return page;
+}
+EXPORT_SYMBOL_GPL(alloc_pages_node_private_noprof);
+
+struct folio *folio_alloc_node_private_noprof(gfp_t gfp, unsigned int order,
+		int nid)
+{
+	return __folio_alloc_zonelist_noprof(gfp, order, nid, NULL,
+					     ALLOC_ZONELIST_PRIVATE);
+}
+EXPORT_SYMBOL_GPL(folio_alloc_node_private_noprof);
+
 /*
  * Common helper functions. Never use with __GFP_HIGHMEM because the returned
  * address cannot represent highmem pages. Use alloc_pages and then kmap if
@@ -5782,10 +5806,11 @@ static void build_zonelists_in_node_order(pg_data_t *pgdat, int *node_order,
 static void build_thisnode_zonelists(pg_data_t *pgdat)
 {
 	struct zoneref *zonerefs;
-	int nr_zones;
+	int nr_zones = 0;
 
 	zonerefs = pgdat->node_zonelists[ZONELIST_NOFALLBACK]._zonerefs;
-	nr_zones = build_zonerefs_node(pgdat, zonerefs);
+	if (!node_is_private(pgdat->node_id))
+		nr_zones = build_zonerefs_node(pgdat, zonerefs);
 	zonerefs += nr_zones;
 	zonerefs->zone = NULL;
 	zonerefs->zone_idx = 0;
@@ -5827,10 +5852,27 @@ static void build_node_zonelist(pg_data_t *pgdat, const nodemask_t *candidates,
 static void build_zonelists(pg_data_t *pgdat)
 {
 	static int node_order[MAX_NUMNODES];
+	nodemask_t tier_nodes;
 	int local_node = pgdat->node_id;
 	int node, nr_nodes = 0;
 
 	memset(node_order, 0, sizeof(node_order));
+
+	/*
+	 * Zonelists: FALLBACK, NOFALLBACK, PRIVATE
+	 *
+	 * FALLBACK:   Allocation order for all nodes.  Private nodes have lists
+	 *             but never appear as an entry in any list. Allocations
+	 *             targeting a private node w/ FALLBACK land on N_MEMORY.
+	 *
+	 * NOFALLBACK: A list for each node containing only itself.
+	 *             Allocations targeting a private node w/ NOFALLBACK
+	 *             will always fail (their NOFALLBACK is empty)
+	 *
+	 * PRIVATE:    (N_MEMORY | N_MEMORY_PRIVATE) - allows access to
+	 *             private nodes, and falls back to normal memory unless
+	 *             __GFP_THISNODE otherwise constrains it.
+	 */
 
 	build_node_zonelist(pgdat, &node_states[N_MEMORY], ZONELIST_FALLBACK,
 			    true, node_order, &nr_nodes);
@@ -5840,6 +5882,10 @@ static void build_zonelists(pg_data_t *pgdat)
 	for (node = 0; node < nr_nodes; node++)
 		pr_cont("%d ", node_order[node]);
 	pr_cont("\n");
+
+	nodes_or(tier_nodes, node_states[N_MEMORY], node_states[N_MEMORY_PRIVATE]);
+	build_node_zonelist(pgdat, &tier_nodes, ZONELIST_PRIVATE, false,
+			    node_order, &nr_nodes);
 }
 
 #ifdef CONFIG_HAVE_MEMORYLESS_NODES
@@ -7190,6 +7236,15 @@ int alloc_contig_frozen_range_noprof(unsigned long start, unsigned long end,
 	gfp_mask = current_gfp_context(gfp_mask);
 	if (__alloc_contig_verify_gfp_mask(gfp_mask, (gfp_t *)&cc.gfp_mask))
 		return -EINVAL;
+
+	/*
+	 * Private nodes are kept unreachable via the zonelists, but
+	 * alloc_contig works directly on a zone derived from the caller's
+	 * pfn range, bypassing that.  Reject this operation explicitly
+	 * rather than silently carving memory out of an isolated node.
+	 */
+	if (unlikely(node_is_private(zone_to_nid(cc.zone))))
+		return -EBUSY;
 
 	/*
 	 * What we do here is we mark all pageblocks in range as
