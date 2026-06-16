@@ -242,6 +242,15 @@ struct folio *__folio_alloc_zonelist_noprof(gfp_t gfp, unsigned int order,
 		enum alloc_zonelist zlsel);
 #define __folio_alloc_zonelist(...)		alloc_hooks(__folio_alloc_zonelist_noprof(__VA_ARGS__))
 
+/* Allocate from an N_MEMORY_PRIVATE node (selects the private zonelist). */
+struct page *alloc_pages_node_private_noprof(gfp_t gfp, unsigned int order,
+		int nid);
+#define alloc_pages_node_private(...)		alloc_hooks(alloc_pages_node_private_noprof(__VA_ARGS__))
+
+struct folio *folio_alloc_node_private_noprof(gfp_t gfp, unsigned int order,
+		int nid);
+#define folio_alloc_node_private(...)		alloc_hooks(folio_alloc_node_private_noprof(__VA_ARGS__))
+
 unsigned long alloc_pages_bulk_noprof(gfp_t gfp, int preferred_nid,
 				nodemask_t *nodemask, int nr_pages,
 				struct page **page_array);
