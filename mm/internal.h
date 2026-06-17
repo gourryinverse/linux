@@ -1573,6 +1573,7 @@ struct migration_target_control {
 	nodemask_t *nmask;
 	gfp_t gfp_mask;
 	enum migrate_reason reason;
+	enum alloc_zonelist zlsel;
 };
 
 /*

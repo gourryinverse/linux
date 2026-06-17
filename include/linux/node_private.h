@@ -13,6 +13,7 @@ struct page;
  * to let specific services operate on its node.
  */
 #define NODE_PRIVATE_CAP_RECLAIM	(1UL << 0)	/* allow mm reclaim */
+#define NODE_PRIVATE_CAP_USER_NUMA	(1UL << 1)	/* allow mempolicy */
 
 /**
  * struct node_private - Per-node container for N_MEMORY_PRIVATE nodes
@@ -69,6 +70,33 @@ static inline bool node_allows_reclaim(int nid)
 	return ret;
 }
 
+/**
+ * node_allows_user_numa - may userspace place or migrate memory here?
+ * @nid: the node to test
+ *
+ * Gate all userspace-directed memory operations on a private node.
+ *   - mbind()/set_mempolicy()
+ *   - move_pages()/migrate_pages()
+ *
+ * return: true for N_MEMORY and N_MEMORY_PRIVATE with CAP_USER_NUMA.
+ *         false for memoryless or opted-out private node.
+ */
+static inline bool node_allows_user_numa(int nid)
+{
+	struct node_private *np;
+	bool ret;
+
+	if (node_state(nid, N_MEMORY))
+		return true;
+	if (!node_state(nid, N_MEMORY_PRIVATE))
+		return false;
+	rcu_read_lock();
+	np = rcu_dereference(NODE_DATA(nid)->node_private);
+	ret = np && (np->caps & NODE_PRIVATE_CAP_USER_NUMA);
+	rcu_read_unlock();
+	return ret;
+}
+
 #else /* !CONFIG_NUMA */
 
 static inline bool folio_is_private_node(struct folio *folio)
@@ -87,6 +115,11 @@ static inline bool node_is_private(int nid)
 }
 
 static inline bool node_allows_reclaim(int nid)
+{
+	return true;
+}
+
+static inline bool node_allows_user_numa(int nid)
 {
 	return true;
 }
