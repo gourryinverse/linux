@@ -2231,7 +2231,8 @@ struct folio *alloc_migration_target(struct folio *src, unsigned long private)
 	if (is_highmem_idx(zidx) || zidx == ZONE_MOVABLE)
 		gfp_mask |= __GFP_HIGHMEM;
 
-	return __folio_alloc(gfp_mask, order, nid, mtc->nmask, ALLOC_DEFAULT);
+	return __folio_alloc(gfp_mask, order, nid, mtc->nmask,
+			     mtc->alloc_flags);
 }
 
 #ifdef CONFIG_NUMA_MIGRATION
@@ -2253,6 +2254,8 @@ static int do_move_pages_to_node(struct list_head *pagelist, int node)
 		.nid = node,
 		.gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_THISNODE,
 		.reason = MR_SYSCALL,
+		.alloc_flags = node_is_private(node) ?
+			 ALLOC_ZONELIST_PRIVATE : ALLOC_DEFAULT,
 	};
 
 	err = migrate_pages(pagelist, alloc_migration_target, NULL,
@@ -2268,7 +2271,8 @@ static int __add_folio_for_migration(struct folio *folio, int node,
 	if (is_zero_folio(folio) || is_huge_zero_folio(folio))
 		return -EFAULT;
 
-	if (folio_is_private_managed(folio))
+	if (folio_is_zone_device(folio) ||
+	    !node_allows_user_numa(folio_nid(folio)))
 		return -ENOENT;
 
 	if (folio_nid(folio) == node)
@@ -2392,11 +2396,14 @@ static int do_pages_move(struct mm_struct *mm, nodemask_t task_nodes,
 		err = -ENODEV;
 		if (node < 0 || node >= MAX_NUMNODES)
 			goto out_flush;
-		if (!node_state(node, N_MEMORY))
+
+		if (!node_allows_user_numa(node))
 			goto out_flush;
 
 		err = -EACCES;
-		if (!node_isset(node, task_nodes))
+		/* Private nodes are not partitioned by cpuset.mem */
+		if (!node_is_private(node) &&
+		    !node_isset(node, task_nodes))
 			goto out_flush;
 
 		if (current_node == NUMA_NO_NODE) {
@@ -2477,7 +2484,9 @@ static void do_pages_stat_array(struct mm_struct *mm, unsigned long nr_pages,
 		if (folio) {
 			if (is_zero_folio(folio) || is_huge_zero_folio(folio))
 				err = -EFAULT;
-			else if (folio_is_private_managed(folio))
+			else if (folio_is_zone_device(folio) ||
+				 (folio_is_private_node(folio) &&
+				  !node_allows_user_numa(folio_nid(folio))))
 				err = -ENOENT;
 			else
 				err = folio_nid(folio);
