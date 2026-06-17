@@ -434,13 +434,14 @@ static int mpol_set_nodemask(struct mempolicy *pol,
 
 	/*
 	 * Private nodes are not in cpuset.mems, so they're always stripped.
-	 * Driver-allocated policies will already have MPOL_F_PRIVATE set,
-	 * if that's the case, add back in the requested set of private nodes.
+	 * Driver-allocated policies (MPOL_F_PRIVATE) and CAP_USER_NUMA private
+	 * nodes should be added back into the nodemask.
 	 */
 	for_each_node_mask(nid, *nodes) {
 		if (!node_is_private(nid))
 			continue;
-		if (pol->flags & MPOL_F_PRIVATE)
+		if ((pol->flags & MPOL_F_PRIVATE) ||
+		    node_allows_user_numa(nid))
 			node_set(nid, nsc->mask2);
 	}
 
@@ -696,7 +697,7 @@ static void queue_folios_pmd(pmd_t *pmd, struct mm_walk *walk)
 	}
 	if (!queue_folio_required(folio, qp))
 		return;
-	if (folio_is_private_node(folio))
+	if (!node_allows_user_numa(folio_nid(folio)))
 		return;
 	if (!(qp->flags & (MPOL_MF_MOVE | MPOL_MF_MOVE_ALL)) ||
 	    !vma_migratable(walk->vma) ||
@@ -752,7 +753,8 @@ static int queue_folios_pte_range(pmd_t *pmd, unsigned long addr,
 			continue;
 		}
 		folio = vm_normal_folio(vma, addr, ptent);
-		if (!folio || folio_is_private_managed(folio))
+		if (!folio || folio_is_zone_device(folio) ||
+		    !node_allows_user_numa(folio_nid(folio)))
 			continue;
 		if (folio_test_large(folio) && max_nr != 1)
 			nr = folio_pte_batch(folio, pte, ptent, max_nr);
@@ -827,7 +829,7 @@ static int queue_folios_hugetlb(pte_t *pte, unsigned long hmask,
 	folio = pfn_folio(pte_pfn(ptep));
 	if (!queue_folio_required(folio, qp))
 		goto unlock;
-	if (folio_is_private_node(folio))
+	if (!node_allows_user_numa(folio_nid(folio)))
 		goto unlock;
 	if (!(flags & (MPOL_MF_MOVE | MPOL_MF_MOVE_ALL)) ||
 	    !vma_migratable(walk->vma)) {
@@ -1412,6 +1414,8 @@ static long migrate_to_node(struct mm_struct *mm, int source, int dest,
 		.nid = dest,
 		.gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_THISNODE,
 		.reason = MR_SYSCALL,
+		.alloc_flags = node_is_private(dest) ?
+			 ALLOC_ZONELIST_PRIVATE : ALLOC_DEFAULT,
 	};
 
 	nodes_clear(nmask);
@@ -1985,9 +1989,10 @@ static int kernel_migrate_pages(pid_t pid, unsigned long maxnode,
 	struct mm_struct *mm = NULL;
 	struct task_struct *task;
 	nodemask_t task_nodes;
-	int err;
+	nodemask_t priv_ok;
 	nodemask_t *old;
 	nodemask_t *new;
+	int err, nid;
 	NODEMASK_SCRATCH(scratch);
 
 	if (!scratch)
@@ -2027,7 +2032,14 @@ static int kernel_migrate_pages(pid_t pid, unsigned long maxnode,
 	}
 	rcu_read_unlock();
 
+	/* Private nodes are stripped by cpuset checks. Allow eligible ones. */
+	nodes_clear(priv_ok);
+	for_each_node_mask(nid, *new)
+		if (node_is_private(nid) && node_allows_user_numa(nid))
+			node_set(nid, priv_ok);
+
 	task_nodes = cpuset_mems_allowed(task);
+	nodes_or(task_nodes, task_nodes, priv_ok);
 	/* Is the user allowed to access the target nodes? */
 	if (!nodes_subset(*new, task_nodes) && !capable(CAP_SYS_NICE)) {
 		err = -EPERM;
@@ -2035,6 +2047,7 @@ static int kernel_migrate_pages(pid_t pid, unsigned long maxnode,
 	}
 
 	task_nodes = cpuset_mems_allowed(current);
+	nodes_or(task_nodes, task_nodes, priv_ok);
 	if (!nodes_and(*new, *new, task_nodes))
 		goto out_put;
 
