@@ -5,11 +5,13 @@
 #include <linux/memory.h>
 #include <linux/module.h>
 #include <linux/device.h>
+#include <linux/cdev.h>
 #include <linux/slab.h>
 #include <linux/dax.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
 #include <linux/mman.h>
+#include <linux/mempolicy.h>
 #include <linux/memory-tiers.h>
 #include <linux/memory_hotplug.h>
 #include <linux/string_helpers.h>
@@ -45,8 +47,11 @@ static int dax_kmem_range(struct dev_dax *dev_dax, int i, struct range *r)
 struct dax_kmem_data {
 	const char *res_name;
 	int mgid;
+	int numa_node;
 	int state;
-	struct mutex lock; /* protects hotplug state transitions */
+	struct mutex lock; /* protects hotplug state transitions and config */
+	bool dax_file; /* when set, cdev allows mmap */
+	struct mempolicy *policy; /* device-lifetime bind for dax-file mmap */
 	struct resource *res[];
 };
 
@@ -63,6 +68,90 @@ static void kmem_put_memory_types(void)
 {
 	guard(mutex)(&kmem_memory_type_lock);
 	mt_put_memory_types(&kmem_memory_types);
+}
+
+#ifdef CONFIG_NUMA
+static void kmem_vma_set_policy(struct vm_area_struct *vma, struct mempolicy *pol)
+{
+	vma->vm_policy = pol;
+}
+#else
+static void kmem_vma_set_policy(struct vm_area_struct *vma, struct mempolicy *pol)
+{
+}
+#endif
+
+/*
+ * On mmap, install MPOL_F_PRIVATE mempolicy to bind to that node's memory,
+ * so every folio (fault and swap-in) lands on the node exactly like an mbind().
+ * Only present when dax_file=true, otherwise returns -ENXIO as before.
+ */
+static int kmem_anon_mmap(struct file *filp, struct vm_area_struct *vma)
+{
+	struct dev_dax *dev_dax = filp->private_data;
+	struct dax_kmem_data *data = dev_get_drvdata(&dev_dax->dev);
+	int rc = 0, id;
+
+	id = dax_read_lock();
+	if (!dax_alive(dev_dax->dax_dev))
+		rc = -ENXIO;
+	dax_read_unlock(id);
+	if (rc)
+		return rc;
+
+	/* Private mappings are not shared by definition, reject MAP_SHARED. */
+	if (vma->vm_flags & VM_SHARED)
+		return -EINVAL;
+
+	/* No policy means the node is not online yet - nothing to map. */
+	if (!data->policy)
+		return -ENXIO;
+
+	vma_set_anonymous(vma);
+	mpol_get(data->policy);
+	kmem_vma_set_policy(vma, data->policy);
+	return 0;
+}
+
+static int kmem_anon_open(struct inode *inode, struct file *filp)
+{
+	struct dax_device *dax_dev = inode_dax(inode);
+	struct dev_dax *dev_dax = dax_get_private(dax_dev);
+
+	filp->private_data = dev_dax;
+	/* Deliberately NOT S_DAX to allow normal mm/ operations on the vma */
+	return 0;
+}
+
+static const struct file_operations kmem_anon_fops = {
+	.llseek = noop_llseek,
+	.owner = THIS_MODULE,
+	.open = kmem_anon_open,
+	.mmap = kmem_anon_mmap,
+};
+
+/* Installs dax-file char device fops on the existing /dev/daxN.N node. */
+static int kmem_dax_file_cdev_add(struct dev_dax *dev_dax)
+{
+	struct dax_device *dax_dev = dev_dax->dax_dev;
+	struct device *dev = &dev_dax->dev;
+	struct cdev *cdev = dax_inode(dax_dev)->i_cdev;
+	int rc;
+
+	cdev_init(cdev, &kmem_anon_fops);
+	cdev->owner = dev->driver->owner;
+	cdev_set_parent(cdev, &dev->kobj);
+	rc = cdev_add(cdev, dev->devt, 1);
+	if (rc)
+		return rc;
+	run_dax(dax_dev);
+	return 0;
+}
+
+static void kmem_dax_file_cdev_del(struct dev_dax *dev_dax)
+{
+	kill_dev_dax(dev_dax);
+	cdev_del(dax_inode(dev_dax->dax_dev)->i_cdev);
 }
 
 /* True for the online states a kmem dax device can hold. */
@@ -339,6 +428,7 @@ static ssize_t state_store(struct device *dev, struct device_attribute *attr,
 {
 	struct dev_dax *dev_dax = to_dev_dax(dev);
 	struct dax_kmem_data *data = dev_get_drvdata(dev);
+	struct mempolicy *pol;
 	int online_type;
 	int rc;
 
@@ -377,8 +467,69 @@ static ssize_t state_store(struct device *dev, struct device_attribute *attr,
 	}
 
 	data->state = online_type;
+
+	/* If in dax-file mode, build the bind policy applied during mmap */
+	if (data->dax_file && !data->policy) {
+		pol = mpol_private_bind(data->numa_node);
+		if (IS_ERR(pol))
+			dev_warn(dev, "dax-file bind failed: %ld\n", PTR_ERR(pol));
+		else
+			data->policy = pol;
+	}
+
 	return len;
 }
+
+static ssize_t dax_file_show(struct device *dev, struct device_attribute *attr,
+			     char *buf)
+{
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+
+	if (!data)
+		return -ENXIO;
+	return sysfs_emit(buf, "%d\n", data->dax_file);
+}
+
+static ssize_t dax_file_store(struct device *dev, struct device_attribute *attr,
+			      const char *buf, size_t len)
+{
+	struct dev_dax *dev_dax = to_dev_dax(dev);
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+	bool enable;
+	int rc;
+
+	if (!data)
+		return -ENXIO;
+
+	rc = kstrtobool(buf, &enable);
+	if (rc)
+		return rc;
+
+	guard(mutex)(&data->lock);
+
+	/* dax_file= only reconfigures the device while it holds no memory. */
+	if (data->state != DAX_KMEM_UNPLUGGED)
+		return -EBUSY;
+
+	if (enable == data->dax_file)
+		return len;
+
+	if (enable) {
+		/* Add the anon-fault cdev; mmap returns -ENXIO until onlined. */
+		rc = kmem_dax_file_cdev_add(dev_dax);
+		if (rc)
+			return rc;
+		data->dax_file = true;
+	} else {
+		kmem_dax_file_cdev_del(dev_dax);
+		mpol_put(data->policy);
+		data->policy = NULL;
+		data->dax_file = false;
+	}
+
+	return len;
+}
+static DEVICE_ATTR_RW(dax_file);
 
 static int dev_dax_kmem_probe(struct dev_dax *dev_dax)
 {
@@ -448,6 +599,7 @@ static int dev_dax_kmem_probe(struct dev_dax *dev_dax)
 	if (rc < 0)
 		goto err_reg_mgid;
 	data->mgid = rc;
+	data->numa_node = numa_node;
 	data->state = DAX_KMEM_UNPLUGGED;
 	mutex_init(&data->lock);
 
@@ -516,6 +668,13 @@ static void dev_dax_kmem_remove(struct dev_dax *dev_dax)
 	struct device *dev = &dev_dax->dev;
 	struct dax_kmem_data *data = dev_get_drvdata(dev);
 
+	/* If enabled, clean up the dax-file char device configuration. */
+	if (data->dax_file) {
+		kmem_dax_file_cdev_del(dev_dax);
+		mpol_put(data->policy);
+		data->policy = NULL;
+	}
+
 	/*
 	 * Remove every range that is still added.  dax_kmem_remove_ranges()
 	 * uses remove_memory(), which never offlines: an online block fails
@@ -548,6 +707,15 @@ static void dev_dax_kmem_remove(struct dev_dax *dev_dax)
 #else
 static void dev_dax_kmem_remove(struct dev_dax *dev_dax)
 {
+	struct dax_kmem_data *data = dev_get_drvdata(&dev_dax->dev);
+
+	/* If enabled, clean up the dax-file char device configuration. */
+	if (data && data->dax_file) {
+		kmem_dax_file_cdev_del(dev_dax);
+		mpol_put(data->policy);
+		data->policy = NULL;
+	}
+
 	/*
 	 * Without hotremove purposely leak the request_mem_region() for the
 	 * device-dax range and return '0' to ->remove() attempts. The removal
@@ -563,6 +731,7 @@ static DEVICE_ATTR_RW(state);
 
 static struct attribute *dev_dax_kmem_attrs[] = {
 	&dev_attr_state.attr,
+	&dev_attr_dax_file.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(dev_dax_kmem);
