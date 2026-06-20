@@ -633,6 +633,7 @@ KMEM_PRIVATE_CAP_ATTR(user_numa, NODE_PRIVATE_CAP_USER_NUMA);
 KMEM_PRIVATE_CAP_ATTR(hotunplug, NODE_PRIVATE_CAP_HOTUNPLUG);
 KMEM_PRIVATE_CAP_ATTR(demotion, NODE_PRIVATE_CAP_DEMOTION);
 KMEM_PRIVATE_CAP_ATTR(numa_balancing, NODE_PRIVATE_CAP_NUMA_BALANCING);
+KMEM_PRIVATE_CAP_ATTR(ltpin, NODE_PRIVATE_CAP_LTPIN);
 
 /* Per-service opt-ins. Visibility toggled by 'private' control */
 static struct attribute *dax_kmem_private_attrs[] = {
@@ -641,6 +642,7 @@ static struct attribute *dax_kmem_private_attrs[] = {
 	&dev_attr_hotunplug.attr,
 	&dev_attr_demotion.attr,
 	&dev_attr_numa_balancing.attr,
+	&dev_attr_ltpin.attr,
 	NULL,
 };
 static const struct attribute_group dax_kmem_private_group = {
