@@ -158,3 +158,18 @@ A private node is reported through:
 * ``/proc/<pid>/numa_maps`` -- per-node residency includes private nodes
 * ``/proc/kcore`` -- private-node RAM appears in the kcore RAM map
 * memcg per-node statistics account private-node memory.
+
+Testing
+=======
+
+The ``dax_kmem`` driver (``drivers/dax/kmem.c``) exposes a ``private`` attribute
+which allows hotplugging the DAX device's memory as a private node.
+
+When ``private=1``, the CAP bits are exposed as per-device sysfs toggles.
+
+The ``dax_file`` attribute additionally opts the kmem's ``/dev/daxX.Y`` cdev
+into being mmap-capable, which faults ordinary anonymous memory bound to the
+node, which is how a test maps private-node memory into a process (see
+Documentation/ABI/testing/sysfs-bus-dax).
+
+KTAP selftests live in ``tools/testing/selftests/dax/`` (``private_node_*``).
