@@ -22,5 +22,6 @@ TEST_PROGS += private_node_migrate_pages.sh
 TEST_PROGS += private_node_demotion.sh
 TEST_PROGS += private_node_hotplug_transitions.sh
 TEST_PROGS += private_node_observability.sh
+TEST_PROGS += private_node_thp.sh
 
 include ../lib.mk
