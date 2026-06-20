@@ -117,7 +117,7 @@ static int kmem_anon_mmap(struct file *filp, struct vm_area_struct *vma)
 	 * Without reclaim/compaction, high-order allocations can fail despite
 	 * memory still being available. Can be relaxed with reclaim support.
 	 */
-	if (data->private)
+	if (!node_allows_reclaim(data->numa_node))
 		vm_flags_set(vma, VM_NOHUGEPAGE);
 	mpol_get(data->policy);
 	kmem_vma_set_policy(vma, data->policy);
@@ -595,8 +595,44 @@ static ssize_t dax_file_store(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_RW(dax_file);
 
+/* NODE_PRIVATE_CAP_* opt-in toggles - captured in data->caps */
+#define KMEM_PRIVATE_CAP_ATTR(name, CAP)				\
+static ssize_t name##_show(struct device *dev,				\
+			   struct device_attribute *attr, char *buf)	\
+{									\
+	struct dax_kmem_data *data = dev_get_drvdata(dev);		\
+									\
+	return sysfs_emit(buf, "%d\n", !!(data->caps & (CAP)));		\
+}									\
+static ssize_t name##_store(struct device *dev,				\
+			    struct device_attribute *attr,		\
+			    const char *buf, size_t len)		\
+{									\
+	struct dax_kmem_data *data = dev_get_drvdata(dev);		\
+	bool enable;							\
+	ssize_t rc;							\
+									\
+	rc = kstrtobool(buf, &enable);					\
+	if (rc)								\
+		return rc;						\
+									\
+	guard(mutex)(&data->lock);					\
+									\
+	if (data->state != DAX_KMEM_UNPLUGGED)				\
+		return -EBUSY;						\
+	if (enable)							\
+		data->caps |= (CAP);					\
+	else								\
+		data->caps &= ~(CAP);					\
+	return len;							\
+}									\
+static DEVICE_ATTR_RW(name)
+
+KMEM_PRIVATE_CAP_ATTR(reclaim, NODE_PRIVATE_CAP_RECLAIM);
+
 /* Per-service opt-ins. Visibility toggled by 'private' control */
 static struct attribute *dax_kmem_private_attrs[] = {
+	&dev_attr_reclaim.attr,
 	NULL,
 };
 static const struct attribute_group dax_kmem_private_group = {
