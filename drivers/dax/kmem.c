@@ -629,10 +629,12 @@ static ssize_t name##_store(struct device *dev,				\
 static DEVICE_ATTR_RW(name)
 
 KMEM_PRIVATE_CAP_ATTR(reclaim, NODE_PRIVATE_CAP_RECLAIM);
+KMEM_PRIVATE_CAP_ATTR(user_numa, NODE_PRIVATE_CAP_USER_NUMA);
 
 /* Per-service opt-ins. Visibility toggled by 'private' control */
 static struct attribute *dax_kmem_private_attrs[] = {
 	&dev_attr_reclaim.attr,
+	&dev_attr_user_numa.attr,
 	NULL,
 };
 static const struct attribute_group dax_kmem_private_group = {
