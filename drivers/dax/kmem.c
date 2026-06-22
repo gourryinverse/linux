@@ -14,6 +14,7 @@
 #include <linux/mempolicy.h>
 #include <linux/memory-tiers.h>
 #include <linux/memory_hotplug.h>
+#include <linux/node_private.h>
 #include <linux/string_helpers.h>
 #include "dax-private.h"
 #include "bus.h"
@@ -52,6 +53,9 @@ struct dax_kmem_data {
 	struct mutex lock; /* protects hotplug state transitions and config */
 	bool dax_file; /* when set, cdev allows mmap */
 	struct mempolicy *policy; /* device-lifetime bind for dax-file mmap */
+	bool private; /* when set, memory is onlined as N_MEMORY_PRIVATE */
+	unsigned long caps; /* NODE_PRIVATE_CAP_* flags */
+	struct node_private np;
 	struct resource *res[];
 };
 
@@ -108,6 +112,13 @@ static int kmem_anon_mmap(struct file *filp, struct vm_area_struct *vma)
 		return -ENXIO;
 
 	vma_set_anonymous(vma);
+	/*
+	 * Default a private node's dax-file mappings to base-page faults.
+	 * Without reclaim/compaction, high-order allocations can fail despite
+	 * memory still being available. Can be relaxed with reclaim support.
+	 */
+	if (data->private)
+		vm_flags_set(vma, VM_NOHUGEPAGE);
 	mpol_get(data->policy);
 	kmem_vma_set_policy(vma, data->policy);
 	return 0;
@@ -187,6 +198,10 @@ static int dax_kmem_do_hotplug(struct dev_dax *dev_dax,
 	if (online_type < MMOP_OFFLINE || online_type > MMOP_ONLINE_MOVABLE)
 		return -EINVAL;
 
+	/* Capabilities are stable as long as memory is online */
+	if (data->private)
+		data->np.caps = data->caps;
+
 	for (i = 0; i < dev_dax->nr_range; i++) {
 		struct range range;
 
@@ -215,7 +230,7 @@ static int dax_kmem_do_hotplug(struct dev_dax *dev_dax,
 		 */
 		rc = __add_memory_driver_managed(data->mgid, range.start,
 				range_len(&range), kmem_name, mhp_flags,
-				online_type, NULL);
+				online_type, data->private ? &data->np : NULL);
 
 		if (rc) {
 			dev_warn(dev, "mapping%d: %#llx-%#llx memory add failed\n",
@@ -480,6 +495,55 @@ static ssize_t state_store(struct device *dev, struct device_attribute *attr,
 	return len;
 }
 
+static const struct attribute_group dax_kmem_private_group;
+
+static ssize_t private_show(struct device *dev, struct device_attribute *attr,
+			    char *buf)
+{
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+
+	if (!data)
+		return -ENXIO;
+	return sysfs_emit(buf, "%d\n", data->private);
+}
+
+static ssize_t private_store(struct device *dev, struct device_attribute *attr,
+			     const char *buf, size_t len)
+{
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+	bool enable;
+	int rc;
+
+	if (!data)
+		return -ENXIO;
+
+	rc = kstrtobool(buf, &enable);
+	if (rc)
+		return rc;
+
+	guard(mutex)(&data->lock);
+
+	if (data->state != DAX_KMEM_UNPLUGGED)
+		return -EBUSY;
+
+	if (enable == data->private)
+		return len;
+
+	if (enable) {
+		/* Add the per-service opt-in attributes. */
+		rc = sysfs_create_group(&dev->kobj, &dax_kmem_private_group);
+		if (rc)
+			return rc;
+		data->private = true;
+	} else {
+		sysfs_remove_group(&dev->kobj, &dax_kmem_private_group);
+		data->private = false;
+	}
+
+	return len;
+}
+static DEVICE_ATTR_RW(private);
+
 static ssize_t dax_file_show(struct device *dev, struct device_attribute *attr,
 			     char *buf)
 {
@@ -530,6 +594,14 @@ static ssize_t dax_file_store(struct device *dev, struct device_attribute *attr,
 	return len;
 }
 static DEVICE_ATTR_RW(dax_file);
+
+/* Per-service opt-ins. Visibility toggled by 'private' control */
+static struct attribute *dax_kmem_private_attrs[] = {
+	NULL,
+};
+static const struct attribute_group dax_kmem_private_group = {
+	.attrs = dax_kmem_private_attrs,
+};
 
 static int dev_dax_kmem_probe(struct dev_dax *dev_dax)
 {
@@ -601,6 +673,7 @@ static int dev_dax_kmem_probe(struct dev_dax *dev_dax)
 	data->mgid = rc;
 	data->numa_node = numa_node;
 	data->state = DAX_KMEM_UNPLUGGED;
+	data->np.owner = data;
 	mutex_init(&data->lock);
 
 	dev_set_drvdata(dev, data);
@@ -668,6 +741,9 @@ static void dev_dax_kmem_remove(struct dev_dax *dev_dax)
 	struct device *dev = &dev_dax->dev;
 	struct dax_kmem_data *data = dev_get_drvdata(dev);
 
+	if (data->private)
+		sysfs_remove_group(&dev->kobj, &dax_kmem_private_group);
+
 	/* If enabled, clean up the dax-file char device configuration. */
 	if (data->dax_file) {
 		kmem_dax_file_cdev_del(dev_dax);
@@ -707,7 +783,11 @@ static void dev_dax_kmem_remove(struct dev_dax *dev_dax)
 #else
 static void dev_dax_kmem_remove(struct dev_dax *dev_dax)
 {
-	struct dax_kmem_data *data = dev_get_drvdata(&dev_dax->dev);
+	struct device *dev = &dev_dax->dev;
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+
+	if (data && data->private)
+		sysfs_remove_group(&dev->kobj, &dax_kmem_private_group);
 
 	/* If enabled, clean up the dax-file char device configuration. */
 	if (data && data->dax_file) {
@@ -732,6 +812,7 @@ static DEVICE_ATTR_RW(state);
 static struct attribute *dev_dax_kmem_attrs[] = {
 	&dev_attr_state.attr,
 	&dev_attr_dax_file.attr,
+	&dev_attr_private.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(dev_dax_kmem);
