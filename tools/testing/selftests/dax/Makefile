@@ -16,5 +16,6 @@ TEST_PROGS += private_node_compaction.sh
 TEST_PROGS += private_node_cpuset_default_open.sh
 TEST_PROGS += private_node_mbind.sh
 TEST_PROGS += private_node_mempolicy.sh
+TEST_PROGS += private_node_mempolicy_rebind.sh
 
 include ../lib.mk
