@@ -17,5 +17,6 @@ TEST_PROGS += private_node_cpuset_default_open.sh
 TEST_PROGS += private_node_mbind.sh
 TEST_PROGS += private_node_mempolicy.sh
 TEST_PROGS += private_node_mempolicy_rebind.sh
+TEST_PROGS += private_node_move_pages.sh
 
 include ../lib.mk
