@@ -13,5 +13,6 @@ TEST_PROGS += private_node_ltpin.sh
 TEST_PROGS += private_node_pressure.sh
 TEST_PROGS += private_node_reclaim.sh
 TEST_PROGS += private_node_compaction.sh
+TEST_PROGS += private_node_cpuset_default_open.sh
 
 include ../lib.mk
