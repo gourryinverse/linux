@@ -12,5 +12,6 @@ TEST_PROGS += private_node_isolation.sh
 TEST_PROGS += private_node_ltpin.sh
 TEST_PROGS += private_node_pressure.sh
 TEST_PROGS += private_node_reclaim.sh
+TEST_PROGS += private_node_compaction.sh
 
 include ../lib.mk
