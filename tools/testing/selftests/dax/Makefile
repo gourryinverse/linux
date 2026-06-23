@@ -24,5 +24,6 @@ TEST_PROGS += private_node_hotplug_transitions.sh
 TEST_PROGS += private_node_observability.sh
 TEST_PROGS += private_node_thp.sh
 TEST_PROGS += private_node_pagetables.sh
+TEST_PROGS += private_node_adistance.sh
 
 include ../lib.mk
