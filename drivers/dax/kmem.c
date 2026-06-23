@@ -51,6 +51,7 @@ struct dax_kmem_data {
 	int numa_node;
 	int state;
 	struct mutex lock; /* protects hotplug state transitions and config */
+	int adistance; /* node abstract distance */
 	bool dax_file; /* when set, cdev allows mmap */
 	struct mempolicy *policy; /* device-lifetime bind for dax-file mmap */
 	bool private; /* when set, memory is onlined as N_MEMORY_PRIVATE */
@@ -66,6 +67,27 @@ static struct memory_dev_type *kmem_find_alloc_memory_type(int adist)
 {
 	guard(mutex)(&kmem_memory_type_lock);
 	return mt_find_alloc_memory_type(adist, &kmem_memory_types);
+}
+
+/*
+ * Re-register the node's memory type at given abstract distance, refined
+ * by the platform algorithm.  This lets us move nodes to different memory
+ * tiers for testing and if the node does not have static perf data.
+ *
+ * Caller holds data->lock, and device must be in unplugged state.
+ */
+static int kmem_set_adistance(struct dax_kmem_data *data, int adist)
+{
+	struct memory_dev_type *memtype;
+
+	mt_calc_adistance(data->numa_node, &adist);
+	memtype = kmem_find_alloc_memory_type(adist);
+	if (IS_ERR(memtype))
+		return PTR_ERR(memtype);
+	clear_node_memory_type(data->numa_node, NULL);
+	init_node_memory_type(data->numa_node, memtype);
+	data->adistance = adist;
+	return 0;
 }
 
 static void kmem_put_memory_types(void)
@@ -495,6 +517,45 @@ static ssize_t state_store(struct device *dev, struct device_attribute *attr,
 	return len;
 }
 
+static ssize_t adistance_show(struct device *dev, struct device_attribute *attr,
+			      char *buf)
+{
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+
+	if (!data)
+		return -ENXIO;
+	return sysfs_emit(buf, "%d\n", data->adistance);
+}
+
+static ssize_t adistance_store(struct device *dev, struct device_attribute *attr,
+			       const char *buf, size_t len)
+{
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+	int adist;
+	ssize_t rc;
+
+	if (!data)
+		return -ENXIO;
+
+	rc = kstrtoint(buf, 0, &adist);
+	if (rc)
+		return rc;
+	if (adist <= 0)
+		return -EINVAL;
+
+	guard(mutex)(&data->lock);
+
+	/* adistance only reconfigures the device while it holds no memory. */
+	if (data->state != DAX_KMEM_UNPLUGGED)
+		return -EBUSY;
+
+	rc = kmem_set_adistance(data, adist);
+	if (rc)
+		return rc;
+	return len;
+}
+static DEVICE_ATTR_RW(adistance);
+
 static const struct attribute_group dax_kmem_private_group;
 
 static ssize_t private_show(struct device *dev, struct device_attribute *attr,
@@ -528,6 +589,11 @@ static ssize_t private_store(struct device *dev, struct device_attribute *attr,
 
 	if (enable == data->private)
 		return len;
+
+	/* When toggling private, reset custom adistance to default */
+	rc = kmem_set_adistance(data, MEMTIER_DEFAULT_DAX_ADISTANCE);
+	if (rc)
+		return rc;
 
 	if (enable) {
 		/* Add the per-service opt-in attributes. */
@@ -637,6 +703,7 @@ KMEM_PRIVATE_CAP_ATTR(ltpin, NODE_PRIVATE_CAP_LTPIN);
 
 /* Per-service opt-ins. Visibility toggled by 'private' control */
 static struct attribute *dax_kmem_private_attrs[] = {
+	&dev_attr_adistance.attr,
 	&dev_attr_reclaim.attr,
 	&dev_attr_user_numa.attr,
 	&dev_attr_hotunplug.attr,
@@ -719,6 +786,7 @@ static int dev_dax_kmem_probe(struct dev_dax *dev_dax)
 	data->mgid = rc;
 	data->numa_node = numa_node;
 	data->state = DAX_KMEM_UNPLUGGED;
+	data->adistance = adist;
 	data->np.owner = data;
 	mutex_init(&data->lock);
 
