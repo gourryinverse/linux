@@ -19,5 +19,6 @@ TEST_PROGS += private_node_mempolicy.sh
 TEST_PROGS += private_node_mempolicy_rebind.sh
 TEST_PROGS += private_node_move_pages.sh
 TEST_PROGS += private_node_migrate_pages.sh
+TEST_PROGS += private_node_demotion.sh
 
 include ../lib.mk
