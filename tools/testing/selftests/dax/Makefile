@@ -8,5 +8,6 @@ TEST_GEN_FILES := private_node_tool
 TEST_PROGS := dax-kmem-hotplug.sh
 TEST_PROGS += dax-kmem-dax_file.sh
 TEST_PROGS += private_node_hotplug.sh
+TEST_PROGS += private_node_isolation.sh
 
 include ../lib.mk
