@@ -211,6 +211,21 @@ Description:
 		compact/reclaim risks failing higher-order (THP) allocations for
 		want of a given order; with reclaim, THP is allowed.
 
+What:		/sys/bus/dax/devices/daxX.Y/adistance
+Date:		June, 2026
+KernelVersion:	v6.21
+Contact:	nvdimm@lists.linux.dev
+Description:
+		(RW) dax_kmem "private" mode only (hidden otherwise).
+
+		Abstract distance that adjusts the placement of the private node
+		in the memory-tier hierarchy (larger is a lower tier).
+
+		May only be written while the device is "unplugged".
+		Toggling "private" resets it to the probe-time default.
+
+		No effect if CAP_DEMOTION is not also selected.
+
 What:		/sys/bus/dax/devices/daxX.Y/reclaim
 What:		/sys/bus/dax/devices/daxX.Y/user_numa
 What:		/sys/bus/dax/devices/daxX.Y/hotunplug
