@@ -1394,14 +1394,16 @@ enum {
 	 * and N_MEMORY_PRIVATE nodes (isolated from default lists).
 	 */
 	ZONELIST_NOFALLBACK,	/* zonelist without fallback (__GFP_THISNODE) */
-	ZONELIST_PRIVATE,	/* N_MEMORY_PRIVATE access */
+	ZONELIST_PRIVATE,	/* N_MEMORY_PRIVATE access, falls back to DRAM */
+	ZONELIST_PRIVATE_NOFALLBACK, /* N_MEMORY_PRIVATE access, __GFP_THISNODE */
 #endif
 	MAX_ZONELISTS
 };
 
 #ifndef CONFIG_NUMA
-/* ZONELIST_PRIVATE is just ZONELIST_FALLBACK list when NUMA is compiled out */
-#define ZONELIST_PRIVATE	ZONELIST_FALLBACK
+/* Without NUMA only ZONELIST_FALLBACK exists so everything collapses there */
+#define ZONELIST_PRIVATE		ZONELIST_FALLBACK
+#define ZONELIST_PRIVATE_NOFALLBACK	ZONELIST_FALLBACK
 #endif
 
 /* Which zonelist an allocation should use, resolved by select_zonelist() */
@@ -1409,6 +1411,18 @@ enum alloc_zonelist {
 	ALLOC_ZONELIST_DEFAULT = 0,	/* __GFP_THISNODE based selection */
 	ALLOC_ZONELIST_PRIVATE,		/* N_MEMORY_PRIVATE node access */
 };
+
+#ifdef CONFIG_NUMA
+/*
+ * select_zonelist() indexes node_zonelists as (zlsel * 2 + __GFP_THISNODE):
+ * each alloc_zonelist family is a consecutive {fallback, nofallback} pair.
+ * Keep the two enums in lockstep so the math (and adding a family) stays free.
+ */
+static_assert(ZONELIST_FALLBACK == ALLOC_ZONELIST_DEFAULT * 2);
+static_assert(ZONELIST_NOFALLBACK == ZONELIST_FALLBACK + 1);
+static_assert(ZONELIST_PRIVATE == ALLOC_ZONELIST_PRIVATE * 2);
+static_assert(ZONELIST_PRIVATE_NOFALLBACK == ZONELIST_PRIVATE + 1);
+#endif
 
 /*
  * This struct contains information about a zone in a zonelist. It is stored

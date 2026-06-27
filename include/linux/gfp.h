@@ -219,14 +219,29 @@ static inline struct zonelist *node_zonelist(int nid, gfp_t flags)
 	return NODE_DATA(nid)->node_zonelists + gfp_zonelist(flags);
 }
 
-/* Resolve an allocation's zonelist. Defaults to gfp-based selection. */
+/*
+ * Resolve an allocation's zonelist.  Node zonelists are laid out as consecutive
+ * {fallback, nofallback} pairs, one pair per alloc_zonelist family, so the list
+ * index is the family base (zlsel * 2) plus one for __GFP_THISNODE, which
+ * selects the node-strict (nofallback) variant.  This keeps both the allocation
+ * and the reclaim it drives on @nid, and lets a new family be added without
+ * touching this function (see the static_asserts in mmzone.h).
+ */
+#ifdef CONFIG_NUMA
 static inline struct zonelist *
 select_zonelist(int nid, gfp_t flags, enum alloc_zonelist zlsel)
 {
-	if (likely(zlsel == ALLOC_ZONELIST_DEFAULT))
-		return node_zonelist(nid, flags);
-	return &NODE_DATA(nid)->node_zonelists[ZONELIST_PRIVATE];
+	int idx = zlsel * 2 + !!(flags & __GFP_THISNODE);
+
+	return &NODE_DATA(nid)->node_zonelists[idx];
 }
+#else
+static inline struct zonelist *
+select_zonelist(int nid, gfp_t flags, enum alloc_zonelist zlsel)
+{
+	return &NODE_DATA(nid)->node_zonelists[ZONELIST_FALLBACK];
+}
+#endif
 
 #ifndef HAVE_ARCH_FREE_PAGE
 static inline void arch_free_page(struct page *page, int order) { }

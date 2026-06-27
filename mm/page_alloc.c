@@ -3816,11 +3816,6 @@ retry:
 			(alloc_flags & ALLOC_CPUSET) &&
 			!__cpuset_zone_allowed(zone, gfp_mask))
 				continue;
-		/* Re-impose __GFP_THISNODE to non-default zonelists */
-		if (unlikely(ac->zlsel != ALLOC_ZONELIST_DEFAULT &&
-			     (gfp_mask & __GFP_THISNODE)) &&
-		    zone_to_nid(zone) != zonelist_node_idx(ac->preferred_zoneref))
-			continue;
 		/*
 		 * When allocating a page cache page for writing, we
 		 * want to get it from a node that is within its dirty
@@ -5808,9 +5803,25 @@ static void build_thisnode_zonelists(pg_data_t *pgdat)
 	struct zoneref *zonerefs;
 	int nr_zones = 0;
 
+	/*
+	 * NOFALLBACK: the node's own zones, but EMPTY for a private node so a
+	 * stray __GFP_THISNODE allocation can never land on it (isolation).
+	 */
 	zonerefs = pgdat->node_zonelists[ZONELIST_NOFALLBACK]._zonerefs;
 	if (!node_is_private(pgdat->node_id))
 		nr_zones = build_zonerefs_node(pgdat, zonerefs);
+	zonerefs += nr_zones;
+	zonerefs->zone = NULL;
+	zonerefs->zone_idx = 0;
+
+	/*
+	 * PRIVATE_NOFALLBACK: the node's own zones, INCLUDING a private node's --
+	 * the node-strict list for the explicit ALLOC_ZONELIST_PRIVATE +
+	 * __GFP_THISNODE opt-in.  Being node-only, it keeps the reclaim it drives
+	 * on this node too (no walk into DRAM, no DRAM->private demotion).
+	 */
+	zonerefs = pgdat->node_zonelists[ZONELIST_PRIVATE_NOFALLBACK]._zonerefs;
+	nr_zones = build_zonerefs_node(pgdat, zonerefs);
 	zonerefs += nr_zones;
 	zonerefs->zone = NULL;
 	zonerefs->zone_idx = 0;
