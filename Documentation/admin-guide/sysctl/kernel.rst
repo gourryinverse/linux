@@ -1402,6 +1402,23 @@ Note that if you change this from 0 to 1, already created segments
 without users and with a dead originative process will be destroyed.
 
 
+syscall_user_dispatch
+=====================
+
+Controls whether userspace may arm Syscall User Dispatch (SUD) via
+``prctl(PR_SET_SYSCALL_USER_DISPATCH, ...)`` or the
+``PTRACE_SET_SYSCALL_USER_DISPATCH_CONFIG`` ptrace request:
+
+  ==  ===================================================================
+  0   Arming SUD is denied with ``-EPERM``.  Tasks that already armed it
+      keep it, and disabling SUD (``PR_SYS_DISPATCH_OFF``) is always
+      permitted.
+  1   (default) Arming SUD is permitted.
+  ==  ===================================================================
+
+Only present when the kernel is built with ``CONFIG_SYSCALL_USER_DISPATCH``.
+
+
 sysctl_writes_strict
 ====================
 
