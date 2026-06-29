@@ -2644,6 +2644,28 @@ static bool numa_promotion_rate_limit(struct pglist_data *pgdat,
 	return false;
 }
 
+/**
+ * numa_promotion_rate_limited - share the NUMA-balancing promotion budget
+ * @node: destination promotion node
+ * @nr: number of pages about to be promoted
+ *
+ * For promotion that does not arrive through the NUMA hint-fault path but must
+ * still respect numa_balancing_promote_rate_limit_MBps -- e.g. device-driven
+ * promotion of device-observed hot pages (CRAM).  Accounts @nr as promotion
+ * candidates and returns true if the per-second budget is exhausted (the caller
+ * should defer the promotion).  Returns false (not limited) when memory-tiering
+ * NUMA balancing is off, so an explicit device request still proceeds.
+ */
+bool numa_promotion_rate_limited(int node, int nr)
+{
+	unsigned long rate_limit;
+
+	if (!(sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING))
+		return false;
+	rate_limit = MB_TO_PAGES(sysctl_numa_balancing_promote_rate_limit);
+	return numa_promotion_rate_limit(NODE_DATA(node), rate_limit, nr);
+}
+
 #define NUMA_MIGRATION_ADJUST_STEPS	16
 
 static void numa_promotion_adjust_threshold(struct pglist_data *pgdat,
