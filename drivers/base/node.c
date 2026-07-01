@@ -896,6 +896,11 @@ int node_private_register(int nid, struct node_private *np)
 	if (!np || !node_possible(nid))
 		return -EINVAL;
 
+	/* Demotion is driven by reclaim, so it requires reclaim. */
+	if ((np->caps & NODE_PRIVATE_CAP_DEMOTION) &&
+	    !(np->caps & NODE_PRIVATE_CAP_RECLAIM))
+		return -EINVAL;
+
 	mutex_lock(&node_private_lock);
 	mem_hotplug_begin();
 
