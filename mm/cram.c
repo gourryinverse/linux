@@ -1149,6 +1149,53 @@ static int cram_nodes_show(struct seq_file *m, void *v)
 }
 DEFINE_SHOW_ATTRIBUTE(cram_nodes);
 
+/*
+ * [TEST] deep low-level balloon/back-pressure introspection.  This is NOT the
+ * driver interface.  The real paths are the dax device's cram_compression_ratio
+ * (balloon resize) and cram_allow_allocation (admission gate).  Kept only so the
+ * writeback-to-swap and fault-latency selftests can drive the balloon / block
+ * demotions directly by nid.
+ *
+ * Commands (one per write):
+ *   inflate <nid> <nr_pages>   reserve nr_pages on the node (proactive reclaim)
+ *   deflate <nid> <nr_pages>   release nr_pages back
+ *   block <nid> / unblock <nid>  stop / resume demotions onto the node
+ */
+static ssize_t cram_control_write(struct file *file, const char __user *buf,
+				  size_t count, loff_t *ppos)
+{
+	char kbuf[64], cmd[16];
+	unsigned long n = 0;
+	int nid, ret;
+
+	if (count >= sizeof(kbuf))
+		return -EINVAL;
+	if (copy_from_user(kbuf, buf, count))
+		return -EFAULT;
+	kbuf[count] = '\0';
+
+	ret = sscanf(kbuf, "%15s %d %lu", cmd, &nid, &n);
+	if (ret < 2 || nid < 0 || nid >= MAX_NUMNODES)
+		return -EINVAL;
+
+	if (!strcmp(cmd, "inflate"))
+		cram_balloon_inflate(nid, n);
+	else if (!strcmp(cmd, "deflate"))
+		cram_balloon_deflate(nid, n);
+	else if (!strcmp(cmd, "block"))
+		cram_set_migration_blocked(nid, true);
+	else if (!strcmp(cmd, "unblock"))
+		cram_set_migration_blocked(nid, false);
+	else
+		return -EINVAL;
+
+	return count;
+}
+
+static const struct file_operations cram_control_fops = {
+	.write = cram_control_write,
+};
+
 static int __init cram_debugfs_init(void)
 {
 	struct dentry *dir;
@@ -1162,6 +1209,8 @@ static int __init cram_debugfs_init(void)
 		debugfs_create_ulong("promote_fail", 0444, dir,
 				     (unsigned long *)&cram_cnt_promote_fail);
 		debugfs_create_file("nodes", 0444, dir, NULL, &cram_nodes_fops);
+		debugfs_create_file("control", 0200, dir, NULL,
+				    &cram_control_fops);
 	}
 	return 0;
 }
