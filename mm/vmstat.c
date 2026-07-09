@@ -1285,6 +1285,8 @@ const char * const vmstat_text[] = {
 	[I(PGPROMOTE_CANDIDATE)]		= "pgpromote_candidate",
 	[I(PGPROMOTE_CANDIDATE_NRL)]		= "pgpromote_candidate_nrl",
 #endif
+	[I(PGPROMOTE_FENCE)]			= "pgpromote_fence",
+	[I(PGPROMOTE_FENCE_FAILED)]		= "pgpromote_fence_failed",
 	[I(PGCONTIG_RECLAIM)]			= "pgcontig_reclaim",
 	[I(PGCONTIG_OOM)]			= "pgcontig_oom",
 	[I(PGDEMOTE_KSWAPD)]			= "pgdemote_kswapd",

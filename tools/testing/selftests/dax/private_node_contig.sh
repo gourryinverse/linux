@@ -166,7 +166,7 @@ NR_NODE=$(find_noreclaim_node)
 NR_PFN=$([ -n "$NR_NODE" ] && node_first_pfn "$NR_NODE")
 
 if [ -z "$NR_NODE" ] || [ -z "$NR_PFN" ]; then
-	ktap_test_skip "3 no private node without FEAT_RECLAIM (boot one with private_node=<nid>,0x100)"
+	ktap_test_skip "3 no private node without FEAT_RECLAIM (boot one with private_node=<nid>,0x180)"
 else
 	NR_TOTAL_KB=$(sed -n 's/^Node '"$NR_NODE"' MemTotal: *\([0-9]*\) kB/\1/p' \
 		      "$NODE_BASE/node$NR_NODE/meminfo")

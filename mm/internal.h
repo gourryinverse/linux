@@ -1655,6 +1655,37 @@ static inline bool can_spin_trylock(void)
 	return true;
 }
 
+/*
+ * The write fence's relief half (mm/migrate.c).  Anon folios promote off a
+ * fenced node through the core COW path, which needs nothing extra; page cache
+ * has no such path, so the gates that would hand a writer a fenced folio call
+ * this and retry.
+ */
+int nearest_public_node(int nid);
+bool drain_and_isolate_folio(struct folio *folio, struct list_head *list);
+int migrate_folio_to_node(struct folio *folio, int dst_nid);
+int promote_fenced_folio(struct address_space *mapping, pgoff_t index,
+			 bool nowait);
+
+/**
+ * folio_placement_eligible() - is @folio the kind of folio node @nid takes?
+ * @nid: the node the folio would be placed on
+ * @folio: the folio being migrated
+ *
+ * A write-fenced node maps its folios read-only, so only a folio with a route
+ * out of that mapping on its first write may live there.  Anon has one: the
+ * write faults, folio_must_cow() refuses to reuse the folio, and the COW lands
+ * on a public node.  Nothing else does, so nothing else is accepted.
+ *
+ * Asked twice: at allocation, before the destination is written, so an
+ * ineligible folio never reaches the device; and again at the migration commit
+ * point, where the source folio is locked and about to be frozen.
+ */
+static inline bool folio_placement_eligible(int nid, struct folio *folio)
+{
+	return !node_write_fenced(nid) || folio_test_anon(folio);
+}
+
 /* char-mem.c */
 bool file_is_dev_zero(const struct file *file);
 

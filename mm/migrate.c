@@ -589,6 +589,16 @@ static int __folio_migrate_mapping(struct address_space *mapping,
 	int dirty;
 	long nr = folio_nr_pages(folio);
 
+	/*
+	 * Refuse a migration whose destination node cannot accept the folio.
+	 * A write-fenced node takes a page-cache folio only when it is still
+	 * safe to drop and refault.  Tested with the source folio locked and
+	 * about to be frozen, so the state is stable; a refused migration
+	 * returns -EBUSY and the caller falls back to normal reclaim.
+	 */
+	if (!folio_placement_eligible(folio_nid(newfolio), folio))
+		return -EBUSY;
+
 	if (!mapping) {
 		/* Take off deferred split queue while frozen and memcg set */
 		if (folio_test_large(folio) &&
@@ -2230,6 +2240,154 @@ struct folio *alloc_migration_target(struct folio *src, unsigned long private)
 		gfp_mask |= __GFP_HIGHMEM;
 
 	return __folio_alloc(gfp_mask, order, nid, mtc->nmask, mtc->alloc_flags);
+}
+
+/**
+ * nearest_public_node() - closest node a folio on @nid can be promoted to
+ * @nid: the node being promoted off
+ *
+ * Ask N_MEMORY_PUBLIC, not N_MEMORY.  A private node is a member of N_MEMORY -
+ * isolation is the zonelist, not the node state - so a walk of N_MEMORY
+ * includes @nid itself, and node_distance(nid, nid) is LOCAL_DISTANCE, the
+ * smallest value there is.  It would win every time and the promotion would
+ * target the node it is trying to leave.  The public set also excludes other
+ * private nodes, which are equally wrong as a destination.
+ *
+ * Return: a public node id, or NUMA_NO_NODE if the system has none.
+ */
+int nearest_public_node(int nid)
+{
+	int best = NUMA_NO_NODE, best_dist = INT_MAX, n;
+
+	for_each_node_state(n, N_MEMORY_PUBLIC) {
+		int dist = node_distance(nid, n);
+
+		if (dist < best_dist) {
+			best_dist = dist;
+			best = n;
+		}
+	}
+	return best;
+}
+
+/**
+ * drain_and_isolate_folio() - isolate @folio for migration, draining first
+ * @folio: the folio to isolate; the caller must hold a reference
+ * @list: list to put it on
+ *
+ * isolate_folio_to_list() with the drain a just-moved folio needs: demoted or
+ * faulted moments ago, it is still on a per-cpu LRU add-batch, so isolation
+ * fails -- and on a tier whose folios are all freshly placed, always.  Drain
+ * this cpu first; on a miss the work ran elsewhere, so drain all rather than
+ * guess at a retry count.
+ *
+ * Return: true if @folio is now on @list.
+ */
+bool drain_and_isolate_folio(struct folio *folio, struct list_head *list)
+{
+	if (!folio_test_lru(folio)) {
+		lru_add_drain();
+		if (!folio_test_lru(folio))
+			lru_add_drain_all();
+	}
+	return isolate_folio_to_list(folio, list);
+}
+
+/**
+ * migrate_folio_to_node() - move one folio to @dst_nid, synchronously
+ * @folio: the folio to move.  The caller's reference is consumed either way.
+ * @dst_nid: destination node
+ *
+ * Return: 0 on success, -EAGAIN if the folio could not be isolated or the
+ * migration did not complete.  Both are transient.
+ */
+int migrate_folio_to_node(struct folio *folio, int dst_nid)
+{
+	struct migration_target_control mtc = {
+		.nid = dst_nid,
+		.gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_NOWARN,
+		.reason = MR_NUMA_MISPLACED,
+	};
+	LIST_HEAD(list);
+	int ret;
+
+	if (!drain_and_isolate_folio(folio, &list)) {
+		/* Concurrently isolated by reclaim or compaction. */
+		folio_put(folio);
+		return -EAGAIN;
+	}
+	folio_put(folio);	/* migrate_pages() works off the isolation ref */
+
+	ret = migrate_pages(&list, alloc_migration_target, NULL,
+			    (unsigned long)&mtc, MIGRATE_SYNC, MR_NUMA_MISPLACED,
+			    NULL);
+	if (ret && !list_empty(&list))
+		putback_movable_pages(&list);
+
+	return ret ? -EAGAIN : 0;
+}
+
+/**
+ * promote_fenced_folio() - move a page-cache folio off a write-fenced node
+ * @mapping: the folio's address space
+ * @index: its index within @mapping
+ * @nowait: caller cannot block
+ *
+ * A node that withholds NODE_MEMORY_FEAT_USER_WRITE maps its folios read-only,
+ * so anything that would write one has to move it off first.  This is the
+ * relief half of that contract, and it is deliberately not a per-node
+ * operation: the required behaviour is fixed - get the folio somewhere
+ * writable - so there is no policy for a service to supply.  Enforcement
+ * (node_write_fenced()) and relief therefore key the same predicate, which is
+ * what lets a second fenced service work without any core change.
+ *
+ * Raw lookup on purpose: filemap_get_folio() routes through the acquire gate,
+ * which calls back here.
+ *
+ * Return: 0 if nothing is fenced at @index or the folio was moved, -EAGAIN if
+ * the caller should retry.  Failure is always transient - a fenced node cannot
+ * hold long-term pins - so a blocking caller may loop.
+ */
+int promote_fenced_folio(struct address_space *mapping, pgoff_t index,
+			 bool nowait)
+{
+	struct folio *folio;
+	long nr;
+	int ret, src, dst;
+
+	folio = filemap_get_entry(mapping, index);
+	if (!folio || xa_is_value(folio))
+		return 0;		/* gone / shadow entry: nothing resident */
+	src = folio_nid(folio);
+	if (!node_write_fenced(src)) {
+		folio_put(folio);
+		return 0;		/* already promoted by a racer */
+	}
+	if (nowait) {
+		folio_put(folio);
+		return -EAGAIN;		/* migration may block */
+	}
+
+	/*
+	 * Prefer the accessing CPU's node, but do not assume it is usable: a
+	 * fenced node is not required to be CPU-less, and promoting onto
+	 * another fenced node would fault straight back here.
+	 */
+	dst = numa_node_id();
+	if (!node_state(dst, N_MEMORY_PUBLIC))
+		dst = nearest_public_node(src);
+	if (dst == NUMA_NO_NODE) {
+		folio_put(folio);
+		return -EAGAIN;
+	}
+
+	/* Read before the migrate: it consumes the reference. */
+	nr = folio_nr_pages(folio);
+
+	ret = migrate_folio_to_node(folio, dst);
+	mod_node_page_state(NODE_DATA(src),
+			    ret ? PGPROMOTE_FENCE_FAILED : PGPROMOTE_FENCE, nr);
+	return ret;
 }
 
 #ifdef CONFIG_NUMA_MIGRATION

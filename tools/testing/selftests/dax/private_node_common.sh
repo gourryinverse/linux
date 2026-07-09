@@ -382,6 +382,12 @@ pn_require_dax() {
 }
 
 # Feature bit values, matching include/linux/nodemask.h.
+#
+# The kernel does not publish these, so the table is a copy and goes stale
+# silently: a wrong value still names SOME bit, so selection keeps working and
+# hands back a node of the wrong class.  Symptom is never "no such feature",
+# always a test failing on a node that should not have been selected.
+#
 # Every defined bit; what a public node reports.
 PN_FEAT_ALL=391		# 0x187, all currently defined bits
 

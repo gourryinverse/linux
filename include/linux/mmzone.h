@@ -311,6 +311,15 @@ enum node_stat_item {
 	PGPROMOTE_CANDIDATE_NRL,
 #endif
 	/*
+	 * Folios moved off a write-fenced node because something had to write
+	 * them.  Counted on the SOURCE node: the number worth watching is how
+	 * much traffic a fenced tier is shedding.  Outside the NUMA balancing
+	 * counters above on purpose - the write fence is a correctness
+	 * obligation and runs whether or not balancing is enabled.
+	 */
+	PGPROMOTE_FENCE,
+	PGPROMOTE_FENCE_FAILED,
+	/*
 	 * alloc_contig_range() escalating past migration to get a range back:
 	 * pages evicted under ACR_FLAGS_RECLAIM, and kills issued under
 	 * ACR_FLAGS_OOM.  Counted on the range's node, which is the one whose

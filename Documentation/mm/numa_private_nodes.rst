@@ -206,6 +206,13 @@ the driver's behalf:
    * - ``NODE_MEMORY_FEAT_DEMOTION``
      - reclaim-driven tiering demotion onto the node (the node joins the
        demotion hierarchy)
+   * - ``NODE_MEMORY_FEAT_USER_WRITE``
+     - userspace writing the node's folios in place.  Withheld by a read-only
+       tier: its folios map read-only, a user write relocates the folio to a
+       node that grants the feature, and reclaim drops clean file folios
+       instead of writing them back.  The kernel still writes such folios
+       itself: migration installs their content and kswapd dirties anon folios
+       on the swap-out path.
 
 ``NODE_MEMORY_FEAT_PUBLIC`` is what makes a node ordinary: a node with it
 set holds every feature, and its absence is what makes a node private.

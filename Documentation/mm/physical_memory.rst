@@ -181,10 +181,11 @@ nodes with particular properties as defined by ``enum node_states``:
   The node has one or more Generic Initiators
 
 The remaining ``N_MEMORY_*`` states describe the operations a private node may
-support: reclaim, demotion and userspace NUMA placement.  All are subsets of
-``N_MEMORY``, and ``N_MEMORY_PUBLIC`` implies every one of them, so an ordinary
-node has them all.  A node with memory but without ``N_MEMORY_PUBLIC`` is a
-private node, described in Documentation/mm/numa_private_nodes.rst.
+support: reclaim, demotion, userspace NUMA placement and in-place userspace
+writes.  All are subsets of ``N_MEMORY``, and ``N_MEMORY_PUBLIC`` implies every
+one of them, so an ordinary node has them all.  A node with memory but without
+``N_MEMORY_PUBLIC`` is a private node, described in
+Documentation/mm/numa_private_nodes.rst.
 
 For each node that has a property described above, the bit corresponding to the
 node ID in the ``node_states[<property>]`` bitmask is set.

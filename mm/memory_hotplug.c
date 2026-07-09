@@ -1165,6 +1165,21 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 			 !IS_ALIGNED(pfn + nr_pages, PAGES_PER_SECTION)))
 		return -EINVAL;
 
+	/*
+	 * A write-fenced node must be movable.  Withholding USER_WRITE means a
+	 * write relocates the folio; a kernel zone is where the things that
+	 * cannot be relocated live, including the long-term GUP pins that gup
+	 * migrates away only for ZONE_MOVABLE folios.  Refuse the combination
+	 * rather than let the fence own memory it cannot move.
+	 *
+	 * Read the claimed mask rather than node_write_fenced(): the N_MEMORY_*
+	 * states are published further down in this function, so on a node's
+	 * first online they are not set yet and every node would read as fenced.
+	 */
+	if (!(READ_ONCE(NODE_DATA(nid)->memory_features) &
+	      NODE_MEMORY_FEAT_USER_WRITE) && zone_idx(zone) != ZONE_MOVABLE)
+		return -EINVAL;
+
 
 	/* associate pfn range with the zone */
 	move_pfn_range_to_zone(zone, pfn, nr_pages, NULL, MIGRATE_MOVABLE,
@@ -1726,6 +1741,18 @@ int __add_memory_driver_managed(int nid, u64 start, u64 size,
 	if (!resource_name ||
 	    strstr(resource_name, "System RAM (") != resource_name ||
 	    resource_name[strlen(resource_name) - 1] != ')')
+		return -EINVAL;
+
+	/*
+	 * Refuse a write fence into a kernel zone here, where nothing has been
+	 * added yet.  online_pages() enforces the same rule for whatever zone is
+	 * finally chosen, but it runs per memory block: by the time it refuses
+	 * the first one the driver has already added the range, and the caller
+	 * is left to unwind a half-onlined device.  Saying no to the stated
+	 * intent up front keeps the failure atomic.
+	 */
+	if (online_type == MMOP_ONLINE_KERNEL &&
+	    !(features & NODE_MEMORY_FEAT_USER_WRITE))
 		return -EINVAL;
 
 	if (online_type < MMOP_OFFLINE || online_type > MMOP_ONLINE_MOVABLE)

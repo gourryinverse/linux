@@ -409,6 +409,7 @@ enum node_states {
 	N_MEMORY_RECLAIM,	/* mm reclaim may operate on the node */
 	N_MEMORY_DEMOTION,	/* tiering may demote to the node */
 	N_MEMORY_USER_NUMA,	/* userspace NUMA placement may target the node */
+	N_MEMORY_USER_WRITE,	/* userspace may write these folios in place */
 	N_CPU,		/* The node has one or more cpus */
 	N_GENERIC_INITIATOR,	/* The node has one or more Generic Initiators */
 	NR_NODE_STATES
@@ -539,11 +540,13 @@ static __always_inline int node_random(const nodemask_t *maskp)
 #define NODE_MEMORY_FEAT_RECLAIM	(1UL << 1) /* mm reclaim */
 #define NODE_MEMORY_FEAT_DEMOTION	(1UL << 2) /* reclaim demotion */
 #define NODE_MEMORY_FEAT_USER_NUMA	(1UL << 7) /* userspace NUMA controls */
+#define NODE_MEMORY_FEAT_USER_WRITE	(1UL << 8) /* user in-place writes */
 #define NODE_MEMORY_FEAT_ALL		(~0UL)
 #define NODE_MEMORY_FEAT_VALID		(NODE_MEMORY_FEAT_PUBLIC | \
 					 NODE_MEMORY_FEAT_RECLAIM | \
 					 NODE_MEMORY_FEAT_DEMOTION | \
-					 NODE_MEMORY_FEAT_USER_NUMA)
+					 NODE_MEMORY_FEAT_USER_NUMA | \
+					 NODE_MEMORY_FEAT_USER_WRITE)
 
 static inline void node_set_memory_state(int nid, bool high, bool normal,
 		unsigned long features)
@@ -565,16 +568,36 @@ static inline void node_set_memory_state(int nid, bool high, bool normal,
 		node_set_state(nid, N_MEMORY_DEMOTION);
 	if (features & NODE_MEMORY_FEAT_USER_NUMA)
 		node_set_state(nid, N_MEMORY_USER_NUMA);
+	if (features & NODE_MEMORY_FEAT_USER_WRITE)
+		node_set_state(nid, N_MEMORY_USER_WRITE);
 }
 
 static __always_inline void node_clear_memory_state(int nid)
 {
+	node_clear_state(nid, N_MEMORY_USER_WRITE);
 	node_clear_state(nid, N_MEMORY_USER_NUMA);
 	node_clear_state(nid, N_MEMORY_DEMOTION);
 	node_clear_state(nid, N_MEMORY_RECLAIM);
 	node_clear_state(nid, N_MEMORY_PUBLIC);
 	node_clear_state(nid, N_NORMAL_MEMORY);
 	node_clear_state(nid, N_MEMORY);
+}
+
+/**
+ * node_write_fenced - must a write to a folio on this node relocate it?
+ * @nid: the node to test
+ *
+ * A node that withholds %NODE_MEMORY_FEAT_USER_WRITE (e.g. a read-only
+ * compressed tier) maps its folios read-only; a userspace write must move the
+ * folio to a node that grants the feature rather than reuse it in place.  The
+ * kernel still writes such folios itself: migration installs their content and
+ * kswapd dirties anon folios on the swap-out path.  Consumed by the write
+ * fault reuse predicate (folio_must_cow()) and the migration re-install
+ * helpers.
+ */
+static __always_inline bool node_write_fenced(int nid)
+{
+	return !node_state(nid, N_MEMORY_USER_WRITE);
 }
 
 /*

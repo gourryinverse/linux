@@ -1807,6 +1807,25 @@ static void __init node_claim_private(int nid, bool has_memory)
 		goto warn;
 	}
 
+	/*
+	 * A write fence needs every folio on the node to be relocatable: a write
+	 * must be able to move the folio off.  A kernel zone is precisely where
+	 * things that cannot move end up -- unmovable kernel allocations, and the
+	 * long-term GUP pins that gup only migrates away when the folio sits in
+	 * ZONE_MOVABLE.  Give a fence a kernel zone and it acquires content it
+	 * can never relocate, so the write lands in place and the fence is a
+	 * fiction.  Boot memory is kernel-zoned unless kernelcore/movablecore say
+	 * otherwise, so in practice this refuses private_node= fences; a device
+	 * node onlined movable is the supported way to have one.
+	 */
+	if (!(features & NODE_MEMORY_FEAT_USER_WRITE) &&
+	    NODE_DATA(nid)->node_present_pages !=
+	    NODE_DATA(nid)->node_zones[ZONE_MOVABLE].present_pages) {
+		pr_warn("private_node: node %d withholds USER_WRITE but is not movable-only\n",
+			nid);
+		goto warn;
+	}
+
 	if (node_features_register(nid, features))
 		goto warn;
 
