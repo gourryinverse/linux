@@ -2047,4 +2047,42 @@ static inline int get_sysctl_max_map_count(void)
 bool may_expand_vm(struct mm_struct *mm, const vma_flags_t *vma_flags,
 		   unsigned long npages);
 
+/**
+ * node_placement_check() - may @folio be migrated onto node @nid?
+ * @nid: the node the folio would be placed on
+ * @folio: the folio being migrated
+ *
+ * Placement dispatch for the per-node POLICY set.  A folio may live on a private
+ * node only if it satisfies every placement-relevant POLICY that node enforces.
+ * This switches on POLICY bits and the checks are never driver-provided, so it
+ * is kernel-internal by construction.  Add a block per placement-relevant
+ * POLICY.  A normal or policy-free node accepts anything.
+ *
+ * Checked at the migration commit point, with the source folio locked and about
+ * to be frozen, so the mutable folio state tested here is stable and a folio
+ * that has become ineligible cannot be committed onto the node.
+ */
+static inline bool node_placement_check(int nid, struct folio *folio)
+{
+	/*
+	 * WRITE_FENCE: the node maps folios read-only and drops clean FILE folios
+	 * on reclaim, re-reading them from the fs.  A file folio may be placed here
+	 * only if it is safe to drop and refault.  It must be clean and not under
+	 * writeback, else a dropped dirty folio loses data since the node has no
+	 * in-place write path.  It must be uptodate, else it is not re-readable to
+	 * serve the drop.  It must be evictable, else an mlocked folio can never be
+	 * dropped and would be stranded.  Anon folios are swapped out under pressure,
+	 * not dropped, so they are exempt.
+	 */
+	if (node_write_fenced(nid)) {
+		if (folio_test_swapbacked(folio))
+			return true;
+		return folio_test_uptodate(folio) && folio_evictable(folio) &&
+		       !folio_test_dirty(folio) && !folio_test_writeback(folio);
+	}
+
+	/* add a block per placement-relevant POLICY */
+	return true;
+}
+
 #endif	/* __MM_INTERNAL_H */

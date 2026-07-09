@@ -577,6 +577,16 @@ static int __folio_migrate_mapping(struct address_space *mapping,
 	int dirty;
 	long nr = folio_nr_pages(folio);
 
+	/*
+	 * Refuse a migration whose destination node policy cannot accept the
+	 * folio.  A write-fenced node takes a clean file folio only when it is
+	 * still safe to drop and refault.  Tested with the source folio locked and
+	 * about to be frozen, so the state is stable; a refused migration returns
+	 * -EBUSY and the caller falls back to normal reclaim.
+	 */
+	if (!node_placement_check(folio_nid(newfolio), folio))
+		return -EBUSY;
+
 	if (!mapping) {
 		/* Take off deferred split queue while frozen and memcg set */
 		if (folio_test_large(folio) &&
