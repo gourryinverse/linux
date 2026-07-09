@@ -2708,6 +2708,7 @@ static int filemap_get_pages(struct kiocb *iocb, size_t count,
 	pgoff_t last_index;
 	struct folio *folio;
 	unsigned int flags;
+	unsigned int i;
 	int err = 0;
 
 	/* "last_index" is the index of the folio beyond the end of the read */
@@ -2737,6 +2738,45 @@ retry:
 		if (err == AOP_TRUNCATED_PAGE)
 			goto retry;
 		return err;
+	}
+
+	/*
+	 * File-CRAM read serving.  A pure buffered read (need_uptodate == false,
+	 * from filemap_read()) copies out via copy_folio_to_iter() and drops the
+	 * ref.  It neither stores to nor long-term-pins the folio, so a resident
+	 * CRAM folio is served in place with no fence: the device read preserves
+	 * tier density.  Splice (need_uptodate == true, filemap_splice_read()) parks
+	 * the folio in a pipe buffer for an unbounded time.  That is a long-term pin
+	 * that would break the CRAM never-long-term-pinned invariant, so it still
+	 * promotes the folio off the tier here.  write(2) is unaffected: it acquires
+	 * via __filemap_get_folio(FGP_WRITE) and promotes at that acquire gate, not
+	 * on this xarray fast path.  Promotion failure is transient (isolate/migrate
+	 * race), so a blocking caller retries.  NOWAIT/NOIO gets -EAGAIN rather than
+	 * a served un-promoted folio.
+	 */
+	for (i = 0; need_uptodate && i < folio_batch_count(fbatch); i++) {
+		pgoff_t cram_index;
+
+		folio = fbatch->folios[i];
+		if (likely(!folio_is_cram(folio)))
+			continue;
+		cram_index = folio->index;
+		folio_batch_release(fbatch);
+		folio_batch_init(fbatch);
+		/*
+		 * Promote failure is transient (isolate/migrate race).  A NOWAIT/NOIO
+		 * caller opted out of blocking, so propagate -EAGAIN.  A blocking read()
+		 * must not see a spurious -EAGAIN, so retry via the loop.  It converges
+		 * because CRAM folios are never long-term pinned, and
+		 * fatal_signal_pending at the retry label keeps it killable.
+		 */
+		if (cram_promote_pagecache(mapping, cram_index,
+				iocb->ki_flags & (IOCB_NOWAIT | IOCB_NOIO))) {
+			if (iocb->ki_flags & (IOCB_NOWAIT | IOCB_NOIO))
+				return -EAGAIN;
+			cond_resched();
+		}
+		goto retry;
 	}
 
 	folio = fbatch->folios[folio_batch_count(fbatch) - 1];
@@ -3574,6 +3614,15 @@ vm_fault_t filemap_fault(struct vm_fault *vmf)
 	struct folio *folio;
 	vm_fault_t ret = 0;
 	bool mapping_locked = false;
+	/*
+	 * File-CRAM write fence.  A shared write fault must not map the CRAM folio
+	 * in place, because do_shared_fault()'s page_mkwrite() would dirty it before
+	 * the store re-faults into the wp promote.  Signal write intent so the CRAM
+	 * folio is promoted off the tier first.  A private (COW) write only reads
+	 * the CRAM folio, so it stays exempt and is mapped read-only in place.
+	 */
+	fgf_t fgp_wr = ((vmf->flags & FAULT_FLAG_WRITE) &&
+			(vmf->vma->vm_flags & VM_SHARED)) ? FGP_WRITE : 0;
 
 	max_idx = DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE);
 	if (unlikely(index >= max_idx))
@@ -3582,9 +3631,11 @@ vm_fault_t filemap_fault(struct vm_fault *vmf)
 	trace_mm_filemap_fault(mapping, index);
 
 	/*
-	 * Do we have something in the page cache already?
+	 * Do we have something in the page cache already?  FGP_FOR_MMAP marks this
+	 * as the fault path.  A CRAM folio is mapped read-only in place rather than
+	 * promoted, because the file-CRAM write fence exempts an mmap read fault.
 	 */
-	folio = filemap_get_folio(mapping, index);
+	folio = __filemap_get_folio(mapping, index, FGP_FOR_MMAP | fgp_wr, 0);
 	if (likely(!IS_ERR(folio))) {
 		/*
 		 * We found the page, so try async readahead before waiting for
@@ -3616,7 +3667,7 @@ retry_find:
 			mapping_locked = true;
 		}
 		folio = __filemap_get_folio(mapping, index,
-					  FGP_CREAT|FGP_FOR_MMAP,
+					  FGP_CREAT|FGP_FOR_MMAP|fgp_wr,
 					  vmf->gfp_mask);
 		if (IS_ERR(folio)) {
 			if (fpin)
