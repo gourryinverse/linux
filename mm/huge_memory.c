@@ -2106,6 +2106,17 @@ vm_fault_t do_huge_pmd_wp_page(struct vm_fault *vmf)
 	folio = page_folio(page);
 	VM_BUG_ON_PAGE(!PageHead(page), page);
 
+	/*
+	 * A folio that must COW on write cannot be reused in place.  Split the
+	 * PMD and retry so the per-PTE write fault COW-promotes via
+	 * wp_page_copy().  This covers the CRAM read-only tier; KSM is never a
+	 * THP.
+	 */
+	if (folio_must_cow(folio)) {
+		spin_unlock(vmf->ptl);
+		goto fallback;
+	}
+
 	/* Early check when only holding the PT lock. */
 	if (PageAnonExclusive(page))
 		goto reuse;

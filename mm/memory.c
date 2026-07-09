@@ -4286,6 +4286,22 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 		folio = page_folio(vmf->page);
 
 	/*
+	 * An anon folio that must COW on write is never reused writable in place.
+	 * This covers KSM folios and write-fenced nodes such as a CRAM read-only
+	 * tier.  The reuse condition below is gated on folio_must_cow(), so such a
+	 * folio always reaches wp_page_copy() instead.  A write-fenced folio is also
+	 * kept non-exclusive at migrate-in, so it should never be AnonExclusive.  The
+	 * reuse gate does not rely on that, but VM_WARN if a future exclusivity setter
+	 * regresses it, which would map a device with no write path writable.  The
+	 * folio_test_anon() guard is mandatory: PageAnonExclusive() VM_BUG_ONs on a
+	 * file folio, and a resident file CRAM folio reaches wp via wp_page_shared()
+	 * (promote), not the anon reuse path.
+	 */
+	VM_WARN_ON_FOLIO(folio && folio_test_anon(folio) &&
+			 node_write_fenced(folio_nid(folio)) &&
+			 PageAnonExclusive(vmf->page), folio);
+
+	/*
 	 * Shared mapping: we are guaranteed to have VM_WRITE and
 	 * FAULT_FLAG_WRITE set at this point.
 	 */
@@ -4309,9 +4325,11 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 	 * is impossible. We might miss VM_WRITE for FOLL_FORCE handling.
 	 *
 	 * If we encounter a page that is marked exclusive, we must reuse
-	 * the page without further checks.
+	 * the page without further checks.  KSM folios and folios on a write-fenced
+	 * node such as a CRAM read-only tier must COW on write, and can never be
+	 * reused writable in place.
 	 */
-	if (folio && folio_test_anon(folio) &&
+	if (folio && folio_test_anon(folio) && !folio_must_cow(folio) &&
 	    (PageAnonExclusive(vmf->page) || wp_can_reuse_anon_folio(folio, vma))) {
 		if (!PageAnonExclusive(vmf->page))
 			SetPageAnonExclusive(vmf->page);

@@ -2047,6 +2047,30 @@ static inline int get_sysctl_max_map_count(void)
 bool may_expand_vm(struct mm_struct *mm, const vma_flags_t *vma_flags,
 		   unsigned long npages);
 
+/*
+ * The write-fault helpers below fence writes to folios on a POLICY_WRITE_FENCE
+ * node.  See node_write_fenced() in <linux/node_private.h>.  Such folios map
+ * read-only, and a write must COW-promote them off-node.  CRAM is one such node
+ * type.  Its tier hooks folio_is_cram() and demote/promote live in
+ * <linux/cram.h>.
+ */
+#include <linux/cram.h>
+
+/**
+ * folio_must_cow() - must a write to this anon folio COW instead of reuse?
+ * @folio: the anon folio a write faults on
+ *
+ * Groups the folio kinds that force copy-on-write for different reasons.  KSM
+ * pages are write-protected shared dedup pages.  Folios on a write-fenced node
+ * live on a read-only device tier such as CRAM, so a write must promote them
+ * off-node.  Used by the write-fault reuse predicates.  It is not a substitute
+ * for folio_test_ksm() at KSM-specific sites such as rmap, swapin and migration.
+ */
+static inline bool folio_must_cow(struct folio *folio)
+{
+	return folio_test_ksm(folio) || node_write_fenced(folio_nid(folio));
+}
+
 /**
  * node_placement_check() - may @folio be migrated onto node @nid?
  * @nid: the node the folio would be placed on
