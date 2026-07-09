@@ -398,7 +398,11 @@ static bool remove_migration_pte(struct folio *folio,
 		else
 			pte = pte_clear_soft_dirty(pte);
 
-		if (softleaf_is_migration_write(entry))
+		rmap_flags = migration_remap_rmap_flags(folio,
+					softleaf_is_migration_read(entry));
+
+		if (migration_remap_writable(folio,
+				softleaf_is_migration_write(entry), rmap_flags))
 			pte = pte_mkwrite(pte, vma);
 		else if (pte_swp_uffd(old_pte))
 			pte = pte_mkuffd(pte);
@@ -406,9 +410,6 @@ static bool remove_migration_pte(struct folio *folio,
 		/* See do_swap_page(): restore PAGE_NONE for RWP */
 		if (pte_swp_uffd(old_pte) && userfaultfd_rwp(vma))
 			pte = pte_modify(pte, PAGE_NONE);
-
-		if (folio_test_anon(folio) && !softleaf_is_migration_read(entry))
-			rmap_flags |= RMAP_EXCLUSIVE;
 
 		if (unlikely(is_device_private_page(new))) {
 			if (pte_write(pte))
