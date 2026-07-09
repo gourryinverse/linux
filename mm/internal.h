@@ -1698,16 +1698,48 @@ static inline bool page_write_fenced(struct page *page)
  * folio_must_cow() - must a write to this anon folio COW instead of reuse?
  * @folio: the anon folio a write faults on
  *
- * Groups the folio kinds that force copy-on-write for different reasons.  KSM
- * pages are write-protected shared dedup pages.  Folios on a write-fenced node
- * live on a tier with no write path, so a write must promote them off-node.
- * Used by the write-fault reuse predicates.  It is not a substitute
- * for folio_test_ksm() at KSM-specific sites such as rmap, swapin and migration.
+ * Groups the two reasons a write cannot reuse in place: KSM pages are shared
+ * dedup pages, and a write-fenced node has no write path.  Not a substitute for
+ * folio_test_ksm() at KSM-specific sites such as rmap, swapin and migration.
  */
 static inline bool folio_must_cow(struct folio *folio)
 {
 	return folio_test_ksm(folio) || folio_write_fenced(folio);
 }
+
+/*
+ * rmap_t and the migration-entry callers (remove_migration_pte/_pmd) are only
+ * built for CONFIG_MMU; CONFIG_MIGRATION depends on MMU.
+ */
+#ifdef CONFIG_MMU
+/*
+ * Resolve rmap flags and writability for a folio being re-installed present
+ * after migration.  Shared by remove_migration_pte() and remove_migration_pmd().
+ *
+ * Exclusivity is the single lever: anon writability requires it, and a folio
+ * on a write-fenced node is kept non-exclusive, so read-only falls out rather
+ * than being asserted.  That makes "writable anon implies exclusive"
+ * structural instead of a tripwire.
+ */
+static inline rmap_t migration_remap_rmap_flags(struct folio *folio,
+						bool was_read)
+{
+	if (folio_test_anon(folio) && !was_read && !folio_write_fenced(folio))
+		return RMAP_EXCLUSIVE;
+	return RMAP_NONE;
+}
+
+static inline bool migration_remap_writable(struct folio *folio, bool was_write,
+					    rmap_t rmap_flags)
+{
+	if (!was_write)
+		return false;
+	/*
+	 * See migration_remap_rmap_flags(): exclusivity is the lever.
+	 */
+	return !folio_test_anon(folio) || (rmap_flags & RMAP_EXCLUSIVE);
+}
+#endif /* CONFIG_MMU */
 
 /**
  * folio_placement_eligible() - is @folio the kind of folio node @nid takes?

@@ -5144,6 +5144,7 @@ void remove_migration_pmd(struct page_vma_mapped_walk *pvmw, struct folio *folio
 	unsigned long haddr = address & HPAGE_PMD_MASK;
 	pmd_t pmde;
 	softleaf_t entry;
+	rmap_t rmap_flags;
 
 	if (!(pvmw->pmd && !pvmw->pte))
 		return;
@@ -5151,10 +5152,13 @@ void remove_migration_pmd(struct page_vma_mapped_walk *pvmw, struct folio *folio
 	entry = softleaf_from_pmd(*pvmw->pmd);
 	folio_get(folio);
 	pmde = folio_mk_pmd(folio, READ_ONCE(vma->vm_page_prot));
+	rmap_flags = migration_remap_rmap_flags(folio,
+						softleaf_is_migration_read(entry));
 
 	if (pmd_swp_soft_dirty(*pvmw->pmd))
 		pmde = pmd_mksoft_dirty(pmde);
-	if (softleaf_is_migration_write(entry))
+	if (migration_remap_writable(folio, softleaf_is_migration_write(entry),
+				     rmap_flags))
 		pmde = pmd_mkwrite(pmde, vma);
 	if (pmd_swp_uffd(*pvmw->pmd))
 		pmde = pmd_mkuffd(pmde);
@@ -5185,11 +5189,6 @@ void remove_migration_pmd(struct page_vma_mapped_walk *pvmw, struct folio *folio
 	}
 
 	if (folio_test_anon(folio)) {
-		rmap_t rmap_flags = RMAP_NONE;
-
-		if (!softleaf_is_migration_read(entry))
-			rmap_flags |= RMAP_EXCLUSIVE;
-
 		folio_add_anon_rmap_pmd(folio, &folio->page, vma, haddr, rmap_flags);
 	} else {
 		folio_add_file_rmap_pmd(folio, &folio->page, vma);
