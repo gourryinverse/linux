@@ -398,6 +398,17 @@ static bool remove_migration_pte(struct folio *folio,
 		else if (pte_swp_uffd_wp(old_pte))
 			pte = pte_mkuffd_wp(pte);
 
+		/*
+		 * Force read-only for a folio on a write-fenced node.  A shared
+		 * writable file mapping leaves write in vma->vm_page_prot, mk_pte()
+		 * set it above, and migration_remap_writable() only ever adds write,
+		 * never clears it.  Clearing it here keeps the write fence intact for a
+		 * demoted file folio; the next write re-faults and promotes, as in
+		 * set_pte_range().  Anon is unaffected, kept non-exclusive above.
+		 */
+		if (node_write_fenced(folio_nid(folio)))
+			pte = pte_wrprotect(pte);
+
 		if (unlikely(is_device_private_page(new))) {
 			if (pte_write(pte))
 				entry = make_writable_device_private_entry(
