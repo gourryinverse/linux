@@ -2717,6 +2717,7 @@ static int filemap_get_pages(struct kiocb *iocb, size_t count,
 	pgoff_t last_index;
 	struct folio *folio;
 	unsigned int flags;
+	unsigned int i;
 	int err = 0;
 
 	/* "last_index" is the index of the folio beyond the end of the read */
@@ -2746,6 +2747,39 @@ retry:
 		if (err == AOP_TRUNCATED_PAGE)
 			goto retry;
 		return err;
+	}
+
+	/*
+	 * Read serving on a write-fenced node.  A buffered read (need_uptodate
+	 * == false) copies out and drops the ref, neither storing to the folio
+	 * nor pinning it, so it is served in place -- the point of the tier.
+	 * Splice (need_uptodate == true) parks it in a pipe buffer indefinitely,
+	 * which is a long-term pin a fenced node does not grant, so promote.
+	 * write(2) promotes earlier, at the __filemap_get_folio(FGP_WRITE) gate.
+	 */
+	for (i = 0; need_uptodate && i < folio_batch_count(fbatch); i++) {
+		pgoff_t fenced_index;
+
+		folio = fbatch->folios[i];
+		if (likely(!folio_write_fenced(folio)))
+			continue;
+		fenced_index = folio->index;
+		folio_batch_release(fbatch);
+		folio_batch_init(fbatch);
+		/*
+		 * Failure is transient (isolate/migrate race), so a blocking
+		 * read() retries rather than see a spurious -EAGAIN.  It
+		 * converges because a fenced node holds no long-term pins, and
+		 * fatal_signal_pending at the retry label keeps it killable.
+		 */
+		if (promote_fenced_folio(mapping, fenced_index,
+					 iocb->ki_flags &
+					 (IOCB_NOWAIT | IOCB_NOIO))) {
+			if (iocb->ki_flags & (IOCB_NOWAIT | IOCB_NOIO))
+				return -EAGAIN;
+			cond_resched();
+		}
+		goto retry;
 	}
 
 	folio = fbatch->folios[folio_batch_count(fbatch) - 1];
@@ -3588,6 +3622,15 @@ vm_fault_t filemap_fault(struct vm_fault *vmf)
 	struct folio *folio;
 	vm_fault_t ret = 0;
 	bool mapping_locked = false;
+	/*
+	 * A shared write fault must not map a folio on a write-fenced node in
+	 * place, because do_shared_fault()'s page_mkwrite() would dirty it before
+	 * the store re-faults into the wp promote.  Signal write intent so the
+	 * folio is promoted off first.  A private (COW) write only reads it, so it
+	 * stays exempt and is mapped read-only in place.
+	 */
+	fgf_t fgp_wr = ((vmf->flags & FAULT_FLAG_WRITE) &&
+			(vmf->vma->vm_flags & VM_SHARED)) ? FGP_WRITE : 0;
 
 	max_idx = DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE);
 	if (unlikely(index >= max_idx))
@@ -3596,9 +3639,11 @@ vm_fault_t filemap_fault(struct vm_fault *vmf)
 	trace_mm_filemap_fault(mapping, index);
 
 	/*
-	 * Do we have something in the page cache already?
+	 * Do we have something in the page cache already?  FGP_FOR_MMAP marks this
+	 * as the fault path.  A folio on a write-fenced node is mapped read-only in
+	 * place rather than promoted: the fence exempts an mmap read fault.
 	 */
-	folio = filemap_get_folio(mapping, index);
+	folio = __filemap_get_folio(mapping, index, FGP_FOR_MMAP | fgp_wr, 0);
 	if (likely(!IS_ERR(folio))) {
 		/*
 		 * We found the page, so try async readahead before waiting for
@@ -3630,7 +3675,7 @@ retry_find:
 			mapping_locked = true;
 		}
 		folio = __filemap_get_folio(mapping, index,
-					  FGP_CREAT|FGP_FOR_MMAP,
+					  FGP_CREAT|FGP_FOR_MMAP|fgp_wr,
 					  vmf->gfp_mask);
 		if (IS_ERR(folio)) {
 			if (fpin)
