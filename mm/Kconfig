@@ -700,6 +700,18 @@ config MIGRATION
 config DEVICE_MIGRATION
 	def_bool MIGRATION && ZONE_DEVICE
 
+config CRAM
+	bool "Compressed-RAM private-node read-only tier"
+	depends on NUMA && MIGRATION && MMU && MEMORY_HOTPLUG
+	help
+	  Manage folios demoted onto N_MEMORY_PRIVATE nodes (e.g. compressed
+	  CXL memory) as a read-only tier.  Anonymous folios are diverted onto a
+	  CRAM private node during reclaim and mapped present read-only so reads
+	  are zero-copy; write faults promote the folio back to DRAM.  Entry is
+	  by migration (no swap/vswap dependency).
+
+	  If unsure, say N.
+
 config ARCH_ENABLE_HUGEPAGE_MIGRATION
 	bool
 
