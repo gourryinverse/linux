@@ -2071,6 +2071,46 @@ static inline bool folio_must_cow(struct folio *folio)
 	return folio_test_ksm(folio) || node_write_fenced(folio_nid(folio));
 }
 
+/*
+ * rmap_t and the migration-entry callers (remove_migration_pte/_pmd) are only
+ * built for CONFIG_MMU; CONFIG_MIGRATION depends on MMU.
+ */
+#ifdef CONFIG_MMU
+/*
+ * Resolve rmap flags and writability for a folio being re-installed present
+ * after migration.  Shared by remove_migration_pte() and remove_migration_pmd().
+ *
+ * Exclusivity is the single lever.  Anon writability requires exclusive
+ * ownership.  A writable migration entry is only ever made for an exclusive anon
+ * page; see make_writable_migration_entry() and the VM_WARN in
+ * try_to_migrate_one().  A folio that must stay read-only, one on a write-fenced
+ * node, is kept non-exclusive here, and writability falls out as false.  The
+ * next write then COW-promotes it off-node.  This also makes the "writable anon
+ * implies exclusive" invariant structural rather than a tripwire.
+ */
+static inline rmap_t migration_remap_rmap_flags(struct folio *folio,
+						bool was_read)
+{
+	if (folio_test_anon(folio) && !was_read &&
+	    !node_write_fenced(folio_nid(folio)))
+		return RMAP_EXCLUSIVE;
+	return RMAP_NONE;
+}
+
+static inline bool migration_remap_writable(struct folio *folio, bool was_write,
+					    rmap_t rmap_flags)
+{
+	if (!was_write)
+		return false;
+	/*
+	 * Anon writable mappings require exclusive ownership.  A folio kept
+	 * non-exclusive, one on a write-fenced node, re-installs read-only and the
+	 * next write COW-promotes it off-node.  See migration_remap_rmap_flags().
+	 */
+	return !folio_test_anon(folio) || (rmap_flags & RMAP_EXCLUSIVE);
+}
+#endif /* CONFIG_MMU */
+
 /**
  * node_placement_check() - may @folio be migrated onto node @nid?
  * @nid: the node the folio would be placed on
