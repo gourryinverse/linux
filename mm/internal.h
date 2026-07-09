@@ -1668,6 +1668,48 @@ int promote_fenced_folio(struct address_space *mapping, pgoff_t index,
 			 bool nowait);
 
 /**
+ * folio_write_fenced() - must a PTE mapping @folio stay read-only?
+ * @folio: the folio, or NULL if the mapping has none
+ *
+ * True on a node withholding %NODE_MEMORY_FEAT_USER_WRITE, whose folios map
+ * read-only so a write faults and promotes them off a tier with no write path.
+ *
+ * There is no single place to enforce this, so every site that builds or
+ * modifies a present entry must consult it, clear write LAST, and not set
+ * dirty either.  The bit arrives by two routes that never meet: mk_pte() and
+ * folio_mk_pmd() copy it from vma->vm_page_prot, pte_modify() hands back
+ * whatever newprot carries, and neither asks can_change_*_writable().  A
+ * shared writable VMA with write-notify off therefore mapped a fenced folio
+ * writable, silently -- which was a real bug.  Anon is exempt: kept
+ * non-exclusive at migrate-in, so a write reaches folio_must_cow().
+ */
+static inline bool folio_write_fenced(struct folio *folio)
+{
+	return unlikely(folio && node_write_fenced(folio_nid(folio)));
+}
+
+/* As above, where only the page is known (vm_normal_page*, PageAnonExclusive). */
+static inline bool page_write_fenced(struct page *page)
+{
+	return unlikely(page && node_write_fenced(page_to_nid(page)));
+}
+
+/**
+ * folio_must_cow() - must a write to this anon folio COW instead of reuse?
+ * @folio: the anon folio a write faults on
+ *
+ * Groups the folio kinds that force copy-on-write for different reasons.  KSM
+ * pages are write-protected shared dedup pages.  Folios on a write-fenced node
+ * live on a tier with no write path, so a write must promote them off-node.
+ * Used by the write-fault reuse predicates.  It is not a substitute
+ * for folio_test_ksm() at KSM-specific sites such as rmap, swapin and migration.
+ */
+static inline bool folio_must_cow(struct folio *folio)
+{
+	return folio_test_ksm(folio) || folio_write_fenced(folio);
+}
+
+/**
  * folio_placement_eligible() - is @folio the kind of folio node @nid takes?
  * @nid: the node the folio would be placed on
  * @folio: the folio being migrated
