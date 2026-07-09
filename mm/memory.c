@@ -4159,11 +4159,36 @@ static vm_fault_t wp_pfn_shared(struct vm_fault *vmf)
 	return 0;
 }
 
+/*
+ * wp_page_shared_promote_fenced() - move a folio off a write-fenced node
+ *
+ * A shared mapping cannot COW, so the anon route out of a fenced node is not
+ * available here.  Promote the folio to a public node in place instead,
+ * updating every mapper via rmap, and re-fault; the write then lands on the
+ * promoted, writable folio.  Capture mapping and index while the PTL still
+ * pins the folio's identity.
+ */
+static vm_fault_t wp_page_shared_promote_fenced(struct vm_fault *vmf,
+						struct folio *folio)
+	__releases(vmf->ptl)
+{
+	struct address_space *mapping = folio->mapping;
+	pgoff_t index = folio->index;
+
+	pte_unmap_unlock(vmf->pte, vmf->ptl);
+	if (mapping)
+		promote_fenced_folio(mapping, index, false);
+	return 0;
+}
+
 static vm_fault_t wp_page_shared(struct vm_fault *vmf, struct folio *folio)
 	__releases(vmf->ptl)
 {
 	struct vm_area_struct *vma = vmf->vma;
 	vm_fault_t ret = 0;
+
+	if (folio_write_fenced(folio))
+		return wp_page_shared_promote_fenced(vmf, folio);
 
 	folio_get(folio);
 
@@ -5646,6 +5671,10 @@ vm_fault_t do_set_pmd(struct vm_fault *vmf, struct folio *folio, struct page *pa
 	if (write)
 		entry = maybe_pmd_mkwrite(pmd_mkdirty(entry), vma);
 
+	/* Read fault only; a shared write promotes at the filemap_fault() gate. */
+	if (folio_write_fenced(folio))
+		entry = pmd_wrprotect(entry);
+
 	add_mm_counter(vma->vm_mm, mm_counter_file(folio), HPAGE_PMD_NR);
 	folio_add_file_rmap_pmd(folio, page, vma);
 
@@ -5687,6 +5716,7 @@ void set_pte_range(struct vm_fault *vmf, struct folio *folio,
 	struct vm_area_struct *vma = vmf->vma;
 	bool write = vmf->flags & FAULT_FLAG_WRITE;
 	bool prefault = !in_range(vmf->address, addr, nr * PAGE_SIZE);
+	bool wrfence = folio_write_fenced(folio);
 	pte_t entry;
 
 	flush_icache_pages(vma, page, nr);
@@ -5697,10 +5727,13 @@ void set_pte_range(struct vm_fault *vmf, struct folio *folio,
 	else
 		entry = pte_sw_mkyoung(entry);
 
-	if (write)
+	if (write && !wrfence)
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
 	else if (pte_write(entry) && folio_test_dirty(folio))
 		entry = pte_mkdirty(entry);
+
+	if (wrfence)
+		entry = pte_wrprotect(entry);
 	if (unlikely(vmf_orig_pte_uffd_wp(vmf)))
 		entry = pte_mkuffd(entry);
 	/* copy-on-write page */

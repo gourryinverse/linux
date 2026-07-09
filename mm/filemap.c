@@ -1975,6 +1975,31 @@ repeat:
 		VM_BUG_ON_FOLIO(!folio_contains(folio, index), folio);
 	}
 
+	/*
+	 * Write fence.  A non-mmap acquire is a byte access, so promote the folio
+	 * off the fenced node before handing it back and no writer ever touches
+	 * the device.  The mmap read fault path (FGP_FOR_MMAP without FGP_WRITE)
+	 * is exempt and maps the folio read-only in place.  A shared mmap write
+	 * fault sets FGP_WRITE and promotes here too, because do_shared_fault()'s
+	 * page_mkwrite() would dirty the folio in place before the wp promote
+	 * fires.  Never serve an un-promoted folio: a later write_begin() store is
+	 * a kernel memcpy into it, not a fault, so it would bypass the PTE fences
+	 * and hit the device.  promote_fenced_folio() is one-shot.  A blocking
+	 * caller retries via the repeat loop; only NOWAIT gets -EAGAIN.
+	 */
+	if (folio_write_fenced(folio) &&
+	    (!(fgp_flags & FGP_FOR_MMAP) || (fgp_flags & FGP_WRITE))) {
+		if (fgp_flags & FGP_LOCK)
+			folio_unlock(folio);
+		folio_put(folio);
+		if (promote_fenced_folio(mapping, index, fgp_flags & FGP_NOWAIT)) {
+			if (fgp_flags & FGP_NOWAIT)
+				return ERR_PTR(-EAGAIN);
+			cond_resched();
+		}
+		goto repeat;
+	}
+
 	if (fgp_flags & FGP_ACCESSED)
 		folio_mark_accessed(folio);
 	else if (fgp_flags & FGP_WRITE) {
