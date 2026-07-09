@@ -467,6 +467,85 @@ static void cram_promote_work_fn(struct work_struct *work)
 	kfree(batch);
 }
 
+/**
+ * cram_promote_pagecache() - migrate a resident CRAM file folio to DRAM in place
+ * @mapping: the file mapping
+ * @index: page index within @mapping
+ * @nowait: if true, do not block on migration
+ *
+ * Migrates the resident CRAM file folio at (@mapping, @index) off the tier to
+ * DRAM, in place (rmap repoints every mapper).  This is the action behind the
+ * file write-fence gates (filemap/memory/mprotect).  A byte writer promotes the
+ * folio off the read-only device tier before touching it.  One-shot.  Never
+ * serves the folio.
+ *
+ * Return: 0 when promoted, already promoted by a racer, or gone.  -EAGAIN on a
+ * transient isolate/migrate failure, which the caller retries unless @nowait.
+ */
+int cram_promote_pagecache(struct address_space *mapping, pgoff_t index,
+			   bool nowait)
+{
+	struct migration_target_control mtc = {
+		.nid = numa_node_id(),	/* CRAM nodes are CPU-less: caller node is DRAM */
+		.gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_NOWARN,
+		.reason = MR_NUMA_MISPLACED,
+	};
+	struct folio *folio;
+	LIST_HEAD(list);
+	int ret;
+
+	/*
+	 * Raw lookup.  filemap_get_folio() routes through the acquire gate, which
+	 * calls back here, so use filemap_get_entry() to avoid the recursion.
+	 */
+	folio = filemap_get_entry(mapping, index);
+	if (!folio || xa_is_value(folio))
+		return 0;		/* gone / shadow entry: nothing resident */
+	if (!folio_is_cram(folio)) {
+		folio_put(folio);
+		return 0;		/* already promoted by a racer */
+	}
+	if (nowait) {
+		folio_put(folio);
+		return -EAGAIN;		/* migration may block */
+	}
+
+	/*
+	 * A just-demoted folio sits on a per-cpu LRU add-batch and is not yet
+	 * isolatable.  Drain this cpu's batch first (cheap).  The demotion may have
+	 * run on another cpu, so on a miss drain all cpus to flush it
+	 * deterministically, with no retry-count guesswork.
+	 */
+	if (!folio_test_lru(folio)) {
+		lru_add_drain();
+		if (!folio_test_lru(folio))
+			lru_add_drain_all();
+	}
+	if (!folio_isolate_lru(folio)) {
+		/* Concurrently isolated (reclaim/compaction): transient, caller retries. */
+		atomic_long_inc(&cram_cnt_promote_fail);
+		folio_put(folio);
+		return -EAGAIN;
+	}
+	node_stat_mod_folio(folio, NR_ISOLATED_ANON + folio_is_file_lru(folio),
+			    folio_nr_pages(folio));
+	list_add(&folio->lru, &list);
+	folio_put(folio);		/* migrate_pages() works off the isolation ref */
+
+	ret = migrate_pages(&list, alloc_migration_target, NULL,
+			    (unsigned long)&mtc, MIGRATE_SYNC, MR_NUMA_MISPLACED,
+			    NULL);
+	if (ret && !list_empty(&list))
+		putback_movable_pages(&list);
+	if (ret) {
+		atomic_long_inc(&cram_cnt_promote_fail);
+		return -EAGAIN;
+	}
+	atomic_long_inc(&cram_cnt_promote);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(cram_promote_pagecache);
+
 /* Zero a reserved balloon page so the compressor sees a minimal footprint. */
 static void cram_zero_page(unsigned long pfn)
 {
