@@ -2198,11 +2198,18 @@ static inline bool can_change_pmd_writable(struct vm_area_struct *vma,
 	if (userfaultfd_huge_pmd_wp(vma, pmd))
 		return false;
 
-	if (!(vma->vm_flags & VM_SHARED)) {
+	page = vm_normal_page_pmd(vma, addr, pmd);
+
+	/*
+	 * Write-fenced node folios stay read-only so a write promotes.  See
+	 * can_change_pte_writable().
+	 */
+	if (page && node_write_fenced(page_to_nid(page)))
+		return false;
+
+	if (!(vma->vm_flags & VM_SHARED))
 		/* See can_change_pte_writable(). */
-		page = vm_normal_page_pmd(vma, addr, pmd);
 		return page && PageAnon(page) && PageAnonExclusive(page);
-	}
 
 	/* See can_change_pte_writable(). */
 	return pmd_dirty(pmd);
@@ -2620,6 +2627,7 @@ int change_huge_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 	struct mm_struct *mm = vma->vm_mm;
 	spinlock_t *ptl;
 	pmd_t oldpmd, entry;
+	struct page *page;
 	bool prot_numa = cp_flags & MM_CP_PROT_NUMA;
 	bool uffd_wp = cp_flags & MM_CP_UFFD_WP;
 	bool uffd_wp_resolve = cp_flags & MM_CP_UFFD_WP_RESOLVE;
@@ -2690,6 +2698,16 @@ int change_huge_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 		 * handled.
 		 */
 		entry = pmd_clear_uffd_wp(entry);
+
+	/*
+	 * Write-fenced node: pmd_modify() can hand back a writable entry for a
+	 * shared writable mapping with write-notify off.  Keep the folio
+	 * read-only so a write promotes off-node.  Mirrors change_present_ptes().
+	 * oldpmd holds the pfn because *pmd was invalidated above.
+	 */
+	page = vm_normal_page_pmd(vma, addr, oldpmd);
+	if (page && node_write_fenced(page_to_nid(page)))
+		entry = pmd_wrprotect(entry);
 
 	/* See change_pte_range(). */
 	if ((cp_flags & MM_CP_TRY_CHANGE_WRITABLE) && !pmd_write(entry) &&

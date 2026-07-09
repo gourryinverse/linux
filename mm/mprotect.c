@@ -59,10 +59,8 @@ static bool maybe_change_pte_writable(struct vm_area_struct *vma, pte_t pte)
 }
 
 static bool can_change_private_pte_writable(struct vm_area_struct *vma,
-					    unsigned long addr, pte_t pte)
+					    struct page *page, pte_t pte)
 {
-	struct page *page;
-
 	if (!maybe_change_pte_writable(vma, pte))
 		return false;
 
@@ -71,13 +69,16 @@ static bool can_change_private_pte_writable(struct vm_area_struct *vma,
 	 * exclusive anonymous pages, because we know that our
 	 * write-fault handler similarly would map them writable without
 	 * any additional checks while holding the PT lock.
+	 *
+	 * A folio on a write-fenced node stays read-only.  A write promotes it
+	 * off-node.  Such a folio is never AnonExclusive; guard it explicitly.
 	 */
-	page = vm_normal_page(vma, addr, pte);
-	return page && PageAnon(page) && PageAnonExclusive(page);
+	return page && PageAnon(page) && PageAnonExclusive(page) &&
+	       !node_write_fenced(page_to_nid(page));
 }
 
 static bool can_change_shared_pte_writable(struct vm_area_struct *vma,
-					   pte_t pte)
+					   struct page *page, pte_t pte)
 {
 	if (!maybe_change_pte_writable(vma, pte))
 		return false;
@@ -91,16 +92,25 @@ static bool can_change_shared_pte_writable(struct vm_area_struct *vma,
 	 * FS was already notified and we can simply mark the PTE writable
 	 * just like the write-fault handler would do.
 	 */
-	return pte_dirty(pte);
+	if (!pte_dirty(pte))
+		return false;
+
+	/*
+	 * A folio on a write-fenced node stays read-only.  The dirty-means-notified
+	 * assumption above does not hold for it.  A write must fault and promote.
+	 */
+	return !(page && node_write_fenced(page_to_nid(page)));
 }
 
 bool can_change_pte_writable(struct vm_area_struct *vma, unsigned long addr,
 			     pte_t pte)
 {
-	if (!(vma->vm_flags & VM_SHARED))
-		return can_change_private_pte_writable(vma, addr, pte);
+	struct page *page = vm_normal_page(vma, addr, pte);
 
-	return can_change_shared_pte_writable(vma, pte);
+	if (!(vma->vm_flags & VM_SHARED))
+		return can_change_private_pte_writable(vma, page, pte);
+
+	return can_change_shared_pte_writable(vma, page, pte);
 }
 
 static int mprotect_folio_pte_batch(struct folio *folio, pte_t *ptep,
@@ -195,7 +205,7 @@ static __always_inline void set_write_prot_commit_flush_ptes(struct vm_area_stru
 	bool set_write;
 
 	if (vma->vm_flags & VM_SHARED) {
-		set_write = can_change_shared_pte_writable(vma, ptent);
+		set_write = can_change_shared_pte_writable(vma, page, ptent);
 		prot_commit_flush_ptes(vma, addr, ptep, oldpte, ptent, nr_ptes,
 				       /* idx = */ 0, set_write, tlb);
 		return;
@@ -288,6 +298,16 @@ static __always_inline void change_present_ptes(struct mmu_gather *tlb,
 
 	oldpte = modify_prot_start_ptes(vma, addr, ptep, nr_ptes);
 	ptent = pte_modify(oldpte, newprot);
+
+	/*
+	 * Keep a write-fenced-node folio read-only.  For a shared mapping without
+	 * writenotify, newprot carries write and pte_modify() hands it back
+	 * directly; the can_change_*_pte_writable() gates above are not consulted
+	 * on this path.  A write then faults and promotes off-node.  This mirrors
+	 * set_pte_range().
+	 */
+	if (folio && node_write_fenced(folio_nid(folio)))
+		ptent = pte_wrprotect(ptent);
 
 	if (uffd_wp)
 		ptent = pte_mkuffd_wp(ptent);
