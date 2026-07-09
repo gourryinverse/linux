@@ -1,1 +1,14 @@
 private_node_tool
+cram_readable_tool
+cram_fork_tool
+cram_ops_tool
+cram_pgcache_tool
+cram_swap_tool
+cram_pressure_tool
+cram_leak_tool
+cram_perf_tool
+cram_gate_tool
+cram_hot_tool
+cram_coherence_tool
+cram_pgcache_large_tool
+cram_readahead_tool
