@@ -4064,11 +4064,35 @@ static vm_fault_t wp_pfn_shared(struct vm_fault *vmf)
 	return 0;
 }
 
+/*
+ * wp_page_shared_promote_cram() - promote a CRAM folio off-tier on a shared write
+ *
+ * A shared mapping cannot COW.  A write to a CRAM folio promotes it to DRAM in
+ * place, updating every mapper via rmap, and re-faults.  The write then lands on
+ * the promoted, writable folio.  Capture mapping and index while the PTL still
+ * pins the folio's identity.
+ */
+static vm_fault_t wp_page_shared_promote_cram(struct vm_fault *vmf,
+					      struct folio *folio)
+	__releases(vmf->ptl)
+{
+	struct address_space *mapping = folio->mapping;
+	pgoff_t index = folio->index;
+
+	pte_unmap_unlock(vmf->pte, vmf->ptl);
+	if (mapping)
+		cram_promote_pagecache(mapping, index, false);
+	return 0;
+}
+
 static vm_fault_t wp_page_shared(struct vm_fault *vmf, struct folio *folio)
 	__releases(vmf->ptl)
 {
 	struct vm_area_struct *vma = vmf->vma;
 	vm_fault_t ret = 0;
+
+	if (unlikely(folio_is_cram(folio)))
+		return wp_page_shared_promote_cram(vmf, folio);
 
 	folio_get(folio);
 

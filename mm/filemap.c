@@ -1969,6 +1969,32 @@ repeat:
 		VM_BUG_ON_FOLIO(!folio_contains(folio, index), folio);
 	}
 
+	/*
+	 * File-CRAM write fence.  A non-mmap acquire is a byte access.  Promote the
+	 * folio off the CRAM tier to DRAM before handing it back, so no writer ever
+	 * touches the device.  The mmap read fault path (FGP_FOR_MMAP without
+	 * FGP_WRITE) is exempt and maps the CRAM folio read-only in place.  A shared
+	 * mmap write fault sets FGP_WRITE and promotes here too, because
+	 * do_shared_fault()'s page_mkwrite() would dirty the folio in place before
+	 * the wp promote fires.  Never serve an un-promoted CRAM folio.  A later
+	 * write_begin() store is a kernel memcpy into it, not a fault, so it would
+	 * bypass the PTE fences and hit the device.  cram_promote_pagecache() is
+	 * one-shot.  A blocking caller retries via the repeat loop and converges,
+	 * because CRAM folios are never long-term pinned.  Only NOWAIT gets -EAGAIN.
+	 */
+	if (unlikely(folio_is_cram(folio)) &&
+	    (!(fgp_flags & FGP_FOR_MMAP) || (fgp_flags & FGP_WRITE))) {
+		if (fgp_flags & FGP_LOCK)
+			folio_unlock(folio);
+		folio_put(folio);
+		if (cram_promote_pagecache(mapping, index, fgp_flags & FGP_NOWAIT)) {
+			if (fgp_flags & FGP_NOWAIT)
+				return ERR_PTR(-EAGAIN);
+			cond_resched();
+		}
+		goto repeat;
+	}
+
 	if (fgp_flags & FGP_ACCESSED)
 		folio_mark_accessed(folio);
 	else if (fgp_flags & FGP_WRITE) {

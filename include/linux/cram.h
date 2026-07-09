@@ -92,6 +92,17 @@ int cram_migrate_to(struct list_head *demote_folios, int src_nid,
 		    enum migrate_mode mode, enum migrate_reason reason,
 		    unsigned int *nr_succeeded);
 
+/*
+ * Resident file-cache tier (body in mm/cram.c).  A clean file folio demoted
+ * onto a CRAM node stays in the page cache, mapped read-only in place.  A byte
+ * writer promotes it back to DRAM first.  cram_promote_pagecache() migrates the
+ * resident folio at (mapping, index) off the tier and is the action behind the
+ * write-fence gates in filemap/memory/mprotect.  Returns 0 when promoted or
+ * already gone, or -EAGAIN on transient failure (caller retries unless @nowait).
+ */
+int cram_promote_pagecache(struct address_space *mapping, pgoff_t index,
+			   bool nowait);
+
 #else /* !CONFIG_CRAM */
 
 static inline int cram_register(int nid, const struct range *ranges,
@@ -146,6 +157,11 @@ static inline int cram_migrate_to(struct list_head *demote_folios, int src_nid,
 				  unsigned int *nr_succeeded)
 {
 	return -ENODEV;
+}
+static inline int cram_promote_pagecache(struct address_space *mapping,
+					 pgoff_t index, bool nowait)
+{
+	return 0;
 }
 
 #endif /* CONFIG_CRAM */
