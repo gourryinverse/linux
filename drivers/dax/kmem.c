@@ -15,6 +15,7 @@
 #include <linux/memory-tiers.h>
 #include <linux/memory_hotplug.h>
 #include <linux/node_private.h>
+#include <linux/cram.h>
 #include <linux/string_helpers.h>
 #include "dax-private.h"
 #include "bus.h"
@@ -45,6 +46,34 @@ static int dax_kmem_range(struct dev_dax *dev_dax, int i, struct range *r)
 	return 0;
 }
 
+/*
+ * dax_kmem_cram_ranges() - [TEST] build the block-aligned ranges donated to CRAM
+ *
+ * Builds the range array this dev_dax donates to CRAM.  The result is
+ * deterministic, so cram_register() and cram_unregister() produce the identical
+ * set.  The caller frees it.  Returns NULL on alloc failure or when no range is
+ * usable.
+ */
+static struct range *dax_kmem_cram_ranges(struct dev_dax *dev_dax, unsigned int *np)
+{
+	struct range *ranges;
+	unsigned int n = 0;
+	int i;
+
+	ranges = kmalloc_array(dev_dax->nr_range, sizeof(*ranges), GFP_KERNEL);
+	if (!ranges)
+		return NULL;
+	for (i = 0; i < dev_dax->nr_range; i++)
+		if (!dax_kmem_range(dev_dax, i, &ranges[n]))
+			n++;
+	if (!n) {
+		kfree(ranges);
+		return NULL;
+	}
+	*np = n;
+	return ranges;
+}
+
 struct dax_kmem_data {
 	const char *res_name;
 	int mgid;
@@ -55,6 +84,10 @@ struct dax_kmem_data {
 	bool dax_file; /* when set, cdev allows mmap */
 	struct mempolicy *policy; /* device-lifetime bind for dax-file mmap */
 	bool private; /* when set, memory is onlined as N_MEMORY_PRIVATE */
+	bool cram; /* when set, CRAM manages the node as a read-only tier */
+	u32 cram_zratio; /* [TEST] hw compression ratio handed to cram_register (per-mille) */
+	unsigned int cram_trim_mode; /* [TEST] 0 none(zero) 1 succeed 2 EAGAIN 3 EBUSY */
+	unsigned long cram_trim_pages; /* [TEST] pages successfully trimmed via the cb */
 	unsigned long caps; /* NODE_PRIVATE_CAP_* flags */
 	struct node_private np;
 	struct resource *res[];
@@ -446,6 +479,38 @@ static int dax_kmem_parse_state(const char *buf)
 	return online_type;
 }
 
+/*
+ * dax_kmem_cram_trim() - [TEST] CRAM trim callback
+ *
+ * A real driver tells its hardware to drop the compression backing for the
+ * freed pages.  This stand-in only accounts them.  It honors a debug mode so
+ * the test can exercise CRAM's retry and zero-fallback contract:
+ *   1 succeed (default), 2 return -EAGAIN (CRAM retries), 3 return -EBUSY
+ *   (CRAM zeroes).  Mode 0 registers no callback at all (CRAM always zeroes).
+ */
+static int dax_kmem_cram_trim(void *driver_data, const unsigned long *pfns,
+			      int *result, unsigned int nr_pages)
+{
+	struct dax_kmem_data *data = driver_data;
+	unsigned int i;
+
+	switch (READ_ONCE(data->cram_trim_mode)) {
+	case 2:
+		for (i = 0; i < nr_pages; i++)
+			result[i] = -1;
+		return -EAGAIN;
+	case 3:
+		for (i = 0; i < nr_pages; i++)
+			result[i] = -1;
+		return -EBUSY;
+	default:
+		for (i = 0; i < nr_pages; i++)
+			result[i] = 0;
+		data->cram_trim_pages += nr_pages;	/* serialized by balloon_mutex */
+		return 0;
+	}
+}
+
 static ssize_t state_show(struct device *dev,
 			    struct device_attribute *attr, char *buf)
 {
@@ -480,6 +545,21 @@ static ssize_t state_store(struct device *dev, struct device_attribute *attr,
 		return len;
 
 	if (online_type == DAX_KMEM_UNPLUGGED) {
+		if (data->cram) {
+			struct range *ranges;
+			unsigned int n;
+
+			/* CRAM owns the node: evict + remove all donated ranges. */
+			ranges = dax_kmem_cram_ranges(dev_dax, &n);
+			if (!ranges)
+				return -ENOMEM;
+			rc = cram_unregister(data->numa_node, ranges, n);
+			kfree(ranges);
+			if (rc)
+				return rc;
+			data->state = DAX_KMEM_UNPLUGGED;
+			return len;
+		}
 		rc = dax_kmem_do_hotremove(dev_dax, data);
 		if (rc)
 			return rc;
@@ -490,6 +570,31 @@ static ssize_t state_store(struct device *dev, struct device_attribute *attr,
 	/* Onlining is only allowed from the unplugged state. */
 	if (data->state != DAX_KMEM_UNPLUGGED)
 		return -EBUSY;
+
+	if (data->cram) {
+		struct cram_ops ops = { .owner = THIS_MODULE,
+					.trim = data->cram_trim_mode ?
+						dax_kmem_cram_trim : NULL };
+		struct range *ranges;
+		unsigned int n;
+
+		/*
+		 * Hand all donated ranges to CRAM.  CRAM does the private-node hotplug
+		 * (always movable) and cap registration itself, so ignore the requested
+		 * online_type.  kmem reserves no resources here.  @data is the ops
+		 * callback cookie.
+		 */
+		ranges = dax_kmem_cram_ranges(dev_dax, &n);
+		if (!ranges)
+			return -ENOMEM;
+		rc = cram_register(data->numa_node, ranges, n,
+				   data->cram_zratio, ops, data);
+		kfree(ranges);
+		if (rc)
+			return rc;
+		data->state = MMOP_ONLINE_MOVABLE;
+		return len;
+	}
 
 	/* Re-acquire resources if previously unplugged, otherwise no-op */
 	rc = dax_kmem_init_resources(dev_dax, data);
@@ -693,6 +798,212 @@ static ssize_t name##_store(struct device *dev,				\
 	return len;							\
 }									\
 static DEVICE_ATTR_RW(name)
+
+/*
+ * [TEST] 'cram' control: hand this device's range to CRAM, which manages it as
+ * a read-only tier.  Implies private mode and opts into reclaim and hot-unplug.
+ * Reclaim covers kswapd writeback, hot-unplug covers teardown migration.
+ * Onlining then routes through cram_register(); see state_store().
+ */
+static ssize_t cram_show(struct device *dev, struct device_attribute *attr,
+			 char *buf)
+{
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%d\n", data->cram);
+}
+static ssize_t cram_store(struct device *dev, struct device_attribute *attr,
+			  const char *buf, size_t len)
+{
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+	bool enable;
+	ssize_t rc;
+
+	rc = kstrtobool(buf, &enable);
+	if (rc)
+		return rc;
+
+	guard(mutex)(&data->lock);
+
+	if (data->state != DAX_KMEM_UNPLUGGED)
+		return -EBUSY;
+
+	/* CRAM owns the private-node hotplug and caps; just record the mode. */
+	data->cram = enable;
+	if (enable && !data->cram_zratio)
+		data->cram_zratio = 1000;	/* default 1:1 until set via cram_zratio */
+	if (enable && !data->cram_trim_mode)
+		data->cram_trim_mode = 1;	/* default: trim callback succeeds */
+	return len;
+}
+static DEVICE_ATTR_RW(cram);
+
+/*
+ * [TEST] 'cram_zratio': hardware compression ratio handed to cram_register(),
+ * per-mille N:1 (3:1 => 3000, 1:1 => 1000).  Configure while unplugged.
+ */
+static ssize_t cram_zratio_show(struct device *dev, struct device_attribute *attr,
+				char *buf)
+{
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%u\n", data->cram_zratio);
+}
+static ssize_t cram_zratio_store(struct device *dev, struct device_attribute *attr,
+				 const char *buf, size_t len)
+{
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+	u32 zratio;
+	ssize_t rc;
+
+	rc = kstrtou32(buf, 0, &zratio);
+	if (rc)
+		return rc;
+	if (zratio < 1000)		/* < 1:1 is nonsensical */
+		return -EINVAL;
+
+	guard(mutex)(&data->lock);
+	if (data->state != DAX_KMEM_UNPLUGGED)
+		return -EBUSY;
+	data->cram_zratio = zratio;
+	return len;
+}
+static DEVICE_ATTR_RW(cram_zratio);
+
+/*
+ * [TEST] 'cram_compression_ratio': report the achieved compression ratio (per-mille
+ * N:1) to CRAM, which resizes the balloon.  Write "R" or "R block".  "R block"
+ * blocks new allocations for the duration of the adjustment; a danger mode.
+ */
+static ssize_t cram_compression_ratio_store(struct device *dev,
+					    struct device_attribute *attr,
+					    const char *buf, size_t len)
+{
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+	char tok[16] = "";
+	u32 ratio;
+	int rc;
+
+	if (sscanf(buf, "%u %15s", &ratio, tok) < 1)
+		return -EINVAL;
+
+	guard(mutex)(&data->lock);
+	if (!data->cram)
+		return -EINVAL;
+	rc = cram_set_compression_ratio(data->numa_node, ratio,
+					!strcmp(tok, "block"));
+	return rc ? rc : len;
+}
+static DEVICE_ATTR_WO(cram_compression_ratio);
+
+/*
+ * [TEST] 'cram_allow_allocation': sticky enable/disable of demotions onto the
+ * node.  This is the emergency off switch, distinct from cram_compression_ratio's
+ * transient "block".  Write 0 to revoke, 1 to re-permit.
+ */
+static ssize_t cram_allow_allocation_store(struct device *dev,
+					   struct device_attribute *attr,
+					   const char *buf, size_t len)
+{
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+	bool allow;
+	int rc;
+
+	rc = kstrtobool(buf, &allow);
+	if (rc)
+		return rc;
+
+	guard(mutex)(&data->lock);
+	if (!data->cram)
+		return -EINVAL;
+	rc = cram_allow_allocation(data->numa_node, allow);
+	return rc ? rc : len;
+}
+static DEVICE_ATTR_WO(cram_allow_allocation);
+
+/*
+ * [TEST] 'cram_hot_pages': stand in for the device's hotness reporter.  Write a
+ * whitespace-separated list of pfns the "device" deems hot.  They are forwarded
+ * to cram_report_hot_pages() for proactive promotion.  A real driver reports the
+ * pfns its hardware observed being accessed; here userland supplies them from
+ * pagemap.
+ */
+#define CRAM_HOT_MAX 1024
+static ssize_t cram_hot_pages_store(struct device *dev,
+				    struct device_attribute *attr,
+				    const char *buf, size_t len)
+{
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+	unsigned long *pfns;
+	unsigned int n = 0;
+	const char *p = buf;
+	int rc;
+
+	pfns = kmalloc_array(CRAM_HOT_MAX, sizeof(*pfns), GFP_KERNEL);
+	if (!pfns)
+		return -ENOMEM;
+
+	while (n < CRAM_HOT_MAX) {
+		unsigned long v;
+		int consumed;
+
+		if (sscanf(p, "%lu%n", &v, &consumed) != 1)
+			break;
+		pfns[n++] = v;
+		p += consumed;
+	}
+
+	scoped_guard(mutex, &data->lock) {
+		if (!data->cram) {
+			rc = -EINVAL;
+			goto out;
+		}
+		rc = cram_report_hot_pages(data->numa_node, pfns, n);
+	}
+out:
+	kfree(pfns);
+	return rc ? rc : len;
+}
+static DEVICE_ATTR_WO(cram_hot_pages);
+
+/*
+ * [TEST] 'cram_trim': trim-callback behavior, configure while unplugged.
+ *   0 no callback (CRAM zeroes freed pages)   1 succeed (default)
+ *   2 return -EAGAIN (CRAM retries)           3 return -EBUSY (CRAM zeroes)
+ */
+static ssize_t cram_trim_show(struct device *dev, struct device_attribute *attr,
+			      char *buf)
+{
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%u\n", data->cram_trim_mode);
+}
+static ssize_t cram_trim_store(struct device *dev, struct device_attribute *attr,
+			       const char *buf, size_t len)
+{
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+	unsigned int mode;
+
+	if (kstrtouint(buf, 0, &mode) || mode > 3)
+		return -EINVAL;
+
+	guard(mutex)(&data->lock);
+	if (data->state != DAX_KMEM_UNPLUGGED)
+		return -EBUSY;		/* ops.trim is fixed at register time */
+	data->cram_trim_mode = mode;
+	return len;
+}
+static DEVICE_ATTR_RW(cram_trim);
+
+/* [TEST] 'cram_trim_count': pages the trim callback has successfully trimmed. */
+static ssize_t cram_trim_count_show(struct device *dev,
+				    struct device_attribute *attr, char *buf)
+{
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%lu\n", READ_ONCE(data->cram_trim_pages));
+}
+static DEVICE_ATTR_RO(cram_trim_count);
 
 KMEM_PRIVATE_CAP_ATTR(reclaim, NODE_PRIVATE_CAP_RECLAIM);
 KMEM_PRIVATE_CAP_ATTR(user_numa, NODE_PRIVATE_CAP_USER_NUMA);
@@ -927,6 +1238,13 @@ static struct attribute *dev_dax_kmem_attrs[] = {
 	&dev_attr_state.attr,
 	&dev_attr_dax_file.attr,
 	&dev_attr_private.attr,
+	&dev_attr_cram.attr,
+	&dev_attr_cram_zratio.attr,
+	&dev_attr_cram_compression_ratio.attr,
+	&dev_attr_cram_allow_allocation.attr,
+	&dev_attr_cram_hot_pages.attr,
+	&dev_attr_cram_trim.attr,
+	&dev_attr_cram_trim_count.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(dev_dax_kmem);
