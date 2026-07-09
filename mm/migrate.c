@@ -411,6 +411,10 @@ static bool remove_migration_pte(struct folio *folio,
 		if (pte_swp_uffd(old_pte) && userfaultfd_rwp(vma))
 			pte = pte_modify(pte, PAGE_NONE);
 
+		/* mk_pte() set it from vm_page_prot; migration_remap only adds. */
+		if (folio_write_fenced(folio))
+			pte = pte_wrprotect(pte);
+
 		if (unlikely(is_device_private_page(new))) {
 			if (pte_write(pte))
 				entry = make_writable_device_private_entry(
