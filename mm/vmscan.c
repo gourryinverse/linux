@@ -1260,11 +1260,11 @@ retry:
 		/*
 		 * CRAM read-only tier: divert eligible folios onto a CRAM
 		 * private node by migration instead of reclaiming them.  Private
-		 * anonymous folios qualify (cram_folio_eligible).  They are
-		 * mapped read-only on the tier and a write promotes the folio
-		 * off it.  This is a distinct service from the tiering demotion
-		 * above.  Migration failures are handled by the normal reclaim
-		 * path.
+		 * anonymous and clean file folios qualify (cram_folio_eligible).
+		 * Both are mapped read-only on the tier and a write promotes the
+		 * folio off it.  This is a distinct service from the tiering
+		 * demotion above.  Migration failures are handled by the normal
+		 * reclaim path.
 		 */
 		if (do_cram_pass && cram_folio_eligible(folio) &&
 		    (thp_migration_supported() || !folio_test_large(folio))) {

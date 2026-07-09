@@ -2,12 +2,15 @@
 /*
  * mm/cram.c - Compressed RAM / private node memory management
  *
- * Manages folios demoted to N_MEMORY_PRIVATE nodes ("CRAM" nodes) via the
- * standard kernel LRU.  A CRAM folio maps present read-only so reads are
- * zero-copy.  The device decompresses in place.  A write promotes the folio
- * back to DRAM.  Private anonymous folios are the first tier; a write COWs off
- * via the do_wp_page() path.  The device also nominates hot pages for proactive
- * promotion.  See cram_report_hot_pages().
+ * Manages folios demoted to N_MEMORY_PRIVATE nodes via the standard kernel
+ * LRU.  Anonymous and clean file folios are diverted onto a CRAM private node
+ * during reclaim.  See the inline cram hook in shrink_folio_list().  They map
+ * present read-only so reads are zero-copy.  The device decompresses in place.
+ * A byte write promotes the folio back to DRAM.  Anon promotes via the COW
+ * path in do_wp_page().  File promotes via cram_promote_pagecache() from the
+ * filemap/memory/mprotect write-fence gates.  Clean file folios are re-read
+ * from the fs when reclaimed rather than swapped.  The device also nominates
+ * hot pages for proactive promotion.  See cram_report_hot_pages().
  *
  * A driver donates physical regions and registers as a node's CRAM owner with
  * cram_register().  It advertises a PERCEIVED size at a configured compression
@@ -250,23 +253,47 @@ bool cram_can_demote(int src_nid)
 }
 
 /*
- * cram_folio_eligible - may this folio be demoted into CRAM?
+ * cram_folio_eligible() - may this folio be demoted into CRAM?
  *
- * Private anonymous folios qualify: mapped read-only on the tier and evicted by
- * swapping the resident folio out (the node has CAP_RECLAIM); a write COWs back
- * to DRAM (do_wp_page / folio_must_cow).  shmem/tmpfs is excluded (folio_test_
- * anon is false, incl. MAP_ANONYMOUS shared) -- it rides zswap.
+ * Two kinds qualify, both mapped read-only on the tier with a write promoting
+ * off it:
+ *   - private anonymous: evicted by swapping the resident folio out (the node
+ *     has CAP_RECLAIM).  A write COWs back to DRAM (do_wp_page /
+ *     folio_must_cow).  shmem/tmpfs is excluded because folio_test_anon is
+ *     false, including MAP_ANONYMOUS shared.  It rides zswap.
+ *   - clean file: demoted resident and mapped read-only in place.  Dropped and
+ *     re-read from the fs on reclaim.  Promoted off on a byte write
+ *     (cram_promote_pagecache via the filemap/memory/mprotect gates).
  *
  * Never re-cram an already-CRAM folio.
  */
 bool cram_folio_eligible(struct folio *folio)
 {
+	struct address_space *mapping;
+
 	if (folio_is_cram(folio))
 		return false;
-	/* Only private anonymous folios demote to CRAM; shmem rides zswap. */
 	if (folio_test_swapbacked(folio))
-		return folio_test_anon(folio);
-	return false;
+		return folio_test_anon(folio);	/* private anon only; shmem excluded */
+	/*
+	 * Clean file folio, any order.  Large folios are PMD/PTE-mapped read-only
+	 * and write-fenced like order-0 (see do_set_pmd() / remove_migration_pmd()
+	 * / change_huge_pmd()).  Admit only mappings that can serve the
+	 * read-in-place / drop-refault model:
+	 *   - ->read_folio: the synchronous refault path (filemap_fault) calls it
+	 *     directly, with no ->readahead fallback.
+	 *   - !mapping_inaccessible(): CRAM reads bytes in place, which
+	 *     AS_INACCESSIBLE (e.g. guest_memfd) forbids.
+	 *   - folio_evictable(): droppable (not mlocked, not AS_UNEVICTABLE).
+	 *   - clean + uptodate, not under writeback.
+	 */
+	mapping = folio_mapping(folio);
+	return mapping && mapping->a_ops && mapping->a_ops->read_folio &&
+	       !mapping_inaccessible(mapping) &&
+	       folio_evictable(folio) &&
+	       folio_test_uptodate(folio) &&
+	       !folio_test_dirty(folio) &&
+	       !folio_test_writeback(folio);
 }
 
 static void cram_zero_folio(struct folio *folio)
