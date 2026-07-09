@@ -2769,6 +2769,16 @@ bool folio_mark_dirty(struct folio *folio)
 {
 	struct address_space *mapping = folio_mapping(folio);
 
+	/*
+	 * Write-fence backstop.  A clean file folio on a write-fenced node is
+	 * clean by construction and every byte writer promotes it off first, so
+	 * it must never be dirtied here.  Anon and shmem folios on the node are
+	 * swapbacked and are legitimately dirtied on the swap-out path by kswapd,
+	 * so folio_test_swapbacked() excludes them.
+	 */
+	VM_WARN_ON_FOLIO(node_write_fenced(folio_nid(folio)) &&
+			 !folio_test_swapbacked(folio), folio);
+
 	if (likely(mapping)) {
 		/*
 		 * readahead/folio_deactivate could remain

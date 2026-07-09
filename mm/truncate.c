@@ -238,6 +238,19 @@ bool truncate_inode_partial_folio(struct folio *folio, loff_t start, loff_t end)
 	}
 
 	/*
+	 * A folio on a write-fenced node, such as a resident CRAM tier, maps a
+	 * read-only device, so folio_zero_range() below would write it in place.
+	 * That is worst for a hole-punch or zero-range, whose zeroed region is kept
+	 * as live data.  The folio is clean by construction, so drop it instead.
+	 * The kept portion refaults from the fs.  The zeroed portion refaults as
+	 * zeros once the fs frees the blocks, with no in-place device write.
+	 */
+	if (node_write_fenced(folio_nid(folio))) {
+		truncate_inode_folio(folio->mapping, folio);
+		return true;
+	}
+
+	/*
 	 * We may be zeroing pages we're about to discard, but it avoids
 	 * doing a complex calculation here, and then doing the zeroing
 	 * anyway if the page split fails.
