@@ -5104,6 +5104,16 @@ void remove_migration_pmd(struct page_vma_mapped_walk *pvmw, struct page *new)
 	if (folio_test_dirty(folio) && softleaf_is_migration_dirty(entry))
 		pmde = pmd_mkdirty(pmde);
 
+	/*
+	 * Write-fenced node: migration_remap_writable() re-adds write for a file
+	 * folio whose migration entry was writable.  A folio on a write-fenced
+	 * node must stay read-only so the next write promotes.  Mirrors the pte
+	 * fence in remove_migration_pte().  Anon is unaffected because it is kept
+	 * non-exclusive above.
+	 */
+	if (node_write_fenced(folio_nid(folio)))
+		pmde = pmd_wrprotect(pmde);
+
 	if (folio_is_device_private(folio)) {
 		swp_entry_t entry;
 
