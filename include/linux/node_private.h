@@ -19,6 +19,16 @@ struct page;
 #define NODE_PRIVATE_CAP_NUMA_BALANCING	(1UL << 4)	/* allow NUMA balancing */
 #define NODE_PRIVATE_CAP_LTPIN		(1UL << 5)	/* allow GUP pins */
 
+/*
+ * Per-node POLICY bits, stored in the same node_private.caps field.  A CAP says
+ * what a node allows a service to do.  A POLICY says how the mm must handle
+ * folios that live on the node.  The two axes are orthogonal.  CAPs are
+ * assigned from the low end (above) and POLICYs from the high end (here).  Move
+ * POLICYs into their own field when the two ranges would meet.
+ */
+/* folios map read-only; a write must COW-promote off-node */
+#define NODE_PRIVATE_POLICY_WRITE_FENCE	(1UL << (BITS_PER_LONG - 1))
+
 /**
  * struct node_private - Per-node container for N_MEMORY_PRIVATE nodes
  *
@@ -191,6 +201,30 @@ static inline bool node_allows_ltpin(int nid)
 	return ret;
 }
 
+/**
+ * node_write_fenced - must a write to a folio on this node COW-promote off-node?
+ * @nid: the node to test
+ *
+ * POLICY_WRITE_FENCE nodes (e.g. a read-only compressed tier) map their folios
+ * read-only; a write must relocate the folio rather than reuse it in place.
+ * Consumed by the write-fault reuse predicate (folio_must_cow()) and the
+ * migration re-install helpers.  False for every node without the policy, so a
+ * plain private node stays writable in place.
+ */
+static inline bool node_write_fenced(int nid)
+{
+	struct node_private *np;
+	bool ret;
+
+	if (!node_state(nid, N_MEMORY_PRIVATE))
+		return false;
+	rcu_read_lock();
+	np = rcu_dereference(NODE_DATA(nid)->node_private);
+	ret = np && (np->caps & NODE_PRIVATE_POLICY_WRITE_FENCE);
+	rcu_read_unlock();
+	return ret;
+}
+
 #else /* !CONFIG_NUMA */
 
 static inline bool folio_is_private_node(struct folio *folio)
@@ -236,6 +270,11 @@ static inline bool node_allows_numa_balancing(int nid)
 static inline bool node_allows_ltpin(int nid)
 {
 	return true;
+}
+
+static inline bool node_write_fenced(int nid)
+{
+	return false;
 }
 
 #endif /* CONFIG_NUMA */
