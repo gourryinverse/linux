@@ -396,6 +396,64 @@ static int do_churn(long mb, long secs)
 	return 0;
 }
 
+/*
+ * Place an anon working set on a lower-tier node and keep it hot, so mode-2
+ * NUMA balancing promotes it back to a top tier.  The set is relocated with
+ * move_pages(2) (not mbind) so it stays unbound and therefore promotable;
+ * requires the node's user_numa cap for a private target.
+ */
+static int do_promoteset(int nid, long mb, long secs)
+{
+	long ps = sysconf(_SC_PAGESIZE);
+	size_t len = (size_t)mb << 20;
+	long np = len / ps, i;
+	unsigned long total, on_nid;
+	void **pages;
+	int *nodes, *status;
+	time_t end;
+	char *p = mmap(NULL, len, PROT_READ | PROT_WRITE,
+		       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+	if (p == MAP_FAILED) {
+		printf("promoteset: mmap(%ld MB) FAILED: %m\n", mb);
+		return 1;
+	}
+	memset(p, 1, len);			/* fault onto a top tier first */
+
+	pages = calloc(np, sizeof(*pages));
+	nodes = calloc(np, sizeof(*nodes));
+	status = calloc(np, sizeof(*status));
+	if (!pages || !nodes || !status) {
+		printf("promoteset: calloc FAILED: %m\n");
+		return 1;
+	}
+	for (i = 0; i < np; i++) {
+		pages[i] = p + i * ps;
+		nodes[i] = nid;
+		status[i] = 0x7fffffff;
+	}
+	if (sys_move_pages(0, np, pages, nodes, status, MPOL_MF_MOVE) != 0)
+		printf("promoteset: move_pages -> node %d rc=-1 errno=%d (%s)\n",
+		       nid, errno, strerror(errno));
+	numa_residency((unsigned long)p, nid, &total, &on_nid, NULL);
+	printf("promoteset: placed %lu/%lu pages on node%d; touching hot for %ld s\n",
+	       on_nid, total, nid, secs);
+	fflush(stdout);
+
+	/* keep the whole set hot so the scanner sees hot lower-tier pages */
+	end = time(NULL) + secs;
+	do {
+		for (i = 0; i < np; i++)
+			*(volatile char *)(p + i * ps) = (char)i;
+	} while (time(NULL) < end);
+
+	free(pages);
+	free(nodes);
+	free(status);
+	munmap(p, len);
+	return 0;
+}
+
 static int do_daxmap(const char *path, long mb, int nid, long hold)
 {
 	size_t len = (size_t)mb << 20;
@@ -1158,6 +1216,8 @@ int main(int argc, char **argv)
 		return do_anon(atol(argv[2]), argc >= 4 ? atol(argv[3]) : 10);
 	if (argc >= 3 && !strcmp(argv[1], "churn"))
 		return do_churn(atol(argv[2]), argc >= 4 ? atol(argv[3]) : 12);
+	if (argc == 5 && !strcmp(argv[1], "promoteset"))
+		return do_promoteset(atoi(argv[2]), atol(argv[3]), atol(argv[4]));
 	if (argc >= 5 && !strcmp(argv[1], "daxmap"))
 		return do_daxmap(argv[2], atol(argv[3]), atoi(argv[4]),
 				 argc >= 6 ? atol(argv[5]) : 8);
@@ -1206,7 +1266,8 @@ int main(int argc, char **argv)
 
 	fprintf(stderr,
 		"usage: %s map <daxdev> <MB> <nid> | shared <daxdev> | ltpin <daxdev> <MB> <nid> |\n"
-		"       anon <MB> [hold] | churn <MB> [secs] | daxmap <daxdev> <MB> <nid> [hold] |\n"
+		"       anon <MB> [hold] | churn <MB> [secs] | promoteset <nid> <MB> <secs> |\n"
+		"       daxmap <daxdev> <MB> <nid> [hold] |\n"
 		"       daxchurn <daxdev> <MB> [secs] | daxmadv <daxdev> <MB> <pageout|cold|free> |\n"
 		"       daxswap <daxdev> <nid> <MB> [evict_MB] |\n"
 		"       mbind <nid> <MB> [hold] | mbindns <nid> <MB> [hold] |\n"

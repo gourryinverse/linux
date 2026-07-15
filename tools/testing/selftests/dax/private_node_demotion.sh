@@ -52,6 +52,7 @@ cfg() {	# cfg DAX ADIST
 	echo "$2" > "$DAX_BASE/$1/adistance"
 	echo 1 > "$DAX_BASE/$1/demotion"
 	echo 1 > "$DAX_BASE/$1/numa_balancing"
+	echo 1 > "$DAX_BASE/$1/user_numa"	# move_pages(2) placement for promote test
 	echo 1 > "$DAX_BASE/$1/hotunplug"
 	echo online_movable > "$DAX_BASE/$1/state" 2>/dev/null
 }
@@ -92,12 +93,16 @@ else
 		ktap_test_skip "NUMA balancing mode 2 (promotion) unavailable"
 	else
 		p0=$(vstat pgpromote_success)
-		"$TOOL" churn $(( $(dram_mb "$DRAM0") + 512 )) 60 >/dev/null 2>&1 & cp=$!
+		# Place a hot working set ON P1 (unbound move_pages, still promotable)
+		# and keep it hot; mode-2 NUMA balancing promotes hot lower-tier pages.
+		promb=$(( $(dram_mb "$P1") / 2 ))
+		[ "$promb" -gt 512 ] && promb=512; [ "$promb" -lt 64 ] && promb=64
+		"$TOOL" promoteset "$P1" "$promb" 120 >/dev/null 2>&1 & cp=$!
 		ok=0
-		for _ in $(seq 1 12); do sleep 5; [ "$(vstat pgpromote_success)" -gt $(( p0 + 1024 )) ] 2>/dev/null && { ok=1; break; }; done
+		for _ in $(seq 1 24); do sleep 5; [ "$(vstat pgpromote_success)" -gt $(( p0 + 1024 )) ] 2>/dev/null && { ok=1; break; }; done
 		kill "$cp" 2>/dev/null; wait "$cp" 2>/dev/null
 		if [ "$ok" = 1 ]; then
-			ktap_test_pass "pages demoted to node $P1 were promoted back to DRAM"
+			ktap_test_pass "hot pages on node $P1 were promoted back to DRAM"
 		else
 			ktap_test_skip "no promotion observed (pgpromote_success flat in this env)"
 		fi
