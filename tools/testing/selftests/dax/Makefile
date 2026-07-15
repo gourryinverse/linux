@@ -59,6 +59,13 @@ TEST_PROGS += cram_hot.sh
 TEST_PROGS += cram_trim.sh
 TEST_PROGS += cram_control.sh
 
+# generic tiering perf tooling (uniform across the matrix)
+TEST_GEN_FILES += dax_microbench_tool
+TEST_GEN_FILES += tier_latency_tool
+TEST_PROGS += dax_microbench.sh
+TEST_PROGS += tier_latency.sh
+TEST_FILES += collect_stats.sh dcperf_taobench.sh
+
 include ../lib.mk
 
 $(OUTPUT)/cram_pressure_tool: LDLIBS += -lpthread
