@@ -1014,7 +1014,6 @@ KMEM_PRIVATE_CAP_ATTR(ltpin, NODE_PRIVATE_CAP_LTPIN);
 
 /* Per-service opt-ins. Visibility toggled by 'private' control */
 static struct attribute *dax_kmem_private_attrs[] = {
-	&dev_attr_adistance.attr,
 	&dev_attr_reclaim.attr,
 	&dev_attr_user_numa.attr,
 	&dev_attr_hotunplug.attr,
@@ -1236,6 +1235,7 @@ static DEVICE_ATTR_RW(state);
 
 static struct attribute *dev_dax_kmem_attrs[] = {
 	&dev_attr_state.attr,
+	&dev_attr_adistance.attr,
 	&dev_attr_dax_file.attr,
 	&dev_attr_private.attr,
 	&dev_attr_cram.attr,
