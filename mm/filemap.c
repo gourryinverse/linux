@@ -1976,22 +1976,40 @@ repeat:
 	}
 
 	/*
-	 * Write fence.  A non-mmap acquire is a byte access, so promote the folio
-	 * off the fenced node before handing it back and no writer ever touches
-	 * the device.  The mmap read fault path (FGP_FOR_MMAP without FGP_WRITE)
-	 * is exempt and maps the folio read-only in place.  A shared mmap write
-	 * fault sets FGP_WRITE and promotes here too, because do_shared_fault()'s
-	 * page_mkwrite() would dirty the folio in place before the wp promote
-	 * fires.  Never serve an un-promoted folio: a later write_begin() store is
-	 * a kernel memcpy into it, not a fault, so it would bypass the PTE fences
-	 * and hit the device.  promote_fenced_folio() is one-shot.  A blocking
-	 * caller retries via the repeat loop; only NOWAIT gets -EAGAIN.
+	 * Write fence: never hand a writer a folio on a node that withholds
+	 * NODE_MEMORY_FEAT_USER_WRITE.  A write(2) overwrite (locked, FGP_WRITE,
+	 * not mmap, unmapped) drops it and reallocates on a public node, skipping
+	 * the promote-copy; anything else that would write it promotes off the
+	 * node.  The mmap read fault (FGP_FOR_MMAP, no FGP_WRITE) is exempt --
+	 * served read-only in place.
 	 */
 	if (folio_write_fenced(folio) &&
 	    (!(fgp_flags & FGP_FOR_MMAP) || (fgp_flags & FGP_WRITE))) {
-		if (fgp_flags & FGP_LOCK)
+		bool locked = !!(fgp_flags & FGP_LOCK);
+		bool drop = locked && (fgp_flags & FGP_WRITE) &&
+			    !(fgp_flags & FGP_FOR_MMAP) && !folio_mapped(folio);
+
+		/*
+		 * truncate_inode_folio(), not filemap_remove_folio(): the latter
+		 * unhooks the folio from the page cache but leaves the
+		 * filesystem's ->private attached, and a folio with a live
+		 * private and a NULL mapping is a trap.  Migration then reaches
+		 * fallback_migrate_folio(), which finds no ->release_folio to
+		 * call and hands ->private to try_to_free_buffers() as if it
+		 * were a buffer_head list.  btrfs attaches a bare
+		 * (void *)EXTENT_FOLIO_PRIVATE == 1 marker, so that is a NULL
+		 * deref at offline time, far from here.  Invalidate first, which
+		 * is what truncate does for the same reason.
+		 */
+		if (drop)
+			truncate_inode_folio(mapping, folio);	/* realloc off-node */
+		if (locked)
 			folio_unlock(folio);
 		folio_put(folio);
+		if (drop) {
+			folio = NULL;
+			goto no_page;
+		}
 		if (promote_fenced_folio(mapping, index, fgp_flags & FGP_NOWAIT)) {
 			if (fgp_flags & FGP_NOWAIT)
 				return ERR_PTR(-EAGAIN);
