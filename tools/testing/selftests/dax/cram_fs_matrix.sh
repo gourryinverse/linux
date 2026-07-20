@@ -21,7 +21,7 @@ DIR="$(dirname "$(readlink -f "$0")")"
 FS_LIST=${CRAM_FS_LIST:-"ext4 xfs btrfs"}
 DISK=${CRAM_FS_DISK:-/dev/vda}
 
-FILE_TESTS="cram_pgcache.sh cram_pgcache_large.sh cram_readahead.sh cram_coherence.sh"
+FILE_TESTS="cram_pgcache.sh cram_pgcache_large.sh cram_readahead.sh cram_coherence.sh cram_dropwrite.sh"
 
 ktap_print_header
 [ "$(id -u)" = 0 ] || { ktap_skip_all "must run as root"; exit "$KSFT_SKIP"; }

@@ -18,6 +18,7 @@ TEST_GEN_FILES += cram_hot_tool
 TEST_GEN_FILES += cram_coherence_tool
 TEST_GEN_FILES += cram_pgcache_large_tool
 TEST_GEN_FILES += cram_readahead_tool
+TEST_GEN_FILES += cram_dropwrite_tool
 
 TEST_PROGS := dax-kmem-hotplug.sh
 TEST_PROGS += dax-kmem-dax_file.sh
@@ -43,6 +44,7 @@ TEST_PROGS += cram_node_basic.sh
 TEST_PROGS += cram_readable.sh
 TEST_PROGS += cram_swap.sh
 TEST_PROGS += cram_pgcache.sh
+TEST_PROGS += cram_dropwrite.sh
 TEST_PROGS += cram_coherence.sh
 TEST_PROGS += cram_pgcache_large.sh
 TEST_PROGS += cram_readahead.sh
