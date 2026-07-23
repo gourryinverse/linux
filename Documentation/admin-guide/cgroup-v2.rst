@@ -2519,6 +2519,12 @@ Cpuset Interface Files
 	The value of "cpuset.mems" stays constant until the next update
 	and won't be affected by any memory nodes hotplug events.
 
+	Private memory nodes - those hosted by a device and kept off the
+	page allocator's fallback lists - are granted through this file
+	like any other node, but a non-empty value must still name at
+	least one ordinary node; a private-only value is rejected.  See
+	Documentation/mm/numa_private_nodes.rst.
+
 	Setting a non-empty value to "cpuset.mems" causes memory of
 	tasks within the cgroup to be migrated to the designated nodes if
 	they are currently using memory outside of the designated nodes.
