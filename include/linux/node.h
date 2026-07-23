@@ -171,6 +171,8 @@ static inline int hotplug_node_notifier(notifier_fn_t fn, int pri)
 }
 #endif
 
+struct node_private;
+
 #ifdef CONFIG_NUMA
 extern void node_dev_init(void);
 /* Core of the node registration - only memory hotplug should use this */
@@ -183,6 +185,9 @@ extern void unregister_memory_block_under_nodes(struct memory_block *mem_blk);
 extern int register_memory_node_under_compute_node(unsigned int mem_nid,
 						   unsigned int cpu_nid,
 						   enum access_coordinate_class access);
+
+int node_private_register(int nid, struct node_private *np);
+void node_private_unregister(int nid);
 #else
 static inline void node_dev_init(void)
 {
@@ -204,6 +209,15 @@ static inline int unregister_cpu_under_node(unsigned int cpu, unsigned int nid)
 	return 0;
 }
 static inline void unregister_memory_block_under_nodes(struct memory_block *mem_blk)
+{
+}
+
+static inline int node_private_register(int nid, struct node_private *np)
+{
+	return np ? -ENODEV : 0;
+}
+
+static inline void node_private_unregister(int nid)
 {
 }
 #endif

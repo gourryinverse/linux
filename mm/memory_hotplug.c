@@ -1207,7 +1207,6 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 	 * Publish this node's memory states, including any newly-normal zone.
 	 * Hotplug does not maintain N_HIGH_MEMORY (only set on boot nodes).
 	 */
-	WRITE_ONCE(NODE_DATA(nid)->memory_caps, NODE_MEMORY_CAP_ALL);
 	node_set_memory_state(nid, false, zone_idx(zone) <= ZONE_NORMAL,
 			      READ_ONCE(NODE_DATA(nid)->memory_caps));
 
@@ -1530,7 +1529,7 @@ static bool node_is_memoryless(int nid)
  * we are OK calling __meminit stuff here - we have CONFIG_MEMORY_HOTPLUG
  */
 static int __add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags,
-				 enum mmop online_type)
+				 enum mmop online_type, struct node_private *np)
 {
 	struct mhp_params params = { .pgprot = pgprot_mhp(PAGE_KERNEL) };
 	enum memblock_flags memblock_flags = MEMBLOCK_NONE;
@@ -1581,6 +1580,11 @@ static int __add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags,
 		new_node = true;
 	}
 
+	/* Register private ownership so the node onlines as private. */
+	ret = node_private_register(nid, np);
+	if (ret)
+		goto error;
+
 	/*
 	 * Self hosted memmap array
 	 */
@@ -1626,6 +1630,9 @@ static int __add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags,
 
 	return ret;
 error:
+	/* If nothing was actually onlined, undo any private registration. */
+	if (node_is_memoryless(nid))
+		node_private_unregister(nid);
 	if (new_node) {
 		node_set_offline(nid);
 		unregister_node(nid);
@@ -1641,7 +1648,7 @@ error_mem_hotplug_end:
 int add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags)
 {
 	return __add_memory_resource(nid, res, mhp_flags,
-				     mhp_get_default_online_type());
+				     mhp_get_default_online_type(), NULL);
 }
 
 /* requires device_hotplug_lock, see __add_memory_resource() */
@@ -1706,7 +1713,7 @@ EXPORT_SYMBOL_GPL(add_memory);
  */
 int __add_memory_driver_managed(int nid, u64 start, u64 size,
 		const char *resource_name, mhp_t mhp_flags,
-		enum mmop online_type)
+		enum mmop online_type, struct node_private *np)
 {
 	struct resource *res;
 	int rc;
@@ -1727,7 +1734,7 @@ int __add_memory_driver_managed(int nid, u64 start, u64 size,
 		goto out_unlock;
 	}
 
-	rc = __add_memory_resource(nid, res, mhp_flags, online_type);
+	rc = __add_memory_resource(nid, res, mhp_flags, online_type, np);
 	if (rc < 0)
 		release_memory_resource(res);
 
@@ -1736,6 +1743,34 @@ out_unlock:
 	return rc;
 }
 EXPORT_SYMBOL_FOR_MODULES(__add_memory_driver_managed, "kmem");
+
+/**
+ * add_private_memory_driver_managed - add private (isolated) driver-managed memory
+ * @nid: NUMA node ID where the memory will be added
+ * @start: Start physical address of the memory range
+ * @size: Size of the memory range in bytes
+ * @resource_name: Resource name in format "System RAM ($DRIVER)"
+ * @mhp_flags: Memory hotplug flags
+ * @online_type: Auto-Online behavior (offline, online, kernel, movable)
+ * @np: private node descriptor (mandatory) recording the owner and caps
+ *
+ * Like __add_memory_driver_managed(), but the node is brought up as a
+ * private node (isolated from the general allocator by the zonelist; mm
+ * services are gated per @np->caps) rather than ordinary system RAM.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int add_private_memory_driver_managed(int nid, u64 start, u64 size,
+				      const char *resource_name, mhp_t mhp_flags,
+				      enum mmop online_type, struct node_private *np)
+{
+	if (!np)
+		return -EINVAL;
+
+	return __add_memory_driver_managed(nid, start, size, resource_name,
+					   mhp_flags, online_type, np);
+}
+EXPORT_SYMBOL_GPL(add_private_memory_driver_managed);
 
 /**
  * add_memory_driver_managed - add driver-managed memory
@@ -1757,7 +1792,7 @@ int add_memory_driver_managed(int nid, u64 start, u64 size,
 {
 	return __add_memory_driver_managed(nid, start, size, resource_name,
 			mhp_flags,
-			mhp_get_default_online_type());
+			mhp_get_default_online_type(), NULL);
 }
 EXPORT_SYMBOL_GPL(add_memory_driver_managed);
 
@@ -2259,6 +2294,9 @@ void try_offline_node(int nid)
 {
 	if (!node_is_memoryless(nid))
 		return;
+
+	/* Once a node's memory is fully gone, drop any private ownership. */
+	node_private_unregister(nid);
 
 	if (check_cpu_on_node(nid))
 		return;

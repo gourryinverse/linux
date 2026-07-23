@@ -1007,6 +1007,75 @@ static const struct attribute_group *cpu_root_attr_groups[] = {
 	NULL,
 };
 
+/**
+ * node_private_register - record a NUMA node's private ownership
+ * @nid: the node
+ * @np: driver-owned descriptor (owner + NODE_MEMORY_CAP_* caps), or NULL
+ *
+ * The node must not be marked N_MEMORY.
+ * @np must stay valid until unregister.
+ *
+ * Caller must hold the memory hotplug lock to keep N_MEMORY stable.
+ *
+ * Return: 0 on success (incl. @np == NULL), negative errno otherwise.
+ */
+int node_private_register(int nid, struct node_private *np)
+{
+	struct node_private *existing;
+	struct pglist_data *pgdat;
+
+	if ((unsigned int)nid >= MAX_NUMNODES || !node_possible(nid))
+		return -EINVAL;
+
+	pgdat = NODE_DATA(nid);
+	existing = pgdat->node_private;
+
+	/* Public node */
+	if (!existing && !np) {
+		WRITE_ONCE(pgdat->memory_caps, NODE_MEMORY_CAP_ALL);
+		return 0;
+	}
+
+	/* Existing private node - must have same owner and caps */
+	if (existing && np)
+		return (existing == np && existing->caps == np->caps) ? 0 : -EBUSY;
+
+	/* New private node - the node must not already have memory */
+	if (node_state(nid, N_MEMORY))
+		return -EBUSY;
+
+	/* Validate capabilities: Demotion requires Reclaim, Fallback requires All */
+	if (np->caps & NODE_MEMORY_CAP_DEMOTION && !(np->caps & NODE_MEMORY_CAP_RECLAIM))
+		return -EINVAL;
+	if (np->caps & NODE_MEMORY_CAP_FALLBACK && np->caps != NODE_MEMORY_CAP_ALL)
+		return -EINVAL;
+
+	pgdat->node_private = np;
+	WRITE_ONCE(pgdat->memory_caps, np->caps);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(node_private_register);
+
+/**
+ * node_private_unregister - drop a node's private ownership
+ * @nid: the node
+ *
+ * Safe on a non-private node.  Caller must hold the memory hotplug lock and must
+ * have offlined the node's memory first.
+ */
+void node_private_unregister(int nid)
+{
+	struct pglist_data *pgdat;
+
+	if ((unsigned int)nid >= MAX_NUMNODES || !node_possible(nid))
+		return;
+
+	pgdat = NODE_DATA(nid);
+	WRITE_ONCE(pgdat->memory_caps, NODE_MEMORY_CAP_ALL);
+	pgdat->node_private = NULL;
+}
+EXPORT_SYMBOL_GPL(node_private_unregister);
+
 void __init node_dev_init(void)
 {
 	int ret, i;
