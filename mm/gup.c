@@ -485,6 +485,24 @@ static inline void mm_set_has_pinned_flag(struct mm_struct *mm)
 #ifdef CONFIG_MMU
 
 #ifdef CONFIG_HAVE_GUP_FAST
+/*
+ * folio_allows_longterm_pin() - may this folio be long-term GUP-pinned?
+ *
+ * folio_is_longterm_pinnable() rules plus the node's pinning feature.
+ * The node check lives here to avoid a header dependency cycle.
+ */
+static inline bool folio_allows_longterm_pin(struct folio *folio)
+{
+	return folio_is_longterm_pinnable(folio) &&
+	       node_state(folio_nid(folio), N_MEMORY_LTPIN);
+}
+
+/* folio_longterm_pin_forbidden() - must a pin of this folio fail outright? */
+static inline bool folio_longterm_pin_forbidden(struct folio *folio)
+{
+	return !node_state(folio_nid(folio), N_MEMORY_LTPIN);
+}
+
 /**
  * try_grab_folio_fast() - Attempt to get or pin a folio in fast path.
  * @page:  pointer to page to be grabbed
@@ -550,7 +568,7 @@ static struct folio *try_grab_folio_fast(struct page *page, int refs,
 	 * path.
 	 */
 	if (unlikely((flags & FOLL_LONGTERM) &&
-		     !folio_is_longterm_pinnable(folio))) {
+		     !folio_allows_longterm_pin(folio))) {
 		folio_put_refs(folio, refs);
 		return NULL;
 	}
@@ -2389,11 +2407,31 @@ err:
 	return ret;
 }
 
+/* True if any folio sits on a node that doesn't support longterm pinning */
+static bool pofs_has_ltpin_forbidden(struct pages_or_folios *pofs)
+{
+	struct folio *folio;
+	long i = 0;
+
+	for (folio = pofs_get_folio(pofs, i); folio;
+	     folio = pofs_next_folio(folio, pofs, &i)) {
+		if (folio_longterm_pin_forbidden(folio))
+			return true;
+	}
+	return false;
+}
+
 static long
 check_and_migrate_movable_pages_or_folios(struct pages_or_folios *pofs)
 {
 	LIST_HEAD(movable_folio_list);
 	unsigned long collected;
+
+	/* If any folio forbids pinning, fail outright. */
+	if (pofs_has_ltpin_forbidden(pofs)) {
+		pofs_unpin(pofs);
+		return -EFAULT;
+	}
 
 	collected = collect_longterm_unpinnable_folios(&movable_folio_list,
 						       pofs);
