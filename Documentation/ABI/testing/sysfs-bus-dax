@@ -157,7 +157,12 @@ Contact:	nvdimm@lists.linux.dev
 Description:
 		(RW) Controls the state of the memory region.
 		Applies to all memory blocks associated with the device.
-		Only applies to dax_kmem devices.
+		Applies to the dax_kmem driver.  The memory is onlined as
+		ordinary system RAM unless the device's capability mask has been
+		narrowed (see Documentation/mm/numa_private_nodes.rst), in which
+		case it is onlined onto a private node -- an N_MEMORY node absent
+		from N_MEMORY_FALLBACK, whose set bits select which mm services
+		may touch it.
 
 		Reading returns the current state; the writable states mirror
 		the per-block /sys/devices/system/memory/memoryX/state ABI::
@@ -175,3 +180,37 @@ Description:
 		A device can only be onlined from the "unplugged" state, so a
 		device must be returned to "unplugged" before it can be onlined
 		into a different state.
+
+What:		/sys/bus/dax/devices/daxX.Y/dax_file
+Date:		June, 2026
+KernelVersion:	v6.21
+Contact:	nvdimm@lists.linux.dev
+Description:
+		(RW) dax_kmem only.  When set, mmap()ing the /dev/daxX.Y char
+		device yields an ordinary ANONYMOUS mapping whose faults (and
+		swap-in) are bound to the device's node, i.e. a way to fault
+		anonymous memory onto a specific node through the dax device.
+		This is independent of the node's capability mask: it is a
+		dax-only extension, not an mm-service capability, so it is its
+		own toggle rather than a per-node opt-in.  When clear (the default) no cdev is installed
+		and opening /dev/daxX.Y returns -ENXIO (classic kmem behaviour).
+		Writable only while the device is "unplugged" (-EBUSY otherwise).
+
+		Faults are base-page (PAGE_SIZE) only unless the node opts into
+		reclaim (the "reclaim" attr), because a node that cannot
+		compact/reclaim risks failing higher-order (THP) allocations for
+		want of a given order; with reclaim, THP is allowed.
+
+What:		/sys/bus/dax/devices/daxX.Y/adistance
+Date:		June, 2026
+KernelVersion:	v6.21
+Contact:	nvdimm@lists.linux.dev
+Description:
+		(RW) dax_kmem only.  Present on every dax_kmem device.
+
+		Abstract distance that adjusts the placement of the node in the
+		memory-tier hierarchy (larger is a lower tier).
+
+		May only be written while the device is "unplugged".
+
+		No effect if NODE_MEMORY_CAP_DEMOTION is not also selected.
