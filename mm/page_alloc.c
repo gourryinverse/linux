@@ -207,6 +207,7 @@ nodemask_t node_states[NR_NODE_STATES] __read_mostly = {
 	[N_MEMORY_NUMA_BALANCING] = { { [0] = 1UL } },
 	[N_MEMORY_LTPIN] = { { [0] = 1UL } },
 	[N_MEMORY_DAMON] = { { [0] = 1UL } },
+	[N_MEMORY_KSM] = { { [0] = 1UL } },
 	[N_CPU] = { { [0] = 1UL } },
 #endif	/* NUMA */
 };
