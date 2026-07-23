@@ -1608,6 +1608,7 @@ typedef struct pglist_data {
 	 * this instead of node_private, which is cleared on hot-unplug.
 	 */
 	unsigned long memory_caps;
+	struct node_private *node_private;
 } pg_data_t;
 
 /**

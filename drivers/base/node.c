@@ -1003,6 +1003,86 @@ static const struct attribute_group *cpu_root_attr_groups[] = {
 	NULL,
 };
 
+/**
+ * node_private_register - record a NUMA node's private ownership
+ * @nid: the node
+ * @np: driver-owned descriptor (NODE_MEMORY_CAP_* caps); the pointer itself is
+ *      the node's owner token, or NULL to keep/return the node public
+ *
+ * The node must not be marked N_MEMORY.  @np must stay valid until unregister,
+ * and a driver re-registering a node it already owns must pass the identical
+ * @np pointer -- an equivalent copy is rejected as a different owner.
+ *
+ * Caller must hold the memory hotplug lock to keep N_MEMORY stable.
+ *
+ * Return: 0 on success; -EBUSY if the node is already owned by a different
+ * descriptor (including a NULL @np against an already-owned node); other
+ * negative errno on invalid arguments or capabilities.
+ */
+int node_private_register(int nid, struct node_private *np)
+{
+	struct node_private *existing;
+	struct pglist_data *pgdat;
+
+	if ((unsigned int)nid >= MAX_NUMNODES || !node_possible(nid))
+		return -EINVAL;
+
+	pgdat = NODE_DATA(nid);
+	existing = pgdat->node_private;
+
+	/* Public node */
+	if (!existing && !np) {
+		WRITE_ONCE(pgdat->memory_caps, NODE_MEMORY_CAP_ALL);
+		return 0;
+	}
+
+	/*
+	 * Existing private node - re-registration must come from the same owner,
+	 * identified by the np pointer (which also pins the caps).
+	 */
+	if (existing && np)
+		return (existing == np) ? 0 : -EBUSY;
+
+	/* An owned node cannot be taken public by a caller that does not own it */
+	if (existing)
+		return -EBUSY;
+
+	/* New private node - the node must not already have memory */
+	if (node_state(nid, N_MEMORY))
+		return -EBUSY;
+
+	/* Validate capabilities: Demotion requires Reclaim, Fallback requires All */
+	if (np->caps & NODE_MEMORY_CAP_DEMOTION && !(np->caps & NODE_MEMORY_CAP_RECLAIM))
+		return -EINVAL;
+	if (np->caps & NODE_MEMORY_CAP_FALLBACK && np->caps != NODE_MEMORY_CAP_ALL)
+		return -EINVAL;
+
+	pgdat->node_private = np;
+	WRITE_ONCE(pgdat->memory_caps, np->caps);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(node_private_register);
+
+/**
+ * node_private_unregister - drop a node's private ownership
+ * @nid: the node
+ *
+ * Safe on a non-private node.  Caller must hold the memory hotplug lock and must
+ * have offlined the node's memory first.
+ */
+void node_private_unregister(int nid)
+{
+	struct pglist_data *pgdat;
+
+	if ((unsigned int)nid >= MAX_NUMNODES || !node_possible(nid))
+		return;
+
+	pgdat = NODE_DATA(nid);
+	WRITE_ONCE(pgdat->memory_caps, NODE_MEMORY_CAP_ALL);
+	pgdat->node_private = NULL;
+}
+EXPORT_SYMBOL_GPL(node_private_unregister);
+
 /*
  * The raw NODE_MEMORY_CAP_* mask of every online node, one "<nid> <mask>" line
  * each.  This is deliberately not in sysfs: the bit layout is kernel-internal
