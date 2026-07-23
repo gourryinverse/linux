@@ -183,6 +183,9 @@ extern void unregister_memory_block_under_nodes(struct memory_block *mem_blk);
 extern int register_memory_node_under_compute_node(unsigned int mem_nid,
 						   unsigned int cpu_nid,
 						   enum access_coordinate_class access);
+
+int node_memory_features_register(int nid, unsigned long features);
+void node_memory_features_unregister(int nid);
 #else
 static inline void node_dev_init(void)
 {
@@ -204,6 +207,16 @@ static inline int unregister_cpu_under_node(unsigned int cpu, unsigned int nid)
 	return 0;
 }
 static inline void unregister_memory_block_under_nodes(struct memory_block *mem_blk)
+{
+}
+
+static inline int node_memory_features_register(int nid,
+						unsigned long features)
+{
+	return features == NODE_MEMORY_FEAT_ALL ? 0 : -ENODEV;
+}
+
+static inline void node_memory_features_unregister(int nid)
 {
 }
 #endif

@@ -1001,6 +1001,68 @@ static const struct attribute_group *cpu_root_attr_groups[] = {
 	NULL,
 };
 
+/**
+ * node_memory_features_register - claim the mm features of a node's memory
+ * @nid: the node
+ * @features: NODE_MEMORY_FEAT_* services the memory opts into;
+ *            %NODE_MEMORY_FEAT_ALL is an ordinary public node
+ *
+ * A node whose mask lacks NODE_MEMORY_FEAT_PUBLIC is private: kept off the
+ * allocator's fallback zonelists, with each mm service gated by its bit.  The
+ * mask is fixed once claimed and lasts until the node's memory is gone, so a
+ * second caller adding memory to the node has to name the same mask.
+ *
+ * Caller must hold the memory hotplug lock to keep N_MEMORY stable.
+ *
+ * Return: 0 on success; -EINVAL on an inconsistent mask; -EBUSY if the node
+ * is already claimed with a different one.
+ */
+int node_memory_features_register(int nid, unsigned long features)
+{
+	struct pglist_data *pgdat;
+	unsigned long claimed;
+
+	if ((unsigned int)nid >= MAX_NUMNODES || !node_possible(nid))
+		return -EINVAL;
+
+	/* Demotion requires Reclaim, Public requires All */
+	if (features & NODE_MEMORY_FEAT_DEMOTION &&
+	    !(features & NODE_MEMORY_FEAT_RECLAIM))
+		return -EINVAL;
+	if (features & NODE_MEMORY_FEAT_PUBLIC &&
+	    features != NODE_MEMORY_FEAT_ALL)
+		return -EINVAL;
+
+	pgdat = NODE_DATA(nid);
+	claimed = READ_ONCE(pgdat->memory_features);
+	if (features == claimed)
+		return 0;
+
+	/* Only an unclaimed, empty node can be given a different mask */
+	if (claimed != NODE_MEMORY_FEAT_ALL || node_state(nid, N_MEMORY))
+		return -EBUSY;
+
+	WRITE_ONCE(pgdat->memory_features, features);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(node_memory_features_register);
+
+/**
+ * node_memory_features_unregister - return a node to the public default
+ * @nid: the node
+ *
+ * Safe on a public node.  Caller must hold the memory hotplug lock and must
+ * have offlined the node's memory first.
+ */
+void node_memory_features_unregister(int nid)
+{
+	if ((unsigned int)nid >= MAX_NUMNODES || !node_possible(nid))
+		return;
+
+	WRITE_ONCE(NODE_DATA(nid)->memory_features, NODE_MEMORY_FEAT_ALL);
+}
+EXPORT_SYMBOL_GPL(node_memory_features_unregister);
+
 void __init node_dev_init(void)
 {
 	int ret, i;
