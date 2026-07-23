@@ -157,7 +157,11 @@ Contact:	nvdimm@lists.linux.dev
 Description:
 		(RW) Controls the state of the memory region.
 		Applies to all memory blocks associated with the device.
-		Only applies to dax_kmem devices.
+		Applies to the dax_kmem driver.  When the device's
+		"mm_capabilities" is not NODE_MEMORY_CAP_ALL the memory is onlined
+		onto a private node (an N_MEMORY node not in N_MEMORY_FALLBACK) whose set bits select which
+		mm services may touch it; otherwise it is onlined as ordinary
+		system RAM.
 
 		Reading returns the current state; the writable states mirror
 		the per-block /sys/devices/system/memory/memoryX/state ABI::
@@ -175,3 +179,68 @@ Description:
 		A device can only be onlined from the "unplugged" state, so a
 		device must be returned to "unplugged" before it can be onlined
 		into a different state.
+
+What:		/sys/bus/dax/devices/daxX.Y/mm_capabilities
+Date:		June, 2026
+KernelVersion:	v6.21
+Contact:	nvdimm@lists.linux.dev
+Description:
+		(RW) dax_kmem only.  A NODE_MEMORY_CAP_* bitmask selecting how the
+		device onlines its memory.  NODE_MEMORY_CAP_ALL (~0, the default)
+		onlines it as ordinary system RAM; any other value onlines it as a
+		private node (an N_MEMORY node not in N_MEMORY_FALLBACK) whose set bits are the only mm
+		services that may act on the node's memory -- everything else is
+		isolated.  Accepts decimal or 0x hex.  Writable only while the
+		device is "unplugged" (-EBUSY otherwise).
+
+		The capability bits (see include/linux/nodemask.h) are:
+
+		  NODE_MEMORY_CAP_RECLAIM	reclaim of the node's folios,
+						by the mm and by userspace madvise
+		  NODE_MEMORY_CAP_USER_NUMA	userspace placement and migration
+						via mempolicy and move/migrate_pages
+		  NODE_MEMORY_CAP_DEMOTION	reclaim demotion/tiering onto the
+						node (requires RECLAIM)
+		  NODE_MEMORY_CAP_NUMA_BALANCING NUMA balancing scan/migrate of
+						the node's folios
+		  NODE_MEMORY_CAP_LTPIN		FOLL_LONGTERM GUP pins
+		  NODE_MEMORY_CAP_COLLAPSE	THP collapse (khugepaged/madvise)
+		  NODE_MEMORY_CAP_HUGETLB	hugetlb pool allocation
+
+		Dependencies (DEMOTION requires RECLAIM) are validated at hotplug,
+		not at write time: an inconsistent mask is accepted by the write
+		but the subsequent online fails.
+
+What:		/sys/bus/dax/devices/daxX.Y/dax_file
+Date:		June, 2026
+KernelVersion:	v6.21
+Contact:	nvdimm@lists.linux.dev
+Description:
+		(RW) dax_kmem only.  When set, mmap()ing the /dev/daxX.Y char
+		device yields an ordinary ANONYMOUS mapping whose faults (and
+		swap-in) are bound to the device's node, i.e. a way to fault
+		anonymous memory onto a specific node through the dax device.
+		This is independent of "mm_capabilities": it is a dax-only extension, not
+		an mm-service capability, so it is its own toggle rather than a
+		per-node opt-in.  When clear (the default) no cdev is installed
+		and opening /dev/daxX.Y returns -ENXIO (classic kmem behaviour).
+		Writable only while the device is "unplugged" (-EBUSY otherwise).
+
+		Faults are base-page (PAGE_SIZE) only unless the node opts into
+		reclaim (the "reclaim" attr), because a node that cannot
+		compact/reclaim risks failing higher-order (THP) allocations for
+		want of a given order; with reclaim, THP is allowed.
+
+What:		/sys/bus/dax/devices/daxX.Y/adistance
+Date:		June, 2026
+KernelVersion:	v6.21
+Contact:	nvdimm@lists.linux.dev
+Description:
+		(RW) dax_kmem only.  Present on every dax_kmem device.
+
+		Abstract distance that adjusts the placement of the node in the
+		memory-tier hierarchy (larger is a lower tier).
+
+		May only be written while the device is "unplugged".
+
+		No effect if NODE_MEMORY_CAP_DEMOTION is not also selected.
