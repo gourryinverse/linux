@@ -179,6 +179,10 @@ nodes with particular properties as defined by ``enum node_states``:
   Contiguous allocation may isolate and allocate ranges on the node.
 ``N_MEMORY_COMPACTION``
   Memory compaction may operate on the node.
+``N_MEMORY_RECLAIM``
+  Page reclaim may operate on the node.
+``N_MEMORY_DEMOTION``
+  Memory tiering may demote pages to or from the node.
 ``N_MEMORY_USER_NUMA``
   Userspace NUMA placement may target the node.
 ``N_CPU``
