@@ -95,6 +95,8 @@ struct dev_dax {
 	struct device dev;
 	struct dev_pagemap *pgmap;
 	bool memmap_on_memory;
+	/* NODE_MEMORY_FEAT_* mask, declared by the provider at creation */
+	unsigned long mm_features;
 	int nr_range;
 	struct dev_dax_range *ranges;
 };

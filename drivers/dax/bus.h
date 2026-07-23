@@ -28,6 +28,8 @@ struct dev_dax_data {
 	resource_size_t size;
 	int id;
 	bool memmap_on_memory;
+	/* NODE_MEMORY_FEAT_* mask; 0 means ALL, i.e. ordinary system RAM */
+	unsigned long mm_features;
 };
 
 struct dev_dax *devm_create_dev_dax(struct dev_dax_data *data);
