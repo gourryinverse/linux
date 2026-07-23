@@ -405,6 +405,8 @@ static int damon_young_pmd_entry(pmd_t *pmd, unsigned long addr,
 		folio = vm_normal_folio_pmd(walk->vma, addr, pmde);
 		if (!folio)
 			goto huge_out;
+		if (!folio_allows_mm_op(folio, N_MEMORY_DAMON))
+			goto huge_out;
 		if (pmd_young(pmde) || !folio_test_idle(folio) ||
 					mmu_notifier_test_young(walk->mm,
 						addr))
@@ -423,6 +425,8 @@ huge_out:
 		goto out;
 	folio = vm_normal_folio(walk->vma, addr, ptent);
 	if (!folio)
+		goto out;
+	if (!folio_allows_mm_op(folio, N_MEMORY_DAMON))
 		goto out;
 	if (pte_young(ptent) || !folio_test_idle(folio) ||
 			mmu_notifier_test_young(walk->mm, addr))
@@ -451,8 +455,9 @@ static int damon_young_hugetlb_entry(pte_t *pte, unsigned long hmask,
 	folio = pfn_folio(pte_pfn(entry));
 	folio_get(folio);
 
-	if (pte_young(entry) || !folio_test_idle(folio) ||
-	    mmu_notifier_test_young(walk->mm, addr))
+	if (folio_allows_mm_op(folio, N_MEMORY_DAMON) &&
+	    (pte_young(entry) || !folio_test_idle(folio) ||
+	     mmu_notifier_test_young(walk->mm, addr)))
 		priv->young = true;
 
 	folio_put(folio);
@@ -525,6 +530,9 @@ static bool damos_va_filter_young_match(struct damos_filter *filter,
 		unsigned long addr, pte_t *ptep, pmd_t *pmdp)
 {
 	bool young = false;
+
+	if (!folio_allows_mm_op(folio, N_MEMORY_DAMON))
+		return !filter->matching;
 
 	if (ptep)
 		young = pte_young(ptep_get(ptep));

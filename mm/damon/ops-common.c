@@ -32,7 +32,8 @@ struct folio *damon_get_folio(unsigned long pfn)
 	folio = page_folio(page);
 	if (!folio_try_get(folio))
 		return NULL;
-	if (unlikely(page_folio(page) != folio) || !folio_test_lru(folio)) {
+	if (unlikely(page_folio(page) != folio) || !folio_test_lru(folio) ||
+	    !folio_allows_mm_op(folio, N_MEMORY_DAMON)) {
 		folio_put(folio);
 		folio = NULL;
 	}
