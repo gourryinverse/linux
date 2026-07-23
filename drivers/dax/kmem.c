@@ -5,13 +5,17 @@
 #include <linux/memory.h>
 #include <linux/module.h>
 #include <linux/device.h>
+#include <linux/debugfs.h>
+#include <linux/cdev.h>
 #include <linux/slab.h>
 #include <linux/dax.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
 #include <linux/mman.h>
+#include <linux/mempolicy.h>
 #include <linux/memory-tiers.h>
 #include <linux/memory_hotplug.h>
+#include <linux/node.h>
 #include <linux/string_helpers.h>
 #include "dax-private.h"
 #include "bus.h"
@@ -27,6 +31,8 @@
 static const char *kmem_name;
 /* Set if any memory will remain added when the driver will be unloaded. */
 static bool any_hotremove_failed;
+/* Parent of the per-device directories holding the capability knob. */
+static struct dentry *kmem_debugfs_root;
 
 static int dax_kmem_range(struct dev_dax *dev_dax, int i, struct range *r)
 {
@@ -45,10 +51,23 @@ static int dax_kmem_range(struct dev_dax *dev_dax, int i, struct range *r)
 struct dax_kmem_data {
 	const char *res_name;
 	int mgid;
+	int numa_node;
 	int state;
-	struct mutex lock; /* protects hotplug state transitions */
+	struct mutex lock; /* protects hotplug state transitions and config */
+	int adistance; /* node abstract distance */
+	bool dax_file; /* when set, cdev allows mmap */
+	struct mempolicy *policy; /* device-lifetime bind for dax-file mmap */
+	u64 mm_capabilities; /* NODE_MEMORY_CAP_* mask; ALL => normal N_MEMORY node */
+	struct dentry *debugfs_dir; /* holds the mm_capabilities knob */
+	struct node_private np;
 	struct resource *res[];
 };
+
+/* A node is private unless it participates in the allocator fallback zonelist. */
+static inline bool kmem_is_private(const struct dax_kmem_data *data)
+{
+	return !(data->mm_capabilities & NODE_MEMORY_CAP_FALLBACK);
+}
 
 static DEFINE_MUTEX(kmem_memory_type_lock);
 static LIST_HEAD(kmem_memory_types);
@@ -59,10 +78,143 @@ static struct memory_dev_type *kmem_find_alloc_memory_type(int adist)
 	return mt_find_alloc_memory_type(adist, &kmem_memory_types);
 }
 
+/*
+ * Re-register the node's memory type at given abstract distance, refined
+ * by the platform algorithm.  This lets us move nodes to different memory
+ * tiers for testing and if the node does not have static perf data.
+ *
+ * Caller holds data->lock, and device must be in unplugged state.
+ */
+static int kmem_set_adistance(struct dax_kmem_data *data, int adist)
+{
+	struct memory_dev_type *memtype;
+
+	mt_calc_adistance(data->numa_node, &adist);
+	memtype = kmem_find_alloc_memory_type(adist);
+	if (IS_ERR(memtype))
+		return PTR_ERR(memtype);
+	clear_node_memory_type(data->numa_node, NULL);
+	init_node_memory_type(data->numa_node, memtype);
+	data->adistance = adist;
+	return 0;
+}
+
 static void kmem_put_memory_types(void)
 {
 	guard(mutex)(&kmem_memory_type_lock);
 	mt_put_memory_types(&kmem_memory_types);
+}
+
+#ifdef CONFIG_NUMA
+static void kmem_desc_set_policy(struct vm_area_desc *desc, struct mempolicy *pol)
+{
+	struct mempolicy *dup;
+
+	/*
+	 * Hand each VMA its OWN copy of the device template policy, never a
+	 * shared reference.  A VMA policy is mutated in place by cpuset rebind
+	 * and by offline-time scrubbing; sharing @data->policy by mpol_get()
+	 * would let those mutations corrupt the device template, so every
+	 * later dax-file mmap would inherit a scrubbed (off-node) policy.
+	 */
+	dup = mpol_dup(pol);
+	if (!IS_ERR(dup))
+		desc->vm_policy = dup;
+}
+#else
+static void kmem_desc_set_policy(struct vm_area_desc *desc, struct mempolicy *pol)
+{
+}
+#endif
+
+/*
+ * On mmap, hand back an anonymous mapping carrying an MPOL_F_PRIVATE policy
+ * that binds to the node's memory, so every folio (fault and swap-in) lands on
+ * the node exactly like an mbind() while reusing the ordinary anon fault path.
+ * Only present when dax_file=true, otherwise returns -ENXIO as before.
+ */
+static int kmem_anon_mmap_prepare(struct vm_area_desc *desc)
+{
+	struct dev_dax *dev_dax = desc->file->private_data;
+	struct dax_kmem_data *data = dev_get_drvdata(&dev_dax->dev);
+	int rc = 0, id;
+
+	id = dax_read_lock();
+	if (!dax_alive(dev_dax->dax_dev))
+		rc = -ENXIO;
+	dax_read_unlock(id);
+	if (rc)
+		return rc;
+
+	/* Private mappings are not shared by definition, reject MAP_SHARED. */
+	if (vma_desc_test(desc, VMA_SHARED_BIT))
+		return -EINVAL;
+
+	/* No policy means the node is not online yet - nothing to map. */
+	if (!data->policy)
+		return -ENXIO;
+
+	/* Core mm makes this a truly anonymous mapping bound by vm_policy. */
+	desc->anonymize = true;
+	kmem_desc_set_policy(desc, data->policy);
+	/*
+	 * Default a private node's dax-file mappings to base-page faults.
+	 * Without reclaim/compaction, high-order allocations can fail despite
+	 * memory still being available. Can be relaxed with reclaim support.
+	 */
+	if (!node_state(data->numa_node, N_MEMORY_RECLAIM))
+		vma_desc_set_flags(desc, VMA_NOHUGEPAGE_BIT);
+	return 0;
+}
+
+static int kmem_anon_open(struct inode *inode, struct file *filp)
+{
+	struct dax_device *dax_dev = inode_dax(inode);
+	struct dev_dax *dev_dax = dax_get_private(dax_dev);
+
+	filp->private_data = dev_dax;
+	/* Deliberately NOT S_DAX to allow normal mm/ operations on the vma */
+	return 0;
+}
+
+static const struct file_operations kmem_anon_fops = {
+	.llseek = noop_llseek,
+	.owner = THIS_MODULE,
+	.open = kmem_anon_open,
+	.mmap_prepare = kmem_anon_mmap_prepare,
+};
+
+/* Installs dax-file char device fops on the existing /dev/daxN.N node. */
+static int kmem_dax_file_cdev_add(struct dev_dax *dev_dax)
+{
+	struct dax_device *dax_dev = dev_dax->dax_dev;
+	struct device *dev = &dev_dax->dev;
+	struct cdev *cdev = dax_inode(dax_dev)->i_cdev;
+	int rc;
+
+	cdev_init(cdev, &kmem_anon_fops);
+	cdev->owner = dev->driver->owner;
+	cdev_set_parent(cdev, &dev->kobj);
+	rc = cdev_add(cdev, dev->devt, 1);
+	if (rc)
+		return rc;
+	run_dax(dax_dev);
+	return 0;
+}
+
+static void kmem_dax_file_cdev_del(struct dev_dax *dev_dax)
+{
+	kill_dev_dax(dev_dax);
+	cdev_del(dax_inode(dev_dax->dax_dev)->i_cdev);
+}
+
+/* Tear down the dax-file char device and drop its private mempolicy. */
+static void kmem_dax_file_disable(struct dax_kmem_data *data,
+				  struct dev_dax *dev_dax)
+{
+	kmem_dax_file_cdev_del(dev_dax);
+	mpol_put(data->policy);
+	data->policy = NULL;
 }
 
 /* True for the online states a kmem dax device can hold. */
@@ -98,6 +250,10 @@ static int dax_kmem_do_hotplug(struct dev_dax *dev_dax,
 	if (online_type < MMOP_OFFLINE || online_type > MMOP_ONLINE_MOVABLE)
 		return -EINVAL;
 
+	/* Capabilities are stable as long as memory is online */
+	if (kmem_is_private(data))
+		data->np.caps = data->mm_capabilities;
+
 	for (i = 0; i < dev_dax->nr_range; i++) {
 		struct range range;
 
@@ -126,7 +282,8 @@ static int dax_kmem_do_hotplug(struct dev_dax *dev_dax,
 		 */
 		rc = __add_memory_driver_managed(data->mgid, range.start,
 				range_len(&range), kmem_name, mhp_flags,
-				online_type, NULL);
+				online_type,
+				kmem_is_private(data) ? &data->np : NULL);
 
 		if (rc) {
 			dev_warn(dev, "mapping%d: %#llx-%#llx memory add failed\n",
@@ -339,6 +496,7 @@ static ssize_t state_store(struct device *dev, struct device_attribute *attr,
 {
 	struct dev_dax *dev_dax = to_dev_dax(dev);
 	struct dax_kmem_data *data = dev_get_drvdata(dev);
+	struct mempolicy *pol;
 	int online_type;
 	int rc;
 
@@ -377,8 +535,150 @@ static ssize_t state_store(struct device *dev, struct device_attribute *attr,
 	}
 
 	data->state = online_type;
+
+	/* If in dax-file mode, build the bind policy applied during mmap */
+	if (data->dax_file && !data->policy) {
+		nodemask_t nodes;
+
+		init_nodemask_of_node(&nodes, data->numa_node);
+		pol = mempolicy_create(MPOL_BIND, MPOL_F_PRIVATE, &nodes);
+		if (IS_ERR(pol))
+			dev_warn(dev, "dax-file bind failed: %ld\n", PTR_ERR(pol));
+		else
+			data->policy = pol;
+	}
+
 	return len;
 }
+
+static ssize_t adistance_show(struct device *dev, struct device_attribute *attr,
+			      char *buf)
+{
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+
+	if (!data)
+		return -ENXIO;
+	return sysfs_emit(buf, "%d\n", data->adistance);
+}
+
+static ssize_t adistance_store(struct device *dev, struct device_attribute *attr,
+			       const char *buf, size_t len)
+{
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+	int adist;
+	ssize_t rc;
+
+	if (!data)
+		return -ENXIO;
+
+	rc = kstrtoint(buf, 0, &adist);
+	if (rc)
+		return rc;
+	if (adist <= 0)
+		return -EINVAL;
+
+	guard(mutex)(&data->lock);
+
+	/* adistance only reconfigures the device while it holds no memory. */
+	if (data->state != DAX_KMEM_UNPLUGGED)
+		return -EBUSY;
+
+	rc = kmem_set_adistance(data, adist);
+	if (rc)
+		return rc;
+	return len;
+}
+static DEVICE_ATTR_RW(adistance);
+
+/*
+ * mm_capabilities is a NODE_MEMORY_CAP_* mask.  With NODE_MEMORY_CAP_FALLBACK set
+ * the memory comes up as an ordinary N_MEMORY node (the default ~0 has it);
+ * without it the node is private (isolated) and only the set bits are the mm
+ * services it opts into.
+ *
+ * It lives in debugfs, not sysfs: the value is a raw in-kernel bit layout that
+ * would otherwise become ABI, and a deployment that wants a private node
+ * describes it in firmware or on the command line rather than reaching for a
+ * driver knob.  This exists so the capability matrix can be exercised on a
+ * running kernel.
+ */
+static int kmem_mm_capabilities_get(void *priv, u64 *val)
+{
+	struct dax_kmem_data *data = priv;
+
+	guard(mutex)(&data->lock);
+	*val = data->mm_capabilities;
+	return 0;
+}
+
+static int kmem_mm_capabilities_set(void *priv, u64 val)
+{
+	struct dax_kmem_data *data = priv;
+
+	guard(mutex)(&data->lock);
+
+	/* The mask decides the node's identity, so it is fixed while it holds memory. */
+	if (data->state != DAX_KMEM_UNPLUGGED)
+		return -EBUSY;
+
+	/* FALLBACK (a public node) requires USER_NUMA: it must be user-targetable. */
+	if ((val & NODE_MEMORY_CAP_FALLBACK) && !(val & NODE_MEMORY_CAP_USER_NUMA))
+		return -EINVAL;
+
+	data->mm_capabilities = val;
+	return 0;
+}
+DEFINE_DEBUGFS_ATTRIBUTE(kmem_mm_capabilities_fops, kmem_mm_capabilities_get,
+			 kmem_mm_capabilities_set, "0x%llx\n");
+
+static ssize_t dax_file_show(struct device *dev, struct device_attribute *attr,
+			     char *buf)
+{
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+
+	if (!data)
+		return -ENXIO;
+	return sysfs_emit(buf, "%d\n", data->dax_file);
+}
+
+static ssize_t dax_file_store(struct device *dev, struct device_attribute *attr,
+			      const char *buf, size_t len)
+{
+	struct dev_dax *dev_dax = to_dev_dax(dev);
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+	bool enable;
+	int rc;
+
+	if (!data)
+		return -ENXIO;
+
+	rc = kstrtobool(buf, &enable);
+	if (rc)
+		return rc;
+
+	guard(mutex)(&data->lock);
+
+	/* dax_file= only reconfigures the device while it holds no memory. */
+	if (data->state != DAX_KMEM_UNPLUGGED)
+		return -EBUSY;
+
+	if (enable == data->dax_file)
+		return len;
+
+	if (enable) {
+		/* Add the anon-fault cdev; mmap returns -ENXIO until onlined. */
+		rc = kmem_dax_file_cdev_add(dev_dax);
+		if (rc)
+			return rc;
+		data->dax_file = true;
+	} else {
+		kmem_dax_file_disable(data, dev_dax);
+		data->dax_file = false;
+	}
+
+	return len;
+}
+static DEVICE_ATTR_RW(dax_file);
 
 static int dev_dax_kmem_probe(struct dev_dax *dev_dax)
 {
@@ -448,10 +748,17 @@ static int dev_dax_kmem_probe(struct dev_dax *dev_dax)
 	if (rc < 0)
 		goto err_reg_mgid;
 	data->mgid = rc;
+	data->numa_node = numa_node;
 	data->state = DAX_KMEM_UNPLUGGED;
+	data->adistance = adist;
+	data->mm_capabilities = ~0ULL; /* all caps incl FALLBACK => normal node */
 	mutex_init(&data->lock);
 
 	dev_set_drvdata(dev, data);
+
+	data->debugfs_dir = debugfs_create_dir(dev_name(dev), kmem_debugfs_root);
+	debugfs_create_file_unsafe("mm_capabilities", 0600, data->debugfs_dir,
+				   data, &kmem_mm_capabilities_fops);
 
 	rc = dax_kmem_init_resources(dev_dax, data);
 	if (rc < 0)
@@ -467,6 +774,7 @@ static int dev_dax_kmem_probe(struct dev_dax *dev_dax)
 err_hotplug:
 	dax_kmem_cleanup_resources(dev_dax, data);
 err_resources:
+	debugfs_remove_recursive(data->debugfs_dir);
 	dev_set_drvdata(dev, NULL);
 	memory_group_unregister(data->mgid);
 err_reg_mgid:
@@ -517,6 +825,16 @@ static void dev_dax_kmem_remove(struct dev_dax *dev_dax)
 	struct dax_kmem_data *data = dev_get_drvdata(dev);
 
 	/*
+	 * Drop the knob first: the directory is keyed by device name, so it has
+	 * to be gone before a rebind recreates it, even on the leak path below.
+	 */
+	debugfs_remove_recursive(data->debugfs_dir);
+	data->debugfs_dir = NULL;
+
+	if (data->dax_file)
+		kmem_dax_file_disable(data, dev_dax);
+
+	/*
 	 * Remove every range that is still added.  dax_kmem_remove_ranges()
 	 * uses remove_memory(), which never offlines: an online block fails
 	 * with -EBUSY rather than deadlocking an uninterruptible unbind.
@@ -548,6 +866,17 @@ static void dev_dax_kmem_remove(struct dev_dax *dev_dax)
 #else
 static void dev_dax_kmem_remove(struct dev_dax *dev_dax)
 {
+	struct device *dev = &dev_dax->dev;
+	struct dax_kmem_data *data = dev_get_drvdata(dev);
+
+	if (data) {
+		debugfs_remove_recursive(data->debugfs_dir);
+		data->debugfs_dir = NULL;
+	}
+
+	if (data && data->dax_file)
+		kmem_dax_file_disable(data, dev_dax);
+
 	/*
 	 * Without hotremove purposely leak the request_mem_region() for the
 	 * device-dax range and return '0' to ->remove() attempts. The removal
@@ -563,6 +892,8 @@ static DEVICE_ATTR_RW(state);
 
 static struct attribute *dev_dax_kmem_attrs[] = {
 	&dev_attr_state.attr,
+	&dev_attr_dax_file.attr,
+	&dev_attr_adistance.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(dev_dax_kmem);
@@ -585,6 +916,8 @@ static int __init dax_kmem_init(void)
 	if (!kmem_name)
 		return -ENOMEM;
 
+	kmem_debugfs_root = debugfs_create_dir("dax_kmem", NULL);
+
 	rc = dax_driver_register(&device_dax_kmem_driver);
 	if (rc)
 		goto error_dax_driver;
@@ -592,6 +925,7 @@ static int __init dax_kmem_init(void)
 	return rc;
 
 error_dax_driver:
+	debugfs_remove_recursive(kmem_debugfs_root);
 	kmem_put_memory_types();
 	kfree_const(kmem_name);
 	return rc;
@@ -600,6 +934,7 @@ error_dax_driver:
 static void __exit dax_kmem_exit(void)
 {
 	dax_driver_unregister(&device_dax_kmem_driver);
+	debugfs_remove_recursive(kmem_debugfs_root);
 	if (!any_hotremove_failed)
 		kfree_const(kmem_name);
 	kmem_put_memory_types();

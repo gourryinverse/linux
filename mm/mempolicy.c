@@ -2972,6 +2972,7 @@ struct mempolicy *__mpol_dup(struct mempolicy *old)
 	atomic_set(&new->refcnt, 1);
 	return new;
 }
+EXPORT_SYMBOL_FOR_MODULES(__mpol_dup, "kmem");
 
 /* Slow path of a mempolicy comparison */
 bool __mpol_equal(struct mempolicy *a, struct mempolicy *b)
