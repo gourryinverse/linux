@@ -196,6 +196,12 @@ MPOL_BIND
 	the node in the set with sufficient free memory that is
 	closest to the node where the allocation takes place.
 
+	A private memory node - one hosted by a device and kept off the
+	page allocator's fallback lists - can only be placed on with this
+	mode, and only if the node permits userspace placement.  Other
+	modes drop such a node from the node set.  See
+	Documentation/mm/numa_private_nodes.rst.
+
 MPOL_PREFERRED
 	This mode specifies that the allocation should be attempted
 	from the single node specified in the policy.  If that
