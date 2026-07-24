@@ -7621,17 +7621,31 @@ static bool zone_spans_last_pfn(const struct zone *zone,
  * Return: pointer to contiguous frozen pages on success, or NULL if not successful.
  */
 struct page *alloc_contig_frozen_pages_noprof(unsigned long nr_pages,
-		gfp_t gfp_mask, int nid, nodemask_t *nodemask)
+		gfp_t gfp_mask, int nid, nodemask_t *nodemask,
+		unsigned int alloc_flags)
 {
 	unsigned long ret, pfn, flags;
 	struct zonelist *zonelist;
 	struct zone *zone;
 	struct zoneref *z;
+	nodemask_t targets;
 	bool skip_hugetlb = true;
 	bool skipped_hugetlb = false;
 
+	/*
+	 * ALLOC_ZONELIST_PRIVATE grants the search access to private nodes,
+	 * but the private zonelist is built over all of N_MEMORY, so without
+	 * a nodemask it would also offer up other devices' nodes.  Confine it
+	 * to @nid and the common nodes.  A caller that supplied its own
+	 * nodemask has already said what it will accept.
+	 */
+	if ((alloc_flags & ALLOC_ZONELIST_PRIVATE) && !nodemask) {
+		contig_alloc_targets(nid, &targets);
+		nodemask = &targets;
+	}
+
 retry:
-	zonelist = node_zonelist(nid, gfp_mask);
+	zonelist = select_zonelist(nid, gfp_mask, alloc_flags);
 	for_each_zone_node_state(zone, z, zonelist, gfp_zone(gfp_mask),
 				 nodemask, N_MEMORY_CONTIG_ALLOC) {
 		spin_lock_irqsave(&zone->lock, flags);
@@ -7701,7 +7715,7 @@ struct page *alloc_contig_pages_noprof(unsigned long nr_pages, gfp_t gfp_mask,
 		return NULL;
 
 	page = alloc_contig_frozen_pages_noprof(nr_pages, gfp_mask, nid,
-						nodemask);
+						nodemask, ALLOC_DEFAULT);
 	if (page)
 		set_pages_refcounted(page, nr_pages);
 
