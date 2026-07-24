@@ -415,9 +415,24 @@ static int mpol_set_nodemask(struct mempolicy *pol,
 	if (!pol || pol->mode == MPOL_LOCAL)
 		return 0;
 
-	/* Filter on nodes that support userland numa placement */
-	nodes_and(nsc->mask1, node_states[N_MEMORY_USER_NUMA],
-		  cpuset_current_mems_allowed);
+	/*
+	 * Userland bindings are constrained to nodes supporting USER_NUMA.
+	 * In-kernel bindings are only constrained by the cpuset and set
+	 * MPOL_F_PRIVATE explicitly rather than acquiring it here.
+	 *
+	 * A private node is reachable only through the private zonelist, which
+	 * the policy nodemask alone confines, and only MPOL_BIND supplies that
+	 * nodemask.  Constrain the other modes to the public nodes, the same way
+	 * nodes outside the cpuset are dropped: a mask that names some usable
+	 * node still works, and one left empty fails in mpol_new_nodemask().
+	 * Narrowing rather than rejecting keeps "numactl --interleave=all"
+	 * working once a device brings a private node online.
+	 */
+	nsc->mask1 = cpuset_current_mems_allowed;
+	if (!(pol->flags & MPOL_F_PRIVATE))
+		nodes_and(nsc->mask1, nsc->mask1, node_states[N_MEMORY_USER_NUMA]);
+	if (pol->mode != MPOL_BIND)
+		nodes_and(nsc->mask1, nsc->mask1, node_states[N_MEMORY_FALLBACK]);
 
 	VM_BUG_ON(!nodes);
 
@@ -430,6 +445,10 @@ static int mpol_set_nodemask(struct mempolicy *pol,
 		pol->w.user_nodemask = *nodes;
 	else
 		pol->w.cpuset_mems_allowed = cpuset_current_mems_allowed;
+
+	/* Mark a private bind so the allocator selects the private zonelist. */
+	if (!nodes_subset(nsc->mask2, node_states[N_MEMORY_FALLBACK]))
+		pol->flags |= MPOL_F_PRIVATE;
 
 	ret = mpol_ops[pol->mode].create(pol, &nsc->mask2);
 	return ret;
@@ -520,6 +539,22 @@ static void mpol_rebind_nodemask(struct mempolicy *pol, const nodemask_t *nodes)
 		tmp = *nodes;
 
 	pol->nodes = tmp;
+
+	/*
+	 * Only MPOL_BIND may hold private nodes.  w.user_nodemask keeps the mask
+	 * as the user wrote it, private nodes included, so re-deriving from it
+	 * (and the positional remap, whose target set spans USER_NUMA private
+	 * nodes) could hand one to a mode that cannot confine it.  Constrain the
+	 * other modes to the public nodes here as well as at set time.
+	 */
+	if (pol->mode != MPOL_BIND)
+		nodes_and(pol->nodes, pol->nodes, node_states[N_MEMORY_FALLBACK]);
+
+	/* MPOL_F_PRIVATE iff any bound node is private, otherwise strip it */
+	if (!nodes_subset(pol->nodes, node_states[N_MEMORY_FALLBACK]))
+		pol->flags |= MPOL_F_PRIVATE;
+	else
+		pol->flags &= ~MPOL_F_PRIVATE;
 }
 
 static void mpol_rebind_preferred(struct mempolicy *pol,
@@ -607,7 +642,7 @@ static const struct mempolicy_operations mpol_ops[MPOL_MAX] = {
 static bool migrate_folio_add(struct folio *folio, struct list_head *foliolist,
 				unsigned long flags);
 static nodemask_t *policy_nodemask(gfp_t gfp, struct mempolicy *pol,
-				pgoff_t ilx, int *nid);
+				pgoff_t ilx, int *nid, unsigned int *alloc_flags);
 
 static bool strictly_unmovable(unsigned long flags)
 {
@@ -1496,7 +1531,7 @@ static struct folio *alloc_migration_target_by_mpol(struct folio *src,
 
 		h = folio_hstate(src);
 		gfp = htlb_alloc_mask(h);
-		nodemask = policy_nodemask(gfp, pol, ilx, &nid);
+		nodemask = policy_nodemask(gfp, pol, ilx, &nid, NULL);
 		return alloc_hugetlb_folio_nodemask(h, nid, nodemask, gfp,
 				htlb_allow_alloc_fallback(MR_MEMPOLICY_MBIND));
 	}
@@ -2305,14 +2340,28 @@ static unsigned int interleave_nid(struct mempolicy *pol, pgoff_t ilx)
 	return nid;
 }
 
+static inline unsigned int mpol_alloc_flags(struct mempolicy *pol)
+{
+	return (pol->flags & MPOL_F_PRIVATE) ? ALLOC_ZONELIST_PRIVATE :
+					       ALLOC_DEFAULT;
+}
+
 /*
  * Return a nodemask representing a mempolicy for filtering nodes for
  * page allocation, together with preferred node id (or the input node id).
  */
 static nodemask_t *policy_nodemask(gfp_t gfp, struct mempolicy *pol,
-				   pgoff_t ilx, int *nid)
+				   pgoff_t ilx, int *nid, unsigned int *alloc_flags)
 {
 	nodemask_t *nodemask = NULL;
+
+	/*
+	 * The bind nodemask and the private zonelist are a matched pair (a
+	 * private bind reaches its node only through the private zonelist).
+	 * Decide both here so a caller cannot apply one without the other.
+	 */
+	if (alloc_flags)
+		*alloc_flags = mpol_alloc_flags(pol);
 
 	switch (pol->mode) {
 	case MPOL_PREFERRED:
@@ -2325,10 +2374,20 @@ static nodemask_t *policy_nodemask(gfp_t gfp, struct mempolicy *pol,
 			*nid = pol->home_node;
 		break;
 	case MPOL_BIND:
-		/* Restrict to nodemask (but not on lower zones) */
+		/*
+		 * Restrict to nodemask, but not on lower zones a movable-only
+		 * (e.g. private) bind cannot serve.  The nodemask and the private
+		 * zonelist are a matched pair: whenever the bind is not applied --
+		 * the zone is below the policy zone, or the bind does not intersect
+		 * the cpuset -- drop ALLOC_ZONELIST_PRIVATE too, so the allocation
+		 * reverts to the public fallback zonelist instead of reaching a
+		 * private node without a confining nodemask.
+		 */
 		if (apply_policy_zone(pol, gfp_zone(gfp)) &&
 		    cpuset_nodemask_valid_mems_allowed(&pol->nodes))
 			nodemask = &pol->nodes;
+		else if (alloc_flags)
+			*alloc_flags &= ~ALLOC_ZONELIST_PRIVATE;
 		if (pol->home_node != NUMA_NO_NODE)
 			*nid = pol->home_node;
 		/*
@@ -2375,7 +2434,7 @@ int huge_node(struct vm_area_struct *vma, unsigned long addr, gfp_t gfp_flags,
 
 	nid = numa_node_id();
 	*mpol = get_vma_policy(vma, addr, hstate_vma(vma)->order, &ilx);
-	*nodemask = policy_nodemask(gfp_flags, *mpol, ilx, &nid);
+	*nodemask = policy_nodemask(gfp_flags, *mpol, ilx, &nid, NULL);
 	return nid;
 }
 
@@ -2455,7 +2514,8 @@ bool mempolicy_in_oom_domain(struct task_struct *tsk,
 }
 
 static struct page *alloc_pages_preferred_many(gfp_t gfp, unsigned int order,
-						int nid, nodemask_t *nodemask)
+						int nid, nodemask_t *nodemask,
+						unsigned int aflags)
 {
 	struct page *page;
 	gfp_t preferred_gfp;
@@ -2469,10 +2529,10 @@ static struct page *alloc_pages_preferred_many(gfp_t gfp, unsigned int order,
 	preferred_gfp = gfp | __GFP_NOWARN;
 	preferred_gfp &= ~(__GFP_DIRECT_RECLAIM | __GFP_NOFAIL);
 	page = __alloc_frozen_pages_noprof(preferred_gfp, order, nid, nodemask,
-					   ALLOC_DEFAULT);
+					   aflags);
 	if (!page)
 		page = __alloc_frozen_pages_noprof(gfp, order, nid, NULL,
-						   ALLOC_DEFAULT);
+						   aflags);
 
 	return page;
 }
@@ -2492,11 +2552,13 @@ static struct page *alloc_pages_mpol(gfp_t gfp, unsigned int order,
 {
 	nodemask_t *nodemask;
 	struct page *page;
+	unsigned int aflags;
 
-	nodemask = policy_nodemask(gfp, pol, ilx, &nid);
+	nodemask = policy_nodemask(gfp, pol, ilx, &nid, &aflags);
 
 	if (pol->mode == MPOL_PREFERRED_MANY)
-		return alloc_pages_preferred_many(gfp, order, nid, nodemask);
+		return alloc_pages_preferred_many(gfp, order, nid, nodemask,
+						  aflags);
 
 	if (IS_ENABLED(CONFIG_TRANSPARENT_HUGEPAGE) &&
 	    /* filter "hugepage" allocation, unless from alloc_pages() */
@@ -2520,7 +2582,7 @@ static struct page *alloc_pages_mpol(gfp_t gfp, unsigned int order,
 			 */
 			page = __alloc_frozen_pages_noprof(
 				gfp | __GFP_THISNODE | __GFP_NORETRY, order,
-				nid, NULL, ALLOC_DEFAULT);
+				nid, NULL, aflags);
 			if (page || !(gfp & __GFP_DIRECT_RECLAIM))
 				return page;
 			/*
@@ -2532,7 +2594,7 @@ static struct page *alloc_pages_mpol(gfp_t gfp, unsigned int order,
 		}
 	}
 
-	page = __alloc_frozen_pages_noprof(gfp, order, nid, nodemask, ALLOC_DEFAULT);
+	page = __alloc_frozen_pages_noprof(gfp, order, nid, nodemask, aflags);
 
 	if (unlikely(pol->mode == MPOL_INTERLEAVE ||
 		     pol->mode == MPOL_WEIGHTED_INTERLEAVE) && page) {
@@ -2641,6 +2703,7 @@ static unsigned long alloc_pages_bulk_interleave(gfp_t gfp,
 		struct mempolicy *pol, unsigned long nr_pages,
 		struct page **page_array)
 {
+	unsigned int aflags = mpol_alloc_flags(pol);
 	int nodes;
 	unsigned long nr_pages_per_node;
 	int delta;
@@ -2654,13 +2717,13 @@ static unsigned long alloc_pages_bulk_interleave(gfp_t gfp,
 
 	for (i = 0; i < nodes; i++) {
 		if (delta) {
-			nr_allocated = alloc_pages_bulk_noprof(gfp,
+			nr_allocated = __alloc_pages_bulk_noprof(gfp, aflags,
 					interleave_nodes(pol), NULL,
 					nr_pages_per_node + 1,
 					page_array);
 			delta--;
 		} else {
-			nr_allocated = alloc_pages_bulk_noprof(gfp,
+			nr_allocated = __alloc_pages_bulk_noprof(gfp, aflags,
 					interleave_nodes(pol), NULL,
 					nr_pages_per_node, page_array);
 		}
@@ -2676,6 +2739,7 @@ static unsigned long alloc_pages_bulk_weighted_interleave(gfp_t gfp,
 		struct mempolicy *pol, unsigned long nr_pages,
 		struct page **page_array)
 {
+	unsigned int aflags = mpol_alloc_flags(pol);
 	struct weighted_interleave_state *state;
 	struct task_struct *me = current;
 	unsigned int cpuset_mems_cookie;
@@ -2711,8 +2775,8 @@ static unsigned long alloc_pages_bulk_weighted_interleave(gfp_t gfp,
 	weight = me->il_weight;
 	if (weight && node_isset(node, nodes)) {
 		node_pages = min(rem_pages, weight);
-		nr_allocated = __alloc_pages_bulk(gfp, node, NULL, node_pages,
-						  page_array);
+		nr_allocated = __alloc_pages_bulk_noprof(gfp, aflags, node,
+						  NULL, node_pages, page_array);
 		page_array += nr_allocated;
 		total_allocated += nr_allocated;
 		/* if that's all the pages, no need to interleave */
@@ -2776,8 +2840,8 @@ static unsigned long alloc_pages_bulk_weighted_interleave(gfp_t gfp,
 		/* node_pages can be 0 if an allocation fails and rounds == 0 */
 		if (!node_pages)
 			break;
-		nr_allocated = __alloc_pages_bulk(gfp, node, NULL, node_pages,
-						  page_array);
+		nr_allocated = __alloc_pages_bulk_noprof(gfp, aflags, node,
+						  NULL, node_pages, page_array);
 		page_array += nr_allocated;
 		total_allocated += nr_allocated;
 		if (total_allocated == nr_pages)
@@ -2794,17 +2858,19 @@ static unsigned long alloc_pages_bulk_preferred_many(gfp_t gfp, int nid,
 		struct mempolicy *pol, unsigned long nr_pages,
 		struct page **page_array)
 {
+	unsigned int aflags = mpol_alloc_flags(pol);
 	gfp_t preferred_gfp;
 	unsigned long nr_allocated = 0;
 
 	preferred_gfp = gfp | __GFP_NOWARN;
 	preferred_gfp &= ~(__GFP_DIRECT_RECLAIM | __GFP_NOFAIL);
 
-	nr_allocated  = alloc_pages_bulk_noprof(preferred_gfp, nid, &pol->nodes,
-					   nr_pages, page_array);
+	nr_allocated  = __alloc_pages_bulk_noprof(preferred_gfp, aflags, nid,
+					   &pol->nodes, nr_pages, page_array);
 
 	if (nr_allocated < nr_pages)
-		nr_allocated += alloc_pages_bulk_noprof(gfp, numa_node_id(), NULL,
+		nr_allocated += __alloc_pages_bulk_noprof(gfp, aflags,
+				numa_node_id(), NULL,
 				nr_pages - nr_allocated,
 				page_array + nr_allocated);
 	return nr_allocated;
@@ -2821,6 +2887,7 @@ unsigned long alloc_pages_bulk_mempolicy_noprof(gfp_t gfp,
 {
 	struct mempolicy *pol = &default_policy;
 	nodemask_t *nodemask;
+	unsigned int aflags;
 	int nid;
 
 	if (!in_interrupt() && !(gfp & __GFP_THISNODE))
@@ -2839,9 +2906,9 @@ unsigned long alloc_pages_bulk_mempolicy_noprof(gfp_t gfp,
 				numa_node_id(), pol, nr_pages, page_array);
 
 	nid = numa_node_id();
-	nodemask = policy_nodemask(gfp, pol, NO_INTERLEAVE_INDEX, &nid);
-	return alloc_pages_bulk_noprof(gfp, nid, nodemask,
-				       nr_pages, page_array);
+	nodemask = policy_nodemask(gfp, pol, NO_INTERLEAVE_INDEX, &nid, &aflags);
+	return __alloc_pages_bulk_noprof(gfp, aflags, nid,
+					 nodemask, nr_pages, page_array);
 }
 
 int vma_dup_policy(struct vm_area_struct *src, struct vm_area_struct *dst)
@@ -3038,6 +3105,7 @@ int mpol_misplaced(struct folio *folio, struct vm_fault *vmf,
 	int thisnid = numa_node_id();
 	int polnid = NUMA_NO_NODE;
 	int ret = NUMA_NO_NODE;
+	unsigned int aflags;
 
 	/*
 	 * Make sure ptl is held so that we don't preempt and we
@@ -3095,10 +3163,9 @@ int mpol_misplaced(struct folio *folio, struct vm_fault *vmf,
 		 */
 		if (node_isset(curnid, pol->nodes))
 			goto out;
-		z = first_zones_zonelist(
-				node_zonelist(thisnid, GFP_HIGHUSER),
-				gfp_zone(GFP_HIGHUSER),
-				&pol->nodes);
+		aflags = mpol_alloc_flags(pol);
+		z = first_zones_zonelist(select_zonelist(thisnid, GFP_HIGHUSER, aflags),
+					 gfp_zone(GFP_HIGHUSER), &pol->nodes);
 		polnid = zonelist_node_idx(z);
 		break;
 
