@@ -2401,7 +2401,7 @@ static void return_unused_surplus_pages(struct hstate *h,
 	while (nr_pages--) {
 		struct folio *folio;
 
-		folio = remove_pool_hugetlb_folio(h, &node_states[N_MEMORY], 1);
+		folio = remove_pool_hugetlb_folio(h, &node_states[N_MEMORY_USER_NUMA], 1);
 		if (!folio)
 			goto out;
 
@@ -3429,13 +3429,13 @@ static void __init hugetlb_hstate_alloc_pages_onenode(struct hstate *h, int nid)
 			gfp_t gfp_mask = htlb_alloc_mask(h) | __GFP_THISNODE;
 
 			folio = only_alloc_fresh_hugetlb_folio(h, gfp_mask, nid,
-					&node_states[N_MEMORY], NULL);
+					&node_states[N_MEMORY_USER_NUMA], NULL);
 			if (!folio && !list_empty(&folio_list) &&
 			    hugetlb_vmemmap_optimizable(h)) {
 				prep_and_add_allocated_folios(h, &folio_list);
 				INIT_LIST_HEAD(&folio_list);
 				folio = only_alloc_fresh_hugetlb_folio(h, gfp_mask, nid,
-						&node_states[N_MEMORY], NULL);
+						&node_states[N_MEMORY_USER_NUMA], NULL);
 			}
 			if (!folio)
 				break;
@@ -3505,7 +3505,7 @@ static void __init hugetlb_pages_alloc_boot_node(unsigned long start, unsigned l
 			prep_and_add_allocated_folios(h, &folio_list);
 			INIT_LIST_HEAD(&folio_list);
 		}
-		folio = alloc_pool_huge_folio(h, &node_states[N_MEMORY],
+		folio = alloc_pool_huge_folio(h, &node_states[N_MEMORY_USER_NUMA],
 						&node_alloc_noretry, &next_node);
 		if (!folio)
 			break;
@@ -3649,13 +3649,13 @@ static void __init hugetlb_init_hstates(void)
 
 	for_each_hstate(h) {
 		/*
-		 * Always reset to first_memory_node here, even if
-		 * next_nid_to_alloc was set before - we can't
-		 * reference hugetlb_bootmem_nodes after init, and
-		 * first_memory_node is right for all further allocations.
+		 * Always reset here, even if next_nid_to_alloc was set
+		 * before - we can't reference hugetlb_bootmem_nodes after
+		 * init, and the first pool node is right for all further
+		 * allocations.
 		 */
-		h->next_nid_to_alloc = first_memory_node;
-		h->next_nid_to_free = first_memory_node;
+		h->next_nid_to_alloc = first_node_state(N_MEMORY_USER_NUMA);
+		h->next_nid_to_free = first_node_state(N_MEMORY_USER_NUMA);
 
 		/* oversize hugepages were init'ed in early boot */
 		if (!hstate_is_gigantic(h))
@@ -4151,7 +4151,7 @@ ssize_t __nr_hugepages_store_common(bool obey_mempolicy,
 		 */
 		if (!(obey_mempolicy &&
 				init_nodemask_of_mempolicy(&nodes_allowed)))
-			n_mask = &node_states[N_MEMORY];
+			n_mask = &node_states[N_MEMORY_USER_NUMA];
 		else
 			n_mask = &nodes_allowed;
 	} else {
@@ -4159,6 +4159,8 @@ ssize_t __nr_hugepages_store_common(bool obey_mempolicy,
 		 * Node specific request.  count adjustment happens in
 		 * set_max_huge_pages() after acquiring hugetlb_lock.
 		 */
+		if (!node_state(nid, N_MEMORY_USER_NUMA))
+			return -EINVAL;
 		init_nodemask_of_node(&nodes_allowed, nid);
 		n_mask = &nodes_allowed;
 	}
