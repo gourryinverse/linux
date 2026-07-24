@@ -399,6 +399,7 @@ enum node_states {
 	N_MEMORY_DAMON,		/* DAMON may operate on the node */
 	N_MEMORY_KSM,		/* KSM may merge the node's folios */
 	N_MEMORY_COLLAPSE,	/* collapse (khugepaged + MADV_COLLAPSE) may operate */
+	N_MEMORY_HUGETLB,	/* hugetlb may allocate on the node */
 	N_CPU,		/* The node has one or more cpus */
 	N_GENERIC_INITIATOR,	/* The node has one or more Generic Initiators */
 	NR_NODE_STATES
@@ -534,10 +535,12 @@ static inline void node_set_memory_state(int nid, bool high, bool normal)
 	node_set_state(nid, N_MEMORY_DAMON);
 	node_set_state(nid, N_MEMORY_KSM);
 	node_set_state(nid, N_MEMORY_COLLAPSE);
+	node_set_state(nid, N_MEMORY_HUGETLB);
 }
 
 static __always_inline void node_clear_memory_state(int nid)
 {
+	node_clear_state(nid, N_MEMORY_HUGETLB);
 	node_clear_state(nid, N_MEMORY_COLLAPSE);
 	node_clear_state(nid, N_MEMORY_KSM);
 	node_clear_state(nid, N_MEMORY_DAMON);
