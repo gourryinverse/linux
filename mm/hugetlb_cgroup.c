@@ -466,12 +466,12 @@ static int hugetlb_cgroup_read_numa_stat(struct seq_file *seq, void *dummy)
 	if (legacy) {
 		/* Add up usage across all nodes for the non-hierarchical total. */
 		usage = 0;
-		for_each_node_state(nid, N_MEMORY)
+		for_each_node_state(nid, N_MEMORY_HUGETLB)
 			usage += READ_ONCE(h_cg->nodeinfo[nid]->usage[idx]);
 		seq_printf(seq, "total=%lu", usage * PAGE_SIZE);
 
 		/* Simply print the per-node usage for the non-hierarchical total. */
-		for_each_node_state(nid, N_MEMORY)
+		for_each_node_state(nid, N_MEMORY_HUGETLB)
 			seq_printf(seq, " N%d=%lu", nid,
 				   READ_ONCE(h_cg->nodeinfo[nid]->usage[idx]) *
 					   PAGE_SIZE);
@@ -489,7 +489,7 @@ static int hugetlb_cgroup_read_numa_stat(struct seq_file *seq, void *dummy)
 	 * For each node, transverse the css tree to obtain the hierarchical
 	 * node usage.
 	 */
-	for_each_node_state(nid, N_MEMORY) {
+	for_each_node_state(nid, N_MEMORY_HUGETLB) {
 		usage = 0;
 		rcu_read_lock();
 		css_for_each_descendant_pre(css, &h_cg->css) {

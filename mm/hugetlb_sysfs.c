@@ -197,7 +197,7 @@ static ssize_t demote_store(struct kobject *kobj,
 		init_nodemask_of_node(&nodes_allowed, nid);
 		n_mask = &nodes_allowed;
 	} else {
-		n_mask = &node_states[N_MEMORY];
+		n_mask = &node_states[N_MEMORY_HUGETLB];
 	}
 
 	/* Synchronize with other sysfs operations modifying huge pages */

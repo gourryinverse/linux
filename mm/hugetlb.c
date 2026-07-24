@@ -2375,7 +2375,7 @@ static void return_unused_surplus_pages(struct hstate *h,
 	while (nr_pages--) {
 		struct folio *folio;
 
-		folio = remove_pool_hugetlb_folio(h, &node_states[N_MEMORY], 1);
+		folio = remove_pool_hugetlb_folio(h, &node_states[N_MEMORY_HUGETLB], 1);
 		if (!folio)
 			goto out;
 
@@ -3356,7 +3356,7 @@ void __init hugetlb_bootmem_struct_page_init(void)
 		.size		= nr_node_ids,
 		.align		= 1,
 		.min_chunk	= 1,
-		.max_threads	= num_node_state(N_MEMORY),
+		.max_threads	= num_node_state(N_MEMORY_HUGETLB),
 		.numa_aware	= true,
 	};
 #ifdef CONFIG_HUGETLB_PAGE_OPTIMIZE_VMEMMAP
@@ -3431,13 +3431,13 @@ static void __init hugetlb_hstate_alloc_pages_onenode(struct hstate *h, int nid)
 			gfp_t gfp_mask = htlb_alloc_mask(h) | __GFP_THISNODE;
 
 			folio = only_alloc_fresh_hugetlb_folio(h, gfp_mask, nid,
-					&node_states[N_MEMORY], NULL);
+					&node_states[N_MEMORY_HUGETLB], NULL);
 			if (!folio && !list_empty(&folio_list) &&
 			    hugetlb_vmemmap_optimizable_size(h)) {
 				prep_and_add_allocated_folios(h, &folio_list);
 				INIT_LIST_HEAD(&folio_list);
 				folio = only_alloc_fresh_hugetlb_folio(h, gfp_mask, nid,
-						&node_states[N_MEMORY], NULL);
+						&node_states[N_MEMORY_HUGETLB], NULL);
 			}
 			if (!folio)
 				break;
@@ -3507,7 +3507,7 @@ static void __init hugetlb_pages_alloc_boot_node(unsigned long start, unsigned l
 			prep_and_add_allocated_folios(h, &folio_list);
 			INIT_LIST_HEAD(&folio_list);
 		}
-		folio = alloc_pool_huge_folio(h, &node_states[N_MEMORY],
+		folio = alloc_pool_huge_folio(h, &node_states[N_MEMORY_HUGETLB],
 						&node_alloc_noretry, &next_node);
 		if (!folio)
 			break;
@@ -4106,7 +4106,7 @@ ssize_t __nr_hugepages_store_common(bool obey_mempolicy,
 		 */
 		if (!(obey_mempolicy &&
 				init_nodemask_of_mempolicy(&nodes_allowed)))
-			n_mask = &node_states[N_MEMORY];
+			n_mask = &node_states[N_MEMORY_HUGETLB];
 		else
 			n_mask = &nodes_allowed;
 	} else {
@@ -4114,6 +4114,8 @@ ssize_t __nr_hugepages_store_common(bool obey_mempolicy,
 		 * Node specific request.  count adjustment happens in
 		 * set_max_huge_pages() after acquiring hugetlb_lock.
 		 */
+		if (!node_state(nid, N_MEMORY_HUGETLB))
+			return -EINVAL;
 		init_nodemask_of_node(&nodes_allowed, nid);
 		n_mask = &nodes_allowed;
 	}
