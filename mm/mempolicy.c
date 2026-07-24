@@ -1085,7 +1085,45 @@ static int mbind_range(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	return vma_replace_policy(vma, new_pol);
 }
 
-/* Set the process memory policy */
+/**
+ * mempolicy_create - build a validated, cpuset-contextualised mempolicy
+ * @mode: MPOL_* mode
+ * @flags: MPOL_F_* flags
+ * @nodes: target nodemask, or NULL (interpreted per @mode; see mpol_new())
+ *
+ * Creates a new policy and constrains it to the task's cpuset.
+ *
+ * The caller owns the returned reference and frees it with mpol_put().
+ *
+ * Return: the policy (NULL for a default policy), or an ERR_PTR on failure.
+ */
+struct mempolicy *mempolicy_create(unsigned short mode, unsigned short flags,
+		nodemask_t *nodes)
+{
+	struct mempolicy *pol;
+	NODEMASK_SCRATCH(scratch);
+	int err;
+
+	if (!scratch)
+		return ERR_PTR(-ENOMEM);
+
+	pol = mpol_new(mode, flags, nodes);
+	if (IS_ERR(pol))
+		goto out;
+
+	task_lock(current);
+	err = mpol_set_nodemask(pol, nodes, scratch);
+	task_unlock(current);
+	if (err) {
+		mpol_put(pol);
+		pol = ERR_PTR(err);
+	}
+out:
+	NODEMASK_SCRATCH_FREE(scratch);
+	return pol;
+}
+EXPORT_SYMBOL_FOR_MODULES(mempolicy_create, "kvm");
+
 static long do_set_mempolicy(unsigned short mode, unsigned short flags,
 			     nodemask_t *nodes)
 {
