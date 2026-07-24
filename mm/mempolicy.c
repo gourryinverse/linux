@@ -496,7 +496,7 @@ void __mpol_put(struct mempolicy *pol)
 	 */
 	kfree_rcu(pol, rcu);
 }
-EXPORT_SYMBOL_FOR_MODULES(__mpol_put, "kvm");
+EXPORT_SYMBOL_FOR_MODULES(__mpol_put, "kvm,kmem");
 
 static void mpol_rebind_default(struct mempolicy *pol, const nodemask_t *nodes)
 {
@@ -1075,26 +1075,12 @@ static long do_set_mempolicy(unsigned short mode, unsigned short flags,
 			     nodemask_t *nodes)
 {
 	struct mempolicy *new, *old;
-	NODEMASK_SCRATCH(scratch);
-	int ret;
 
-	if (!scratch)
-		return -ENOMEM;
-
-	new = mpol_new(mode, flags, nodes);
-	if (IS_ERR(new)) {
-		ret = PTR_ERR(new);
-		goto out;
-	}
+	new = mempolicy_create(mode, flags, nodes);
+	if (IS_ERR(new))
+		return PTR_ERR(new);
 
 	task_lock(current);
-	ret = mpol_set_nodemask(new, nodes, scratch);
-	if (ret) {
-		task_unlock(current);
-		mpol_put(new);
-		goto out;
-	}
-
 	old = current->mempolicy;
 	current->mempolicy = new;
 	if (new && (new->mode == MPOL_INTERLEAVE ||
@@ -1104,11 +1090,52 @@ static long do_set_mempolicy(unsigned short mode, unsigned short flags,
 	}
 	task_unlock(current);
 	mpol_put(old);
-	ret = 0;
-out:
-	NODEMASK_SCRATCH_FREE(scratch);
-	return ret;
+	return 0;
 }
+
+/**
+ * mempolicy_create - build a validated, cpuset-contextualised mempolicy
+ * @mode: MPOL_* mode
+ * @flags: MPOL_F_* flags (e.g. MPOL_F_PRIVATE for a private-node bind)
+ * @nodes: target nodemask, or NULL (interpreted per @mode; see mpol_new())
+ *
+ * Runs the same construction as set_mempolicy(2) -- allocate the policy and
+ * contextualise its nodemask to the caller's cpuset -- but returns it instead
+ * of installing it on the task.  In-kernel callers use this to build a policy
+ * for a shared-policy tree or a VMA; a private-node bind is just
+ * @mode=MPOL_BIND, @flags=MPOL_F_PRIVATE.
+ *
+ * The caller owns the returned reference and frees it with mpol_put().
+ *
+ * Return: the policy (NULL for a default policy), or an ERR_PTR on failure.
+ */
+struct mempolicy *mempolicy_create(unsigned short mode, unsigned short flags,
+				   nodemask_t *nodes)
+{
+	struct mempolicy *pol;
+	NODEMASK_SCRATCH(scratch);
+	int err;
+
+	if (!scratch)
+		return ERR_PTR(-ENOMEM);
+
+	pol = mpol_new(mode, flags, nodes);
+	if (IS_ERR(pol)) {
+		NODEMASK_SCRATCH_FREE(scratch);
+		return pol;
+	}
+
+	task_lock(current);
+	err = mpol_set_nodemask(pol, nodes, scratch);
+	task_unlock(current);
+	NODEMASK_SCRATCH_FREE(scratch);
+	if (err) {
+		mpol_put(pol);
+		return ERR_PTR(err);
+	}
+	return pol;
+}
+EXPORT_SYMBOL_FOR_MODULES(mempolicy_create, "kvm,kmem");
 
 /*
  * Return nodemask for policy for get_mempolicy() query
