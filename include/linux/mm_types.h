@@ -903,6 +903,11 @@ struct vm_area_desc {
 	/* Write-only fields. */
 	const struct vm_operations_struct *vm_ops;
 	void *private_data;
+	/*
+	 * Optional mempolicy for the mapping.  The hook holds the reference;
+	 * it is consumed whether or not a new VMA ends up being created.
+	 */
+	struct mempolicy *vm_policy;
 
 	/* Take further action? */
 	struct mmap_action action;
@@ -1157,8 +1162,10 @@ static __always_inline void vma_flags_clear_word(vma_flags_t *flags,
 
 #ifdef CONFIG_NUMA
 #define vma_policy(vma) ((vma)->vm_policy)
+#define vma_set_policy(vma, pol) ((vma)->vm_policy = (pol))
 #else
 #define vma_policy(vma) NULL
+#define vma_set_policy(vma, pol) ((void)(vma), (void)(pol))
 #endif
 
 /*

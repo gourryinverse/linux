@@ -30,6 +30,7 @@ struct mmap_state {
 	/* User-defined fields, perhaps updated by .mmap_prepare(). */
 	const struct vm_operations_struct *vm_ops;
 	void *vm_private_data;
+	struct mempolicy *vm_policy;
 
 	unsigned long charged;
 
@@ -71,6 +72,7 @@ struct mmap_state {
 		.pgoff = (map_)->pgoff,					\
 		.anon_pgoff = (map_)->anon_pgoff,			\
 		.file = (map_)->file,					\
+		.policy = (map_)->vm_policy,				\
 		.prev = (map_)->prev,					\
 		.middle = vma_,						\
 		.next = (vma_) ? NULL : (map_)->next,			\
@@ -2792,6 +2794,7 @@ static int call_mmap_prepare(struct mmap_state *map,
 	/* User-defined fields. */
 	map->vm_ops = desc->vm_ops;
 	map->vm_private_data = desc->private_data;
+	map->vm_policy = desc->vm_policy;
 
 	return 0;
 }
@@ -2880,7 +2883,13 @@ static unsigned long __mmap_region(struct file *file, unsigned long addr,
 		if (error)
 			goto unacct_error;
 		allocated_new = true;
+
+		/* Past the last failure point, so the VMA can take the policy. */
+		vma_set_policy(vma, map.vm_policy);
+		map.vm_policy = NULL;
 	}
+	/* Merged instead: the VMA we merged into already has an equal policy. */
+	mpol_put(map.vm_policy);
 
 	if (have_mmap_prepare)
 		set_vma_user_defined_fields(vma, &map);
@@ -2901,6 +2910,7 @@ unacct_error:
 	if (map.charged)
 		vm_unacct_memory(map.charged);
 abort_munmap:
+	mpol_put(map.vm_policy);
 	/*
 	 * This indicates that .mmap_prepare has set a new file, differing from
 	 * desc->vm_file. But since we're aborting the operation, only the
