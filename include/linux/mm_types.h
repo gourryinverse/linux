@@ -904,6 +904,20 @@ struct vm_area_desc {
 	const struct vm_operations_struct *vm_ops;
 	void *private_data;
 
+	/*
+	 * Set by an .mmap_prepare hook to hand back an anonymous private
+	 * mapping, the way a MAP_PRIVATE /dev/zero mapping is anonymous: core
+	 * mm drops the file and treats the result as ordinary anonymous memory.
+	 */
+	bool anonymize;
+#ifdef CONFIG_NUMA
+	/*
+	 * Optional mempolicy to install on the resulting VMA.  The hook holds
+	 * the reference; ownership transfers to the VMA.
+	 */
+	struct mempolicy *vm_policy;
+#endif
+
 	/* Take further action? */
 	struct mmap_action action;
 };
