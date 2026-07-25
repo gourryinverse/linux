@@ -30,6 +30,9 @@ struct mmap_state {
 	/* User-defined fields, perhaps updated by .mmap_prepare(). */
 	const struct vm_operations_struct *vm_ops;
 	void *vm_private_data;
+#ifdef CONFIG_NUMA
+	struct mempolicy *vm_policy;
+#endif
 
 	unsigned long charged;
 
@@ -2640,6 +2643,20 @@ static bool map_is_anon(const struct mmap_state *map)
 }
 
 /*
+ * Did an .mmap_prepare hook attach a mempolicy to this mapping?  Such a mapping
+ * must not be merged with an adjacent VMA (whose policy differs), so the new
+ * VMA that carries the policy is created in isolation.
+ */
+static bool map_has_vm_policy(const struct mmap_state *map)
+{
+#ifdef CONFIG_NUMA
+	return map->vm_policy;
+#else
+	return false;
+#endif
+}
+
+/*
  * __mmap_new_vma() - Allocate a new VMA for the region, as merging was not
  * possible.
  *
@@ -2670,6 +2687,12 @@ static int __mmap_new_vma(struct mmap_state *map, struct vm_area_struct **vmap,
 
 	if (is_anon)
 		vma_set_anonymous(vma);
+
+#ifdef CONFIG_NUMA
+	/* A prepare hook may have supplied a policy to bind the new VMA. */
+	if (map->vm_policy)
+		vma->vm_policy = map->vm_policy;
+#endif
 
 	vma_set_range(vma, map->addr, map->end, map->pgoff, map->virt_pgoff);
 	vma->flags = map->vma_flags;
@@ -2813,13 +2836,18 @@ static int call_mmap_prepare(struct mmap_state *map,
 	/* User-defined fields. */
 	map->vm_ops = desc->vm_ops;
 	map->vm_private_data = desc->private_data;
+#ifdef CONFIG_NUMA
+	map->vm_policy = desc->vm_policy;
+#endif
 
 	/*
 	 * MAP_PRIVATE-/dev/zero mappings are an ancient way of getting
 	 * anonymous mappings. Rather than allowing these mappings to be odd
-	 * outliers, simply make them truly anonymous.
+	 * outliers, simply make them truly anonymous.  A hook may also request
+	 * the same treatment explicitly via desc->anonymize (e.g. a private
+	 * dax node handing back node-bound anonymous memory).
 	 */
-	if (map_is_private(map) && map_is_dev_zero(map))
+	if (map_is_private(map) && (map_is_dev_zero(map) || desc->anonymize))
 		map_set_anon(map);
 
 	return 0;
@@ -2894,7 +2922,7 @@ static unsigned long __mmap_region(struct file *file, unsigned long addr,
 		update_ksm_flags(&map);
 
 	/* Attempt to merge with adjacent VMAs... */
-	if (map.prev || map.next) {
+	if ((map.prev || map.next) && !map_has_vm_policy(&map)) {
 		VMG_MMAP_STATE(vmg, &map, /* vma = */ NULL);
 
 		vma = vma_merge_new_range(&vmg);
