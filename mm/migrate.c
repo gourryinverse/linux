@@ -2270,7 +2270,7 @@ static int __add_folio_for_migration(struct folio *folio, int node,
 	if (is_zero_folio(folio) || is_huge_zero_folio(folio))
 		return -EFAULT;
 
-	if (folio_is_zone_device(folio))
+	if (!folio_allows_mm_op(folio, N_MEMORY_USER_NUMA))
 		return -ENOENT;
 
 	if (folio_nid(folio) == node)
@@ -2394,7 +2394,7 @@ static int do_pages_move(struct mm_struct *mm, nodemask_t task_nodes,
 		err = -ENODEV;
 		if (node < 0 || node >= MAX_NUMNODES)
 			goto out_flush;
-		if (!node_state(node, N_MEMORY))
+		if (!node_state(node, N_MEMORY_USER_NUMA))
 			goto out_flush;
 
 		err = -EACCES;
@@ -2479,7 +2479,7 @@ static void do_pages_stat_array(struct mm_struct *mm, unsigned long nr_pages,
 		if (folio) {
 			if (is_zero_folio(folio) || is_huge_zero_folio(folio))
 				err = -EFAULT;
-			else if (folio_is_zone_device(folio))
+			else if (!folio_allows_mm_op(folio, N_MEMORY_USER_NUMA))
 				err = -ENOENT;
 			else
 				err = folio_nid(folio);

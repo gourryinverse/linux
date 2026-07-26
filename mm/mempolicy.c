@@ -415,9 +415,9 @@ static int mpol_set_nodemask(struct mempolicy *pol,
 	if (!pol || pol->mode == MPOL_LOCAL)
 		return 0;
 
-	/* Check N_MEMORY */
-	nodes_and(nsc->mask1,
-		  cpuset_current_mems_allowed, node_states[N_MEMORY]);
+	/* Filter on nodes that support userland numa placement */
+	nodes_and(nsc->mask1, node_states[N_MEMORY_USER_NUMA],
+		  cpuset_current_mems_allowed);
 
 	VM_BUG_ON(!nodes);
 
@@ -668,7 +668,7 @@ static void queue_folios_pmd(pmd_t *pmd, struct mm_walk *walk)
 	}
 	if (!queue_folio_required(folio, qp))
 		return;
-	if (folio_is_zone_device(folio))
+	if (!folio_allows_mm_op(folio, N_MEMORY_USER_NUMA))
 		return;
 	if (!(qp->flags & (MPOL_MF_MOVE | MPOL_MF_MOVE_ALL)) ||
 	    !vma_migratable(walk->vma) ||
@@ -724,7 +724,7 @@ static int queue_folios_pte_range(pmd_t *pmd, unsigned long addr,
 			continue;
 		}
 		folio = vm_normal_folio(vma, addr, ptent);
-		if (!folio || folio_is_zone_device(folio))
+		if (!folio || !folio_allows_mm_op(folio, N_MEMORY_USER_NUMA))
 			continue;
 		if (folio_test_large(folio) && max_nr != 1)
 			nr = folio_pte_batch(folio, pte, ptent, max_nr);
@@ -799,7 +799,7 @@ static int queue_folios_hugetlb(pte_t *pte, unsigned long hmask,
 	folio = pfn_folio(pte_pfn(ptep));
 	if (!queue_folio_required(folio, qp))
 		goto unlock;
-	if (folio_is_zone_device(folio))
+	if (!folio_allows_mm_op(folio, N_MEMORY_USER_NUMA))
 		goto unlock;
 	if (!(flags & (MPOL_MF_MOVE | MPOL_MF_MOVE_ALL)) ||
 	    !vma_migratable(walk->vma)) {
@@ -1373,7 +1373,17 @@ int do_migrate_pages(struct mm_struct *mm, const nodemask_t *from,
 {
 	long nr_failed = 0;
 	long err = 0;
-	nodemask_t tmp;
+	nodemask_t tmp, from_un, to_un;
+
+	/*
+	 * Constrain migration/remap operations to User NUMA capable nodes.
+	 * cpuset remaps may include nodes outside this set, and we must
+	 * not migrate to/from those node - instead they're left alone.
+	 */
+	nodes_and(from_un, *from, node_states[N_MEMORY_USER_NUMA]);
+	nodes_and(to_un, *to, node_states[N_MEMORY_USER_NUMA]);
+	from = &from_un;
+	to = &to_un;
 
 	lru_cache_disable();
 
@@ -1940,6 +1950,12 @@ static int kernel_migrate_pages(pid_t pid, unsigned long maxnode,
 		goto out_put;
 	}
 	rcu_read_unlock();
+
+	/* All destinations nodes must support User NUMA placement */
+	if (!nodes_subset(*new, node_states[N_MEMORY_USER_NUMA])) {
+		err = -EINVAL;
+		goto out_put;
+	}
 
 	task_nodes = cpuset_mems_allowed(task);
 	/* Is the user allowed to access the target nodes? */
@@ -3485,7 +3501,7 @@ int mpol_parse_str(char *str, struct mempolicy **mpol)
 		*nodelist++ = '\0';
 		if (nodelist_parse(nodelist, nodes))
 			goto out;
-		if (!nodes_subset(nodes, node_states[N_MEMORY]))
+		if (!nodes_subset(nodes, node_states[N_MEMORY_USER_NUMA]))
 			goto out;
 	} else
 		nodes_clear(nodes);
@@ -3517,7 +3533,7 @@ int mpol_parse_str(char *str, struct mempolicy **mpol)
 		 * Default to online nodes with memory if no nodelist
 		 */
 		if (!nodelist)
-			nodes = node_states[N_MEMORY];
+			nodes = node_states[N_MEMORY_USER_NUMA];
 		break;
 	case MPOL_LOCAL:
 		/*
