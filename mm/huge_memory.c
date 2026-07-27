@@ -2339,7 +2339,7 @@ bool madvise_free_huge_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 
 	folio = pmd_folio(orig_pmd);
 
-	if (folio_is_zone_device(folio))
+	if (!folio_allows_mm_op(folio, N_MEMORY_RECLAIM))
 		goto out;
 
 	/*
