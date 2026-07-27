@@ -70,6 +70,26 @@ void folio_mark_lazyfree(struct folio *folio);
 
 /* mm/vmscan.c */
 unsigned long zone_reclaimable_pages(struct zone *zone);
+
+/*
+ * folio_allows_mm_op() - may the memory operation gated by @feature
+ * act on this folio?
+ *
+ * false for ZONE_DEVICE and for nodes that do not permit @feature
+ */
+static inline bool folio_allows_mm_op(struct folio *folio,
+				      enum node_states feature)
+{
+	return !folio_is_zone_device(folio) &&
+	       node_state(folio_nid(folio), feature);
+}
+
+static inline bool page_allows_mm_op(struct page *page,
+				     enum node_states feature)
+{
+	return folio_allows_mm_op(page_folio(page), feature);
+}
+
 unsigned long try_to_free_pages(struct zonelist *zonelist, int order,
 				gfp_t gfp_mask, const nodemask_t *mask);
 unsigned long lruvec_lru_size(struct lruvec *lruvec, enum lru_list lru,
