@@ -537,22 +537,46 @@ static void mpol_rebind_default(struct mempolicy *pol, const nodemask_t *nodes)
 
 static void mpol_rebind_nodemask(struct mempolicy *pol, const nodemask_t *nodes)
 {
-	nodemask_t tmp;
+	nodemask_t tmp, keep;
+	bool had_user = nodes_intersects(pol->nodes, node_states[N_MEMORY_USER_NUMA]);
+
+	/* Never introduce USER_NUMA-ineligible nodes through a rebind. */
+	nodes_andnot(keep, pol->nodes, node_states[N_MEMORY_USER_NUMA]);
+	nodes_and(keep, keep, *nodes);
 
 	if (pol->flags & MPOL_F_STATIC_NODES)
 		nodes_and(tmp, pol->w.user_nodemask, *nodes);
-	else if (pol->flags & MPOL_F_RELATIVE_NODES)
-		mpol_relative_nodemask(&tmp, &pol->w.user_nodemask, nodes);
-	else {
-		nodes_remap(tmp, pol->nodes, pol->w.cpuset_mems_allowed,
-								*nodes);
+	else if (pol->flags & MPOL_F_RELATIVE_NODES) {
+		nodemask_t to_un;
+
+		nodes_and(to_un, *nodes, node_states[N_MEMORY_USER_NUMA]);
+		mpol_relative_nodemask(&tmp, &pol->w.user_nodemask, &to_un);
+	} else {
+		nodemask_t un, from_un, to_un;
+
+		nodes_and(un, pol->nodes, node_states[N_MEMORY_USER_NUMA]);
+		nodes_and(from_un, pol->w.cpuset_mems_allowed,
+			  node_states[N_MEMORY_USER_NUMA]);
+		nodes_and(to_un, *nodes, node_states[N_MEMORY_USER_NUMA]);
+		nodes_remap(tmp, un, from_un, to_un);
 		pol->w.cpuset_mems_allowed = *nodes;
 	}
 
-	if (nodes_empty(tmp))
-		tmp = *nodes;
+	/* An empty nodemask resets to the cpuset's common memory nodes. */
+	if (nodes_empty(tmp) && nodes_empty(keep) && had_user)
+		nodes_and(tmp, *nodes, node_states[N_MEMORY_COMMON]);
+	/* Retain driver-bound private nodes that remain in the cpuset. */
+	nodes_or(pol->nodes, tmp, keep);
 
-	pol->nodes = tmp;
+	/* Only MPOL_BIND has the nodemask needed to confine private memory. */
+	if (pol->mode != MPOL_BIND)
+		nodes_and(pol->nodes, pol->nodes, node_states[N_MEMORY_COMMON]);
+
+	/* MPOL_F_PRIVATE exactly tracks private nodes in the binding. */
+	if (!nodes_subset(pol->nodes, node_states[N_MEMORY_COMMON]))
+		pol->flags |= MPOL_F_PRIVATE;
+	else
+		pol->flags &= ~MPOL_F_PRIVATE;
 }
 
 static void mpol_rebind_preferred(struct mempolicy *pol,
