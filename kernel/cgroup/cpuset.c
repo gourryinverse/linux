@@ -1147,7 +1147,9 @@ static void compute_effective_cpumask(struct cpumask *new_cpus,
  * @cs: the cpuset the need to recompute the new effective_mems mask
  * @parent: the parent cpuset
  *
- * For v2, the parent's effective_mems is inherited if nodemask is empty.
+ * For v2, the parent's effective_mems is inherited if the nodemask holds no
+ * eligible node.  A nodemask without a public node is treated as empty: it
+ * cannot serve an ordinary allocation, so it would livelock rather than OOM.
  */
 static void compute_effective_nodemask(nodemask_t *new_mems,
 				       struct cpuset *cs, struct cpuset *parent)
@@ -1155,6 +1157,8 @@ static void compute_effective_nodemask(nodemask_t *new_mems,
 	bool has_mems;
 
 	has_mems = nodes_and(*new_mems, cs->mems_allowed, parent->effective_mems);
+	if (has_mems)
+		has_mems = nodes_intersects(*new_mems, node_states[N_MEMORY_PUBLIC]);
 	if (!has_mems && is_in_v2_mode())
 		nodes_copy(*new_mems, parent->effective_mems);
 }
@@ -2837,6 +2841,15 @@ static int update_nodemask(struct cpuset *cs, struct cpuset *trialcs,
 
 	if (!nodes_subset(trialcs->mems_allowed,
 			  top_cpuset.mems_allowed))
+		return -EINVAL;
+
+	/*
+	 * Reject a nodemask with no public node as if it were empty.  Such a
+	 * set can livelock if there is no eligible zone for an allocation
+	 * (e.g. a single ZONE_MOVABLE only private node).
+	 */
+	if (!nodes_empty(trialcs->mems_allowed) &&
+	    !nodes_intersects(trialcs->mems_allowed, node_states[N_MEMORY_PUBLIC]))
 		return -EINVAL;
 
 	/* No change? nothing to do */
