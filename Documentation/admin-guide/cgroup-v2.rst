@@ -2576,9 +2576,19 @@ Cpuset Interface Files
 	The value of "cpuset.mems" stays constant until the next update
 	and won't be affected by any memory nodes hotplug events.
 
+	If the requested nodes that the parent allows include no common
+	memory node, "cpuset.mems.effective" also inherits the parent's
+	common memory nodes.
+
 	Setting a non-empty value to "cpuset.mems" causes memory of
 	tasks within the cgroup to be migrated to the designated nodes if
 	they are currently using memory outside of the designated nodes.
+
+	Automatic memory migration uses only common-memory destinations.
+	It evacuates private pages into common memory only from private
+	nodes removed from "cpuset.mems.effective". Private placement
+	requires an explicit binding or migration request; granting access
+	to a private node alone does not allocate from it.
 
 	There is a cost for this memory migration.  The migration
 	may not be complete and some memory pages may be left behind.

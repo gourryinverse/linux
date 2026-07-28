@@ -653,6 +653,12 @@ the cpuset is preserved during these migration operations if possible.
 For example if the page was on the second valid node of the prior cpuset
 then the page will be placed on the second valid node of the new cpuset.
 
+Automatic migration uses only common-memory destinations. When enabled,
+it evacuates private pages into common memory only from private nodes the
+cpuset no longer allows. Private placement requires an explicit binding or
+migration request; cpuset membership alone does not allocate from private
+memory.
+
 Also if 'cpuset.memory_migrate' is set true, then if that cpuset's
 'cpuset.mems' file is modified, pages allocated to tasks in that
 cpuset, that were on nodes in the previous setting of 'cpuset.mems',

@@ -396,8 +396,8 @@ static inline void check_insane_mems_config(nodemask_t *nodes)
 {
 	nodemask_t mems;
 
-	/* Only memory nodes decide whether kernel allocations are possible. */
-	nodes_and(mems, *nodes, node_states[N_MEMORY]);
+	/* Only common memory can serve kernel allocations. */
+	nodes_and(mems, *nodes, node_states[N_MEMORY_COMMON]);
 	if (!cpusets_insane_config() &&
 		movable_only_nodes(&mems)) {
 		static_branch_enable_cpuslocked(&cpusets_insane_config_key);
@@ -1146,22 +1146,40 @@ static void compute_effective_cpumask(struct cpumask *new_cpus,
 		cpumask_copy(new_cpus, parent->effective_cpus);
 }
 
+/* @mems names private memory nodes but no common memory node. */
+static bool mems_private_only(const nodemask_t *mems)
+{
+	return nodes_intersects(*mems, node_states[N_MEMORY_PRIVATE]) &&
+	       !nodes_intersects(*mems, node_states[N_MEMORY_COMMON]);
+}
+
 /**
  * compute_effective_nodemask - Compute the effective nodemask of the cpuset
  * @new_mems: the temp variable for the new effective_mems mask
  * @cs: the cpuset the need to recompute the new effective_mems mask
  * @parent: the parent cpuset
  *
- * For v2, the parent's effective_mems is inherited if nodemask is empty.
+ * A nodemask whose memory is all private cannot serve an ordinary allocation.
+ * In v2, a non-empty request retains the requested nodes granted by the parent
+ * and inherits the parent's nodes other than private ones.
+ * In v1, cpuset_hotplug_update_tasks() empties such a mask, so the tasks move
+ * to an ancestor.
  */
 static void compute_effective_nodemask(nodemask_t *new_mems,
 				       struct cpuset *cs, struct cpuset *parent)
 {
-	bool has_mems;
+	nodemask_t inherited;
 
-	has_mems = nodes_and(*new_mems, cs->mems_allowed, parent->effective_mems);
-	if (!has_mems && is_in_v2_mode())
+	nodes_and(*new_mems, cs->mems_allowed, parent->effective_mems);
+	if (!is_in_v2_mode())
+		return;
+	if (nodes_empty(cs->mems_allowed)) {
 		nodes_copy(*new_mems, parent->effective_mems);
+	} else if (nodes_empty(*new_mems) || mems_private_only(new_mems)) {
+		nodes_andnot(inherited, parent->effective_mems,
+			     node_states[N_MEMORY_PRIVATE]);
+		nodes_or(*new_mems, *new_mems, inherited);
+	}
 }
 
 /*
@@ -2613,7 +2631,15 @@ static void cpuset_migrate_mm_workfn(struct work_struct *work)
 {
 	struct cpuset_migrate_mm_work *mwork =
 		container_of(work, struct cpuset_migrate_mm_work, work);
+	nodemask_t retained;
 
+	/*
+	 * Private nodes are never migration destinations. Evacuate private
+	 * memory only from nodes the cpuset no longer allows.
+	 */
+	nodes_and(retained, mwork->to, node_states[N_MEMORY_PRIVATE]);
+	nodes_andnot(mwork->from, mwork->from, retained);
+	nodes_andnot(mwork->to, mwork->to, node_states[N_MEMORY_PRIVATE]);
 	/* on a wq worker, no need to worry about %current's mems_allowed */
 	do_migrate_pages(mwork->mm, &mwork->from, &mwork->to, MPOL_MF_MOVE_ALL);
 	mmput(mwork->mm);
@@ -2845,6 +2871,14 @@ static int update_nodemask(struct cpuset *cs, struct cpuset *trialcs,
 			  top_cpuset.mems_allowed))
 		return -EINVAL;
 
+	/*
+	 * In v1, if a mask has no common memory nodes, it's treated as empty
+	 * because there is no effective-mems inherited fallback. As a result,
+	 * we treat this state the same as-if there was no memory at all.
+	 */
+	if (!is_in_v2_mode() && mems_private_only(&trialcs->mems_allowed))
+		return -ENOSPC;
+
 	/* No change? nothing to do */
 	if (nodes_equal(cs->mems_allowed, trialcs->mems_allowed))
 		return 0;
@@ -3058,7 +3092,7 @@ out:
 
 /*
  * Check to see if a cpuset can accept a new task
- * For v1, cpus_allowed and mems_allowed can't be empty.
+ * For v1, cpus_allowed can't be empty and mems_allowed must have common memory.
  * For v2, effective_cpus can't be empty.
  * Note that in v1, effective_cpus = cpus_allowed.
  *
@@ -3071,7 +3105,8 @@ static int cpuset_can_attach_check(struct cpuset *cs, struct cpuset *oldcs,
 	bool cpus_updated, mems_updated;
 
 	if (cpumask_empty(cs->effective_cpus) ||
-	   (!is_in_v2_mode() && nodes_empty(cs->mems_allowed)))
+	   (!is_in_v2_mode() && (nodes_empty(cs->mems_allowed) ||
+				 mems_private_only(&cs->mems_allowed))))
 		return -ENOSPC;
 
 	if (!oldcs)
@@ -3955,6 +3990,9 @@ static void cpuset_hotplug_update_tasks(struct cpuset *cs, struct tmpmasks *tmp)
 	parent = parent_cs(cs);
 	compute_effective_cpumask(&new_cpus, cs, parent);
 	compute_effective_nodemask(&new_mems, cs, parent);
+	/* A legacy cpuset left with only private memory moves its tasks. */
+	if (!is_in_v2_mode() && mems_private_only(&new_mems))
+		nodes_clear(new_mems);
 
 	if (!tmp || !cs->partition_root_state)
 		goto update_tasks;
