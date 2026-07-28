@@ -2701,9 +2701,10 @@ static void update_nodemasks_hier(struct cpuset *cs, nodemask_t *new_mems)
 
 		/*
 		 * If it becomes empty, inherit the effective mask of the
-		 * parent, which is guaranteed to have some MEMs.
+		 * parent, which is guaranteed to have an eligible MEM.
 		 */
-		if (is_in_v2_mode() && !has_mems)
+		if (is_in_v2_mode() &&
+		    (!has_mems || !nodes_intersects(*new_mems, node_states[N_MEMORY_FALLBACK])))
 			*new_mems = parent->effective_mems;
 
 		/* Skip the whole subtree if the nodemask remains the same. */
@@ -2759,6 +2760,15 @@ static int update_nodemask(struct cpuset *cs, struct cpuset *trialcs,
 
 	if (!nodes_subset(trialcs->mems_allowed,
 			  top_cpuset.mems_allowed))
+		return -EINVAL;
+
+	/*
+	 * Reject a fallback-less nodemask as if it were empty.  A set with no
+	 * fallback-eligible node can livelock if there is no eligible zone for
+	 * an allocation. (e.g. a single ZONE_MOVABLE only private node).
+	 */
+	if (!nodes_empty(trialcs->mems_allowed) &&
+	    !nodes_intersects(trialcs->mems_allowed, node_states[N_MEMORY_FALLBACK]))
 		return -EINVAL;
 
 	/* No change? nothing to do */
