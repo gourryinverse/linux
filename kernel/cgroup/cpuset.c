@@ -1147,16 +1147,33 @@ static void compute_effective_cpumask(struct cpumask *new_cpus,
  * @cs: the cpuset the need to recompute the new effective_mems mask
  * @parent: the parent cpuset
  *
- * For v2, the parent's effective_mems is inherited if nodemask is empty.
+ * A nodemask without common memory cannot serve an ordinary allocation.  For
+ * a non-empty v2 request, retain the requested nodes granted by the parent and
+ * inherit only the parent's common memory.  Empty v2 requests inherit the
+ * parent's full effective mask.  Clear the mask for v1 so its existing
+ * empty-cpuset handling moves tasks to an ancestor.
  */
 static void compute_effective_nodemask(nodemask_t *new_mems,
 				       struct cpuset *cs, struct cpuset *parent)
 {
-	bool has_mems;
+	bool has_common;
 
-	has_mems = nodes_and(*new_mems, cs->mems_allowed, parent->effective_mems);
-	if (!has_mems && is_in_v2_mode())
-		nodes_copy(*new_mems, parent->effective_mems);
+	nodes_and(*new_mems, cs->mems_allowed, parent->effective_mems);
+	has_common = nodes_intersects(*new_mems,
+				      node_states[N_MEMORY_COMMON]);
+	if (!has_common) {
+		if (!is_in_v2_mode()) {
+			nodes_clear(*new_mems);
+		} else if (nodes_empty(cs->mems_allowed)) {
+			nodes_copy(*new_mems, parent->effective_mems);
+		} else {
+			nodemask_t common_mems;
+
+			nodes_and(common_mems, parent->effective_mems,
+				  node_states[N_MEMORY_COMMON]);
+			nodes_or(*new_mems, *new_mems, common_mems);
+		}
+	}
 }
 
 /*
@@ -2839,6 +2856,12 @@ static int update_nodemask(struct cpuset *cs, struct cpuset *trialcs,
 			  top_cpuset.mems_allowed))
 		return -EINVAL;
 
+	/* Legacy cpusets have no effective-mems fallback. */
+	if (!is_in_v2_mode() &&
+	    nodes_intersects(trialcs->mems_allowed, node_states[N_MEMORY]) &&
+	    !nodes_intersects(trialcs->mems_allowed, node_states[N_MEMORY_COMMON]))
+		return -ENOSPC;
+
 	/* No change? nothing to do */
 	if (nodes_equal(cs->mems_allowed, trialcs->mems_allowed))
 		return 0;
@@ -3052,7 +3075,8 @@ out:
 
 /*
  * Check to see if a cpuset can accept a new task
- * For v1, cpus_allowed and mems_allowed can't be empty.
+ * For v1, cpus_allowed can't be empty and mems_allowed must contain common
+ * memory.
  * For v2, effective_cpus can't be empty.
  * Note that in v1, effective_cpus = cpus_allowed.
  *
@@ -3065,7 +3089,8 @@ static int cpuset_can_attach_check(struct cpuset *cs, struct cpuset *oldcs,
 	bool cpus_updated, mems_updated;
 
 	if (cpumask_empty(cs->effective_cpus) ||
-	   (!is_in_v2_mode() && nodes_empty(cs->mems_allowed)))
+	    (!is_in_v2_mode() &&
+	     !nodes_intersects(cs->mems_allowed, node_states[N_MEMORY_COMMON])))
 		return -ENOSPC;
 
 	if (!oldcs)
