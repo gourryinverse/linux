@@ -2576,6 +2576,13 @@ Cpuset Interface Files
 	The value of "cpuset.mems" stays constant until the next update
 	and won't be affected by any memory nodes hotplug events.
 
+	For a non-empty requested set containing no common memory,
+	"cpuset.mems.effective" retains the requested nodes granted by the
+	parent and inherits the parent's common memory nodes. It does not
+	inherit unrequested non-common nodes. The requested value remains
+	unchanged. An empty requested set continues to inherit the parent's
+	full effective mask.
+
 	Setting a non-empty value to "cpuset.mems" causes memory of
 	tasks within the cgroup to be migrated to the designated nodes if
 	they are currently using memory outside of the designated nodes.
