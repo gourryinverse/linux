@@ -402,7 +402,17 @@ enum node_states {
 #else
 	N_HIGH_MEMORY = N_NORMAL_MEMORY,
 #endif
-	N_MEMORY,		/* The node has memory(regular, high, movable) */
+	/*
+	 * N_MEMORY indicates online memory exists on the node - it is used
+	 * to manage per-node meta-data and topology decisions.
+	 * N_MEMORY_COMMON indicates whether the node can satisfy arbitrary
+	 * allocations and whether a service should manage that node's folios.
+	 * N_MEMORY_PRIVATE holds the other memory nodes: together the two
+	 * partition N_MEMORY.
+	 */
+	N_MEMORY,		/* the node has memory */
+	N_MEMORY_COMMON,	/* common pool (fallback zonelist) */
+	N_MEMORY_PRIVATE,	/* memory outside the common pool */
 	N_CPU,		/* The node has one or more cpus */
 	N_GENERIC_INITIATOR,	/* The node has one or more Generic Initiators */
 	NR_NODE_STATES
@@ -474,9 +484,10 @@ static __always_inline void node_set_offline(int nid)
 
 #else
 
+/* Node 0 holds all memory, and none of it is private. */
 static __always_inline int node_state(int node, enum node_states state)
 {
-	return node == 0;
+	return node == 0 && state != N_MEMORY_PRIVATE;
 }
 
 static __always_inline void node_set_state(int node, enum node_states state)
@@ -489,13 +500,13 @@ static __always_inline void node_clear_state(int node, enum node_states state)
 
 static __always_inline int num_node_state(enum node_states state)
 {
-	return 1;
+	return state != N_MEMORY_PRIVATE;
 }
 
 #define for_each_node_state(node, __state) \
-	for ( (node) = 0; (node) == 0; (node) = 1)
+	for ( (node) = 0; (node) == 0 && (__state) != N_MEMORY_PRIVATE; (node) = 1)
 
-#define first_node_state(state)	0
+#define first_node_state(state)	((state) == N_MEMORY_PRIVATE ? MAX_NUMNODES : 0)
 static __always_inline unsigned int next_node_state(int nid, enum node_states state)
 {
 	return MAX_NUMNODES;
