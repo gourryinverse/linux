@@ -10,6 +10,15 @@ Contact:	Linux Memory Management list <linux-mm@kvack.org>
 Description:
 		Nodes that are online.
 
+What:		/sys/devices/system/node/has_memory
+Contact:	Linux Memory Management list <linux-mm@kvack.org>
+Description:
+		Nodes that have memory.
+
+		This memory may or may not be reachable via standard
+		allocations, see has_common_memory for details.
+
+
 What:		/sys/devices/system/node/has_normal_memory
 Date:		October 2002
 Contact:	Linux Memory Management list <linux-mm@kvack.org>
@@ -28,6 +37,18 @@ Contact:	Linux Memory Management list <linux-mm@kvack.org>
 Description:
 		Nodes that have regular or high memory.
 		Depends on CONFIG_HIGHMEM.
+
+What:		/sys/devices/system/node/has_common_memory
+Contact:	Linux Memory Management list <linux-mm@kvack.org>
+Description:
+		Nodelist of the memory nodes with memory available for common
+		allocations based on zone membership (e.g. NORMAL, MOVABLE).
+		i.e. allocations can reach this node without asking for the
+		node specifically.
+
+		A memory node absent from this is opted out of common memory
+		management services and its available memory features must be
+		discovered from its node device.
 
 What:		/sys/devices/system/node/nodeX
 Date:		October 2002
