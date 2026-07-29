@@ -281,7 +281,7 @@ static enum oom_constraint constrained_alloc(struct oom_control *oc)
 	 * is enforced in get_page_from_freelist().
 	 */
 	if (oc->nodemask &&
-	    !nodes_subset(node_states[N_MEMORY], *oc->nodemask)) {
+	    !nodes_subset(node_states[N_MEMORY_PUBLIC], *oc->nodemask)) {
 		oc->totalpages = total_swap_pages;
 		for_each_node_mask(nid, *oc->nodemask)
 			oc->totalpages += node_present_pages(nid);

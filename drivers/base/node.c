@@ -958,6 +958,10 @@ static ssize_t show_node_state(struct device *dev,
 #define _NODE_ATTR(name, state) \
 	{ __ATTR(name, 0444, show_node_state, NULL), state }
 
+/*
+ * These arrays are indexed by enum node_states, so it may be sparse
+ * and need not span every state up to NR_NODE_STATES.
+ */
 static struct node_attr node_state_attr[] = {
 	[N_POSSIBLE] = _NODE_ATTR(possible, N_POSSIBLE),
 	[N_ONLINE] = _NODE_ATTR(online, N_ONLINE),
@@ -996,9 +1000,6 @@ static const struct attribute_group *cpu_root_attr_groups[] = {
 void __init node_dev_init(void)
 {
 	int ret, i;
-
- 	BUILD_BUG_ON(ARRAY_SIZE(node_state_attr) != NR_NODE_STATES);
- 	BUILD_BUG_ON(ARRAY_SIZE(node_state_attrs)-1 != NR_NODE_STATES);
 
 	ret = subsys_system_register(&node_subsys, cpu_root_attr_groups);
 	if (ret)
