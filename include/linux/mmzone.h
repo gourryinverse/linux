@@ -1892,6 +1892,10 @@ static inline struct zoneref *first_zones_zonelist(struct zonelist *zonelist,
 		z = next_zones_zonelist(++z, highidx, nodemask),	\
 			zone = zonelist_zone(z))
 
+/* used to iterate zones in intersect(nodemask, node_state(N_STATE)) */
+#define for_each_zone_node_state(zone, z, zlist, highidx, nodemask, state) \
+	for_each_zone_zonelist_nodemask(zone, z, zlist, highidx, nodemask) \
+		if (node_state(zone_to_nid(zone), state))
 
 /**
  * for_each_zone_zonelist - helper macro to iterate over valid zones in a zonelist at or below a given zone index

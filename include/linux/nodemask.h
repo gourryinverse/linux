@@ -526,6 +526,13 @@ static __always_inline void node_clear_memory_state(int nid)
 	node_clear_state(nid, N_MEMORY);
 }
 
+/* first/next online node carrying a given N_* state. */
+#define first_node_state(state)        first_node(node_states[state])
+static __always_inline unsigned int next_node_state(int nid, enum node_states state)
+{
+	return next_node(nid, node_states[state]);
+}
+
 /*
  * For nodemask scratch area.
  * NODEMASK_ALLOC(type, name) allocates an object with a specified type and
