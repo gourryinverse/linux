@@ -201,6 +201,7 @@ nodemask_t node_states[NR_NODE_STATES] __read_mostly = {
 	[N_HIGH_MEMORY] = { { [0] = 1UL } },
 #endif
 	[N_MEMORY] = { { [0] = 1UL } },
+	[N_MEMORY_PUBLIC] = { { [0] = 1UL } },
 	[N_CPU] = { { [0] = 1UL } },
 #endif	/* NUMA */
 };
@@ -2919,7 +2920,8 @@ static bool free_frozen_page_commit(struct zone *zone,
 		 * kswapd work again by resetting kswapd_failures.
 		 */
 		if (kswapd_test_hopeless(pgdat) &&
-		    next_memory_node(pgdat->node_id) < MAX_NUMNODES)
+		    next_node_state(pgdat->node_id, N_MEMORY_PUBLIC) <
+			    MAX_NUMNODES)
 			kswapd_clear_hopeless(pgdat, KSWAPD_CLEAR_HOPELESS_PCP);
 	}
 	return ret;
@@ -5923,7 +5925,14 @@ static void build_node_zonelist(pg_data_t *pgdat, const nodemask_t *candidates,
 
 static void build_zonelists(pg_data_t *pgdat)
 {
-	build_node_zonelist(pgdat, &node_states[N_MEMORY], ZONELIST_FALLBACK);
+	/*
+	 * FALLBACK:   allocation order over public memory only; private nodes
+	 *             are excluded so no general allocation reaches them (a
+	 *             private node's own FALLBACK also lands on public memory).
+	 * NOFALLBACK: each node's own zones.
+	 */
+	build_node_zonelist(pgdat, &node_states[N_MEMORY_PUBLIC],
+			    ZONELIST_FALLBACK);
 	build_thisnode_zonelists(pgdat);
 }
 
