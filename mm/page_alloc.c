@@ -201,6 +201,7 @@ nodemask_t node_states[NR_NODE_STATES] __read_mostly = {
 	[N_HIGH_MEMORY] = { { [0] = 1UL } },
 #endif
 	[N_MEMORY] = { { [0] = 1UL } },
+	[N_MEMORY_FALLBACK] = { { [0] = 1UL } },
 	[N_CPU] = { { [0] = 1UL } },
 #endif	/* NUMA */
 };
@@ -6020,8 +6021,14 @@ static void build_zonelists(pg_data_t *pgdat)
 
 	memset(node_order, 0, sizeof(node_order));
 
-	build_node_zonelist(pgdat, &node_states[N_MEMORY], ZONELIST_FALLBACK,
-			    true, node_order, &nr_nodes);
+	/*
+	 * FALLBACK:   allocation order over public memory only; private nodes
+	 *             are excluded so no general allocation reaches them (a
+	 *             private node's own FALLBACK also lands on public memory).
+	 * NOFALLBACK: each node's own zones.
+	 */
+	build_node_zonelist(pgdat, &node_states[N_MEMORY_FALLBACK],
+			    ZONELIST_FALLBACK, true, node_order, &nr_nodes);
 	build_thisnode_zonelists(pgdat);
 
 	pr_info("Fallback order for Node %d: ", local_node);
