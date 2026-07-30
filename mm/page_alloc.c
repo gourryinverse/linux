@@ -4782,7 +4782,7 @@ out:
 }
 
 static inline bool
-check_retry_cpuset(int cpuset_mems_cookie, struct alloc_context *ac)
+check_retry_cpuset(gfp_t gfp, int cpuset_mems_cookie, struct alloc_context *ac)
 {
 	/*
 	 * It's possible that cpuset's mems_allowed and the nodemask from
@@ -4794,10 +4794,16 @@ check_retry_cpuset(int cpuset_mems_cookie, struct alloc_context *ac)
 	 * from MPOL_BIND mempolicy (whose documented semantics is to be ignored
 	 * when it does not intersect with the cpuset restrictions) or the
 	 * caller can deal with a violated nodemask.
+	 *
+	 * If the allocation was iterating the private zonelist, we must
+	 * also fallback to the public zonelist to enforce isolation.
 	 */
 	if (cpusets_enabled() && ac->nodemask &&
 			!cpuset_nodemask_valid_mems_allowed(ac->nodemask)) {
 		ac->nodemask = NULL;
+		ac->alloc_flags &= ~ALLOC_ZONELIST_PRIVATE;
+		ac->zonelist = select_zonelist(zonelist_node_idx(ac->preferred_zoneref),
+					       gfp, ac->alloc_flags);
 		return true;
 	}
 
@@ -4971,6 +4977,9 @@ retry:
 		ac->nodemask = NULL;
 		ac->preferred_zoneref = first_zones_zonelist(ac->zonelist,
 					ac->highest_zoneidx, ac->nodemask);
+		ac->alloc_flags &= ~ALLOC_ZONELIST_PRIVATE;
+		ac->zonelist = select_zonelist(zonelist_node_idx(ac->preferred_zoneref),
+					       gfp_mask, ac->alloc_flags);
 
 		/*
 		 * The first time we adjust anything due to being allowed to
@@ -5064,7 +5073,7 @@ retry:
 	 * infinite retries. No "goto retry;" can be placed above this check
 	 * unless it can execute just once.
 	 */
-	if (check_retry_cpuset(cpuset_mems_cookie, ac) ||
+	if (check_retry_cpuset(gfp_mask, cpuset_mems_cookie, ac) ||
 	    check_retry_zonelist(zonelist_iter_cookie))
 		goto restart;
 
@@ -5094,7 +5103,7 @@ retry:
 	 * Deal with possible cpuset update races or zonelist updates to avoid
 	 * a unnecessary OOM kill.
 	 */
-	if (check_retry_cpuset(cpuset_mems_cookie, ac) ||
+	if (check_retry_cpuset(gfp_mask, cpuset_mems_cookie, ac) ||
 	    check_retry_zonelist(zonelist_iter_cookie))
 		goto restart;
 
@@ -5120,7 +5129,7 @@ nopage:
 	 * Deal with possible cpuset update races or zonelist updates to avoid
 	 * a unnecessary OOM kill.
 	 */
-	if (check_retry_cpuset(cpuset_mems_cookie, ac) ||
+	if (check_retry_cpuset(gfp_mask, cpuset_mems_cookie, ac) ||
 	    check_retry_zonelist(zonelist_iter_cookie))
 		goto restart;
 
