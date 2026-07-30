@@ -1268,7 +1268,8 @@ static enum scan_result alloc_charge_folio(struct folio **foliop, struct mm_stru
 	int node = collapse_find_target_node(cc);
 	struct folio *folio;
 
-	folio = __folio_alloc(gfp, order, node, &cc->alloc_nmask, ALLOC_DEFAULT);
+	folio = __folio_alloc(gfp, order, node, &cc->alloc_nmask,
+			      select_zonelist_flags(node));
 	if (!folio) {
 		*foliop = NULL;
 		count_collapse_event(order, THP_COLLAPSE_ALLOC_FAILED,

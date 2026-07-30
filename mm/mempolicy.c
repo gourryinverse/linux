@@ -1325,6 +1325,7 @@ static long migrate_to_node(struct mm_struct *mm, int source, int dest,
 		.nid = dest,
 		.gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_THISNODE,
 		.reason = MR_SYSCALL,
+		.alloc_flags = select_zonelist_flags(dest),
 	};
 
 	nodes_clear(nmask);
