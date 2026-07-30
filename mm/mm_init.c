@@ -1559,6 +1559,13 @@ int __ref free_area_init_core_hotplug(struct pglist_data *pgdat)
 	pgdat->node_present_pages = 0;
 
 	/*
+	 * A hot-added pgdat is zero-allocated; start it public (every feature)
+	 * before its mem_features attribute can be read, until a driver
+	 * registers private caps via node_private_register().
+	 */
+	WRITE_ONCE(pgdat->memory_caps, NODE_MEMORY_CAP_ALL);
+
+	/*
 	 * Hot-unplug can leave per-cpu vmstat deltas unfolded (folders skip
 	 * offline nodes) - reconcile this at online. Foreign access to counters
 	 * is safe: the node is not online yet and we hold the hotplug lock.
@@ -1757,7 +1764,8 @@ static void __init check_for_memory(pg_data_t *pgdat)
 			break;
 		}
 	}
-	node_set_memory_state(pgdat->node_id, high, normal);
+	WRITE_ONCE(pgdat->memory_caps, NODE_MEMORY_CAP_ALL);
+	node_set_memory_state(pgdat->node_id, high, normal, NODE_MEMORY_CAP_ALL);
 }
 
 #if MAX_NUMNODES > 1

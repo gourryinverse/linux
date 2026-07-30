@@ -521,23 +521,55 @@ static __always_inline int node_random(const nodemask_t *maskp)
 #define for_each_online_node(node) for_each_node_state(node, N_ONLINE)
 #define for_each_node_with_cpus(node)	for_each_node_state(node, N_CPU)
 
-static inline void node_set_memory_state(int nid, bool high, bool normal)
+/*
+ * Private-node capabilities.
+ * A private node is an N_MEMORY node without CAP_FALLBACK. Its owner opts
+ * opts into mm/ service management by setting these capability bits.
+ */
+#define NODE_MEMORY_CAP_RECLAIM		(1UL << 0) /* mm reclaim */
+#define NODE_MEMORY_CAP_DEMOTION	(1UL << 1) /* reclaim demotion */
+#define NODE_MEMORY_CAP_NUMA_BALANCING	(1UL << 2) /* NUMA balancing */
+#define NODE_MEMORY_CAP_LTPIN		(1UL << 3) /* long-term GUP pins */
+#define NODE_MEMORY_CAP_DAMON		(1UL << 4) /* DAMON */
+#define NODE_MEMORY_CAP_KSM		(1UL << 5) /* KSM */
+#define NODE_MEMORY_CAP_COLLAPSE	(1UL << 6) /* khugepaged + madvise */
+#define NODE_MEMORY_CAP_HUGETLB		(1UL << 7) /* hugetlb */
+#define NODE_MEMORY_CAP_USER_NUMA	(1UL << 8) /* userspace NUMA controls */
+#define NODE_MEMORY_CAP_FALLBACK	(1UL << 9) /* add to fallback zonelist */
+#define NODE_MEMORY_CAP_ALL             (~0UL)
+
+static inline void node_set_memory_state(int nid, bool high, bool normal,
+		unsigned long caps)
 {
+	/* A fallback node is "public" and must enable all capabilities */
+	WARN_ON_ONCE((caps & NODE_MEMORY_CAP_FALLBACK) &&
+		     (caps != NODE_MEMORY_CAP_ALL));
+
 	node_set_state(nid, N_MEMORY);
 	if (high)
 		node_set_state(nid, N_HIGH_MEMORY);
 	if (normal)
 		node_set_state(nid, N_NORMAL_MEMORY);
-	node_set_state(nid, N_MEMORY_FALLBACK);
-	node_set_state(nid, N_MEMORY_RECLAIM);
-	node_set_state(nid, N_MEMORY_DEMOTION);
-	node_set_state(nid, N_MEMORY_NUMA_BALANCING);
-	node_set_state(nid, N_MEMORY_LTPIN);
-	node_set_state(nid, N_MEMORY_DAMON);
-	node_set_state(nid, N_MEMORY_KSM);
-	node_set_state(nid, N_MEMORY_COLLAPSE);
-	node_set_state(nid, N_MEMORY_HUGETLB);
-	node_set_state(nid, N_MEMORY_USER_NUMA);
+	if (caps & NODE_MEMORY_CAP_RECLAIM)
+		node_set_state(nid, N_MEMORY_RECLAIM);
+	if (caps & NODE_MEMORY_CAP_DEMOTION)
+		node_set_state(nid, N_MEMORY_DEMOTION);
+	if (caps & NODE_MEMORY_CAP_NUMA_BALANCING)
+		node_set_state(nid, N_MEMORY_NUMA_BALANCING);
+	if (caps & NODE_MEMORY_CAP_LTPIN)
+		node_set_state(nid, N_MEMORY_LTPIN);
+	if (caps & NODE_MEMORY_CAP_DAMON)
+		node_set_state(nid, N_MEMORY_DAMON);
+	if (caps & NODE_MEMORY_CAP_KSM)
+		node_set_state(nid, N_MEMORY_KSM);
+	if (caps & NODE_MEMORY_CAP_COLLAPSE)
+		node_set_state(nid, N_MEMORY_COLLAPSE);
+	if (caps & NODE_MEMORY_CAP_HUGETLB)
+		node_set_state(nid, N_MEMORY_HUGETLB);
+	if (caps & NODE_MEMORY_CAP_USER_NUMA)
+		node_set_state(nid, N_MEMORY_USER_NUMA);
+	if (caps & NODE_MEMORY_CAP_FALLBACK)
+		node_set_state(nid, N_MEMORY_FALLBACK);
 }
 
 static __always_inline void node_clear_memory_state(int nid)
