@@ -648,11 +648,21 @@ static ssize_t node_read_distance(struct device *dev,
 }
 static DEVICE_ATTR(distance, 0444, node_read_distance, NULL);
 
+static ssize_t node_read_mem_features(struct device *dev,
+				      struct device_attribute *attr, char *buf)
+{
+	struct pglist_data *pgdat = NODE_DATA(dev->id);
+
+	return sysfs_emit(buf, "%#lx\n", READ_ONCE(pgdat->memory_caps));
+}
+static DEVICE_ATTR(mem_features, 0444, node_read_mem_features, NULL);
+
 static struct attribute *node_dev_attrs[] = {
 	&dev_attr_meminfo.attr,
 	&dev_attr_numastat.attr,
 	&dev_attr_distance.attr,
 	&dev_attr_vmstat.attr,
+	&dev_attr_mem_features.attr,
 	NULL
 };
 

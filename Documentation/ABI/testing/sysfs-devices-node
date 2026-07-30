@@ -1,0 +1,11 @@
+What:		/sys/devices/system/node/nodeX/mem_features
+Date:		July 2026
+Contact:	Linux Memory Management list <linux-mm@kvack.org>
+Description:
+		Hexadecimal bitmask of the memory-feature capabilities enabled
+		on node X, using the NODE_MEMORY_CAP_* bit positions: reclaim,
+		demotion, numa_balancing, ltpin, damon, ksm, collapse, hugetlb,
+		user_numa and fallback.
+
+		A public node reports every feature (~0). A private node reports
+		only the subset its owning driver opted into.
