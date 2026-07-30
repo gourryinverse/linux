@@ -1,0 +1,27 @@
+What:		/sys/devices/system/node/has_user_memory
+Date:		July 2026
+Contact:	Linux Memory Management list <linux-mm@kvack.org>
+Description:
+		Nodelist of the memory nodes that userspace may place memory on,
+		i.e. those that may appear in an mbind(2), set_mempolicy(2),
+		move_pages(2) or migrate_pages(2) node set.
+
+		Every ordinary node is listed.  A memory node absent from this
+		list is hosted by a device that did not opt into userspace
+		placement: naming it on its own is rejected with EINVAL, and
+		naming it alongside other nodes simply drops it from the set.
+
+What:		/sys/devices/system/node/has_fallback_memory
+Date:		July 2026
+Contact:	Linux Memory Management list <linux-mm@kvack.org>
+Description:
+		Nodelist of the memory nodes on the page allocator's fallback
+		zonelists, i.e. those an allocation can reach without asking for
+		them by name.
+
+		Every ordinary node is listed.  A memory node absent from this
+		list is hosted by a device and only ever receives memory that
+		was explicitly bound to it, so its capacity must not be counted
+		towards what an unbound allocation can obtain.  Such a node may
+		still appear in has_user_memory, meaning it can be bound to
+		deliberately.

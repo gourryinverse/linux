@@ -5,6 +5,8 @@
 
 #include <linux/module.h>
 #include <linux/init.h>
+#include <linux/debugfs.h>
+#include <linux/seq_file.h>
 #include <linux/mm.h>
 #include <linux/memory.h>
 #include <linux/mempolicy.h>
@@ -970,6 +972,8 @@ static struct node_attr node_state_attr[] = {
 	[N_HIGH_MEMORY] = _NODE_ATTR(has_high_memory, N_HIGH_MEMORY),
 #endif
 	[N_MEMORY] = _NODE_ATTR(has_memory, N_MEMORY),
+	[N_MEMORY_FALLBACK] = _NODE_ATTR(has_fallback_memory, N_MEMORY_FALLBACK),
+	[N_MEMORY_USER_NUMA] = _NODE_ATTR(has_user_memory, N_MEMORY_USER_NUMA),
 	[N_CPU] = _NODE_ATTR(has_cpu, N_CPU),
 	[N_GENERIC_INITIATOR] = _NODE_ATTR(has_generic_initiator,
 					   N_GENERIC_INITIATOR),
@@ -983,6 +987,8 @@ static struct attribute *node_state_attrs[] = {
 	&node_state_attr[N_HIGH_MEMORY].attr.attr,
 #endif
 	&node_state_attr[N_MEMORY].attr.attr,
+	&node_state_attr[N_MEMORY_FALLBACK].attr.attr,
+	&node_state_attr[N_MEMORY_USER_NUMA].attr.attr,
 	&node_state_attr[N_CPU].attr.attr,
 	&node_state_attr[N_GENERIC_INITIATOR].attr.attr,
 	NULL
@@ -996,6 +1002,33 @@ static const struct attribute_group *cpu_root_attr_groups[] = {
 	&memory_root_attr_group,
 	NULL,
 };
+
+/*
+ * The raw NODE_MEMORY_CAP_* mask of every online node, one "<nid> <mask>" line
+ * each.  This is deliberately not in sysfs: the bit layout is kernel-internal
+ * and must not become ABI.  Userspace consumes the two derived node-state
+ * masks, has_user_memory and has_fallback_memory; this exists so tests and
+ * debugging can see the full capability set.
+ */
+static int node_mem_features_show(struct seq_file *m, void *v)
+{
+	int nid;
+
+	for_each_online_node(nid)
+		seq_printf(m, "%d %#lx\n", nid,
+			   READ_ONCE(NODE_DATA(nid)->memory_caps));
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(node_mem_features);
+
+static int __init node_debugfs_init(void)
+{
+	debugfs_create_file("mem_features", 0444,
+			    debugfs_create_dir("node", NULL), NULL,
+			    &node_mem_features_fops);
+	return 0;
+}
+late_initcall(node_debugfs_init);
 
 void __init node_dev_init(void)
 {
