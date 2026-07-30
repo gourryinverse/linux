@@ -1394,6 +1394,8 @@ enum {
 	 * restrict the allocations to a single node for __GFP_THISNODE.
 	 */
 	ZONELIST_NOFALLBACK,	/* zonelist without fallback (__GFP_THISNODE) */
+	ZONELIST_PRIVATE,	/* private-node access, falls back to DRAM */
+	ZONELIST_PRIVATE_NOFALLBACK, /* private-node access, __GFP_THISNODE */
 #endif
 	MAX_ZONELISTS
 };
