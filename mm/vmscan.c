@@ -1027,6 +1027,7 @@ static unsigned int demote_folio_list(struct list_head *demote_folios,
 		return 0;
 
 	mtc.nid = target_nid;
+	mtc.alloc_flags = select_zonelist_flags(target_nid);
 
 	/* Demotion ignores all cpuset and mempolicy settings */
 	migrate_pages(demote_folios, alloc_demote_folio, NULL,
@@ -6792,11 +6793,17 @@ unsigned long try_to_free_mem_cgroup_pages(struct mem_cgroup *memcg,
 		.proactive = !!(reclaim_options & MEMCG_RECLAIM_PROACTIVE),
 	};
 	/*
-	 * Traverse the ZONELIST_FALLBACK zonelist of the current node to put
-	 * equal pressure on all the nodes. This is based on the assumption that
-	 * the reclaim does not bail out early.
+	 * Traverse the private zonelist family of the current node to put
+	 * equal pressure on every node - public and reclaim-capable private
+	 * alike - that may hold this memcg's pages. This is based on the
+	 * assumption that the reclaim does not bail out early.
+	 *
+	 * ZONELIST_FALLBACK would exclude private nodes entirely. We iterate
+	 * the list with for_each_zone_node_state(..., N_MEMORY_RECLAIM) in
+	 * do_try_to_free_pages to filter out ineligible nodes.
 	 */
-	struct zonelist *zonelist = node_zonelist(numa_node_id(), sc.gfp_mask);
+	struct zonelist *zonelist = select_zonelist(numa_node_id(), sc.gfp_mask,
+						    ALLOC_ZONELIST_PRIVATE);
 
 	set_task_reclaim_state(current, &sc.reclaim_state);
 	trace_mm_vmscan_memcg_reclaim_begin(sc.gfp_mask, 0, memcg);
@@ -7580,7 +7587,12 @@ unsigned long shrink_all_memory(unsigned long nr_to_reclaim)
 		.may_swap = 1,
 		.hibernation_mode = 1,
 	};
-	struct zonelist *zonelist = node_zonelist(numa_node_id(), sc.gfp_mask);
+	/*
+	 * We iterate ZONELIST_PRIVATE to at least ensure we visit each node.
+	 * do_try_to_free_pages will filter out reclaim-ineligible nodes.
+	 */
+	struct zonelist *zonelist = select_zonelist(numa_node_id(), sc.gfp_mask,
+						    ALLOC_ZONELIST_PRIVATE);
 	unsigned long nr_reclaimed;
 	unsigned int noreclaim_flag;
 
