@@ -1557,6 +1557,9 @@ int __ref free_area_init_core_hotplug(struct pglist_data *pgdat)
 	pgdat->node_start_pfn = 0;
 	pgdat->node_present_pages = 0;
 
+	/* memory defaults to mm-managed unless changed at hotplug time */
+	WRITE_ONCE(pgdat->memory_features, NODE_MEMORY_FEAT_ALL);
+
 	/*
 	 * Hot-unplug can leave per-cpu vmstat deltas unfolded (folders skip
 	 * offline nodes) - reconcile this at online. Foreign access to counters
@@ -1756,7 +1759,8 @@ static void __init check_for_memory(pg_data_t *pgdat)
 			break;
 		}
 	}
-	node_set_memory_state(pgdat->node_id, high, normal);
+	WRITE_ONCE(pgdat->memory_features, NODE_MEMORY_FEAT_ALL);
+	node_set_memory_state(pgdat->node_id, high, normal, NODE_MEMORY_FEAT_ALL);
 }
 
 #if MAX_NUMNODES > 1

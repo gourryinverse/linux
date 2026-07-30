@@ -168,11 +168,24 @@ nodes with particular properties as defined by ``enum node_states``:
   The node has regular or high memory. When ``CONFIG_HIGHMEM`` is disabled
   aliased to ``N_NORMAL_MEMORY``.
 ``N_MEMORY``
-  The node has memory(regular, high, movable)
+  The node has memory (regular, high, movable).  Memory being present does
+  not put the node in the general-purpose pool; see ``N_MEMORY_PUBLIC``.
+``N_MEMORY_PUBLIC``
+  The node is on the page allocator's fallback zonelists, so an allocation
+  that named no node can be satisfied from it.
+``N_MEMORY_USER_NUMA``
+  Userspace NUMA placement may target the node.
 ``N_CPU``
   The node has one or more CPUs
 ``N_GENERIC_INITIATOR``
   The node has one or more Generic Initiators
+
+The remaining ``N_MEMORY_*`` states name individual mm services - reclaim,
+demotion, NUMA balancing, long-term pins, DAMON, KSM and THP collapse - that a
+node's provider may opt into.  All are subsets of ``N_MEMORY``, and
+``N_MEMORY_PUBLIC`` implies every one of them, so an ordinary node has them
+all.  A node with memory but without ``N_MEMORY_PUBLIC`` is a private node,
+described in Documentation/mm/numa_private_nodes.rst.
 
 For each node that has a property described above, the bit corresponding to the
 node ID in the ``node_states[<property>]`` bitmask is set.
