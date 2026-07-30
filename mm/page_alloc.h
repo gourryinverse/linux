@@ -56,6 +56,11 @@
  * alloc_tag_sub_check().
  */
 #define ALLOC_NO_CODETAG       0x1000
+#ifdef CONFIG_NUMA
+#define ALLOC_ZONELIST_PRIVATE 0x2000	/* use the ZONELIST_PRIVATE zonelist family */
+#else
+#define ALLOC_ZONELIST_PRIVATE 0x0
+#endif
 
 /* Flags that allow allocations below the min watermark. */
 #define ALLOC_RESERVES (ALLOC_NON_BLOCK|ALLOC_MIN_RESERVE|ALLOC_HIGHATOMIC|ALLOC_OOM)
@@ -94,6 +99,42 @@ struct alloc_context {
 	/* Only flags that are global to the whole allocation go here. */
 	unsigned int alloc_flags;
 };
+
+#ifdef CONFIG_NUMA
+static_assert(ZONELIST_PRIVATE + 1 == ZONELIST_PRIVATE_NOFALLBACK);
+#endif
+
+/*
+ * Select the correct zonelist to iterate based on gfp and alloc flags.
+ * ALLOC_ZONELIST_PRIVATE dictates zonelist family (FALLBACK vs PRIVATE).
+ * __GFP_THISNODE dictates fallback behavior (self only or fallback)
+ */
+static inline struct zonelist *
+select_zonelist(int nid, gfp_t gfp, unsigned int alloc_flags)
+{
+#ifdef CONFIG_NUMA
+	if (alloc_flags & ALLOC_ZONELIST_PRIVATE) {
+		int idx = ZONELIST_PRIVATE + !!(gfp & __GFP_THISNODE);
+
+		return &NODE_DATA(nid)->node_zonelists[idx];
+	}
+#endif
+	return node_zonelist(nid, gfp);
+}
+
+/*
+ * This interface is only for services that already handle filtering their
+ * target nodelists based on N_MEMORY_<feature> bits.  If you use this
+ * without validating nid supports the feature, it can cause spillage of
+ * general system memory onto an otherwise isolated node.
+ */
+static inline unsigned int select_zonelist_flags(int nid)
+{
+	/* A private node is an N_MEMORY node outside the fallback set. */
+	if (node_state(nid, N_MEMORY) && !node_state(nid, N_MEMORY_FALLBACK))
+		return ALLOC_ZONELIST_PRIVATE;
+	return ALLOC_DEFAULT;
+}
 
 /*
  * This function returns the order of a free page in the buddy system. In

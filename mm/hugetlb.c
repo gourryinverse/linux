@@ -1290,7 +1290,7 @@ static struct folio *dequeue_hugetlb_folio_nodemask(struct hstate *h, gfp_t gfp_
 	if (nid == NUMA_NO_NODE)
 		nid = numa_node_id();
 
-	zonelist = node_zonelist(nid, gfp_mask);
+	zonelist = select_zonelist(nid, gfp_mask, select_zonelist_flags(nid));
 
 retry_cpuset:
 	cpuset_mems_cookie = read_mems_allowed_begin();
@@ -1796,7 +1796,7 @@ static struct folio *alloc_buddy_frozen_folio(int order, gfp_t gfp_mask,
 		gfp_mask |= __GFP_RETRY_MAYFAIL;
 
 	folio = (struct folio *)__alloc_frozen_pages(gfp_mask, order, nid, nmask,
-						     ALLOC_DEFAULT);
+						     select_zonelist_flags(nid));
 
 	/*
 	 * If we did not specify __GFP_RETRY_MAYFAIL, but still got a

@@ -2233,7 +2233,7 @@ struct folio *alloc_migration_target(struct folio *src, unsigned long private)
 	if (is_highmem_idx(zidx) || zidx == ZONE_MOVABLE)
 		gfp_mask |= __GFP_HIGHMEM;
 
-	return __folio_alloc(gfp_mask, order, nid, mtc->nmask, ALLOC_DEFAULT);
+	return __folio_alloc(gfp_mask, order, nid, mtc->nmask, mtc->alloc_flags);
 }
 
 #ifdef CONFIG_NUMA_MIGRATION
@@ -2255,6 +2255,7 @@ static int do_move_pages_to_node(struct list_head *pagelist, int node)
 		.nid = node,
 		.gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_THISNODE,
 		.reason = MR_SYSCALL,
+		.alloc_flags = select_zonelist_flags(node),
 	};
 
 	err = migrate_pages(pagelist, alloc_migration_target, NULL,
