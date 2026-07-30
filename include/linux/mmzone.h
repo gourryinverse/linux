@@ -1601,7 +1601,25 @@ typedef struct pglist_data {
 #ifdef CONFIG_MEMORY_FAILURE
 	struct memory_failure_stats mf_stats;
 #endif
+	/*
+	 * Always-readable copy of node_private->caps: nodeN/mem_features reads
+	 * this instead of node_private, which is cleared on hot-unplug.
+	 */
+	unsigned long memory_caps;
 } pg_data_t;
+
+/**
+ * struct node_private - per-node descriptor for a private node
+ * @caps: NODE_MEMORY_CAP_* services the driver opts the node into
+ *
+ * Allocated and owned by the registering driver; the pointer itself is the
+ * node's owner token -- node_private_register() authorises re-registration and
+ * unregistration by pointer identity.  Defined here alongside pg_data_t so
+ * consumers that reach it through pg_data_t.node_private see a complete type.
+ */
+struct node_private {
+	unsigned long caps;
+};
 
 #define node_present_pages(nid)	(NODE_DATA(nid)->node_present_pages)
 #define node_spanned_pages(nid)	(NODE_DATA(nid)->node_spanned_pages)
