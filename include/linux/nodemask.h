@@ -398,8 +398,14 @@ enum node_states {
 #else
 	N_HIGH_MEMORY = N_NORMAL_MEMORY,
 #endif
-	N_MEMORY,		/* The node has memory(regular, high, movable) */
+	/*
+	 * Memory exists on the node, which does not put it in the
+	 * general-purpose pool: ask N_MEMORY_PUBLIC whether an unnamed
+	 * allocation can land here.  N_MEMORY is for reporting.
+	 */
+	N_MEMORY,
 	N_MEMORY_PUBLIC,	/* general-purpose pool (fallback zonelist) */
+	/* Opt-in subsets of N_MEMORY; N_MEMORY_PUBLIC implies all. */
 	N_MEMORY_RECLAIM,	/* mm reclaim may operate on the node */
 	N_MEMORY_DEMOTION,	/* tiering may demote to the node */
 	N_MEMORY_USER_NUMA,	/* userspace NUMA placement may target the node */
@@ -523,17 +529,42 @@ static __always_inline int node_random(const nodemask_t *maskp)
 #define for_each_online_node(node) for_each_node_state(node, N_ONLINE)
 #define for_each_node_with_cpus(node)	for_each_node_state(node, N_CPU)
 
-static inline void node_set_memory_state(int nid, bool high, bool normal)
+/*
+ * Private-node features.
+ * A private node is an N_MEMORY node without FEAT_PUBLIC. Its owner
+ * opts into mm/ service management by setting these feature bits.
+ */
+#define NODE_MEMORY_FEAT_PUBLIC		(1UL << 0) /* add to fallback zonelist */
+/* Opt-in subsets of the above; PUBLIC implies all of them. */
+#define NODE_MEMORY_FEAT_RECLAIM	(1UL << 1) /* mm reclaim */
+#define NODE_MEMORY_FEAT_DEMOTION	(1UL << 2) /* reclaim demotion */
+#define NODE_MEMORY_FEAT_USER_NUMA	(1UL << 7) /* userspace NUMA controls */
+#define NODE_MEMORY_FEAT_ALL		(~0UL)
+#define NODE_MEMORY_FEAT_VALID		(NODE_MEMORY_FEAT_PUBLIC | \
+					 NODE_MEMORY_FEAT_RECLAIM | \
+					 NODE_MEMORY_FEAT_DEMOTION | \
+					 NODE_MEMORY_FEAT_USER_NUMA)
+
+static inline void node_set_memory_state(int nid, bool high, bool normal,
+		unsigned long features)
 {
+	/* A public node must enable all features */
+	WARN_ON_ONCE((features & NODE_MEMORY_FEAT_PUBLIC) &&
+		     (features != NODE_MEMORY_FEAT_ALL));
+
 	node_set_state(nid, N_MEMORY);
 	if (high)
 		node_set_state(nid, N_HIGH_MEMORY);
 	if (normal)
 		node_set_state(nid, N_NORMAL_MEMORY);
-	node_set_state(nid, N_MEMORY_PUBLIC);
-	node_set_state(nid, N_MEMORY_RECLAIM);
-	node_set_state(nid, N_MEMORY_DEMOTION);
-	node_set_state(nid, N_MEMORY_USER_NUMA);
+	if (features & NODE_MEMORY_FEAT_PUBLIC)
+		node_set_state(nid, N_MEMORY_PUBLIC);
+	if (features & NODE_MEMORY_FEAT_RECLAIM)
+		node_set_state(nid, N_MEMORY_RECLAIM);
+	if (features & NODE_MEMORY_FEAT_DEMOTION)
+		node_set_state(nid, N_MEMORY_DEMOTION);
+	if (features & NODE_MEMORY_FEAT_USER_NUMA)
+		node_set_state(nid, N_MEMORY_USER_NUMA);
 }
 
 static __always_inline void node_clear_memory_state(int nid)
