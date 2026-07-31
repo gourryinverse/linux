@@ -5425,6 +5425,22 @@ Kernel parameters
 			       preemption will be forced. One preemption is when the
 			       task returns to user space.
 
+	private_node=	[KNL,NUMA,EARLY]
+			Format: <nid>[,<caps>]
+			Bring boot memory on node <nid> up as a private memory
+			node: kept out of the page allocator's fallback
+			zonelists, so only an explicit bind can allocate from
+			it.  Refused if <nid> owns CPUs or the kernel image.
+
+			<caps> is a NODE_MEMORY_CAP_* mask of the mm services
+			the node opts into.  Defaults to 0 (none), and must not
+			contain NODE_MEMORY_CAP_FALLBACK.  Add
+			NODE_MEMORY_CAP_USER_NUMA (0x100) for mbind(), numactl
+			and guest_memfd GUEST_MEMFD_FLAG_BIND_NODE.
+
+			May be given once per node.  See
+			Documentation/mm/numa_private_nodes.rst.
+
 	print-fatal-signals=
 			[KNL] debug: print fatal signals
 

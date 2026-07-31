@@ -1012,6 +1012,8 @@ static const struct attribute_group *cpu_root_attr_groups[] = {
  * @nid: the node
  * @np: driver-owned descriptor (owner + NODE_MEMORY_CAP_* caps), or NULL
  *
+ * @np == NULL asserts the node is public, and fails if it has an owner.
+ *
  * The node must not be marked N_MEMORY.
  * @np must stay valid until unregister.
  *
@@ -1039,6 +1041,10 @@ int node_private_register(int nid, struct node_private *np)
 	/* Existing private node - must have same owner and caps */
 	if (existing && np)
 		return (existing == np && existing->caps == np->caps) ? 0 : -EBUSY;
+
+	/* An owned node cannot be taken public by a non-owner */
+	if (existing)
+		return -EBUSY;
 
 	/* New private node - the node must not already have memory */
 	if (node_state(nid, N_MEMORY))

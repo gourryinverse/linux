@@ -119,6 +119,19 @@ The node leaves ``N_MEMORY`` only when its last range is offlined.
 .. kernel-doc:: drivers/base/node.c
    :identifiers: node_private_register node_private_unregister
 
+Boot memory
+-----------
+
+Memory the boot path onlines never reaches that call - ``free_area_init()``
+publishes it as system RAM before any driver runs - so a CXL window the BIOS
+reports in E820 and the SRAT is never offered to dax/kmem.  Name it instead::
+
+  private_node=<nid>[,<caps>]
+
+``caps`` defaults to 0 and follows the rules below.  The kernel owns the
+resulting ``struct node_private``, so a driver cannot later claim the node.
+Refused if the node owns CPUs or the kernel image.
+
 Capabilities (per-service opt-ins)
 ==================================
 
