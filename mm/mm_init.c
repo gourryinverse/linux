@@ -18,6 +18,7 @@
 #include <linux/page-isolation.h>
 #include <linux/padata.h>
 #include <linux/nmi.h>
+#include <linux/node.h>
 #include <linux/buffer_head.h>
 #include <linux/kmemleak.h>
 #include <linux/kfence.h>
@@ -32,6 +33,7 @@
 #include <linux/vmstat.h>
 #include <linux/kexec_handover.h>
 #include <linux/hugetlb.h>
+#include <asm/sections.h>
 #include "internal.h"
 #include "mm_init.h"
 #include "page_alloc.h"
@@ -1750,6 +1752,83 @@ static void __init free_area_init_node(int nid)
 	lru_gen_init_pgdat(pgdat);
 }
 
+#ifdef CONFIG_NUMA
+/*
+ * private_node=<nid>[,<caps>] brings boot memory on <nid> up as a private
+ * node.  Memory the boot path onlines never reaches a driver's
+ * add_private_memory_driver_managed(), so a CXL window the BIOS puts in E820
+ * and the SRAT has no other way to be isolated.  Caps default to none.
+ */
+static nodemask_t private_nodes __initdata = NODE_MASK_NONE;
+static unsigned long private_node_caps[MAX_NUMNODES] __initdata;
+
+static int __init parse_private_node(char *arg)
+{
+	unsigned long caps = 0;
+	char *caps_str;
+	int nid;
+
+	if (!arg)
+		return -EINVAL;
+	caps_str = strchr(arg, ',');
+	if (caps_str)
+		*caps_str++ = '\0';
+	if (kstrtoint(arg, 0, &nid) || nid < 0 || nid >= MAX_NUMNODES)
+		return -EINVAL;
+	if (caps_str && kstrtoul(caps_str, 0, &caps))
+		return -EINVAL;
+
+	node_set(nid, private_nodes);
+	private_node_caps[nid] = caps;
+	return 0;
+}
+early_param("private_node", parse_private_node);
+
+bool __init __weak arch_node_has_cpus(int nid)
+{
+	return false;
+}
+
+/*
+ * Runs before check_for_memory() publishes N_MEMORY: node_private_register()
+ * refuses a node that already has memory, and hugetlb bootmem and CMA read the
+ * feature states as soon as free_area_init() returns.  A node that owns CPUs or
+ * the kernel image stays public - nothing may have a local node it cannot
+ * allocate from.
+ */
+static void __init node_claim_private(int nid, bool has_memory)
+{
+	struct node_private *np;
+
+	if (!node_isset(nid, private_nodes))
+		return;
+	if (!has_memory || arch_node_has_cpus(nid) ||
+	    nid == early_pfn_to_nid(PFN_DOWN(__pa_symbol(_text))))
+		goto warn;
+
+	np = memblock_alloc(sizeof(*np), SMP_CACHE_BYTES);
+	if (!np)
+		goto warn;
+	np->caps = private_node_caps[nid];
+	if (node_private_register(nid, np))
+		goto warn;
+
+	pr_info("private_node: node %d private, caps %#lx\n", nid, np->caps);
+	return;
+warn:
+	pr_warn("private_node: node %d refused, onlining public\n", nid);
+}
+#else
+static void __init node_claim_private(int nid, bool has_memory) { }
+#endif
+
+static void __init node_claim_boot_caps(pg_data_t *pgdat)
+{
+	/* A boot pgdat is zero-allocated, so every node starts public. */
+	WRITE_ONCE(pgdat->memory_caps, NODE_MEMORY_CAP_ALL);
+	node_claim_private(pgdat->node_id, pgdat->node_present_pages);
+}
+
 /* Publish the memory states of a node that has present pages. */
 static void __init check_for_memory(pg_data_t *pgdat)
 {
@@ -1764,8 +1843,8 @@ static void __init check_for_memory(pg_data_t *pgdat)
 			break;
 		}
 	}
-	WRITE_ONCE(pgdat->memory_caps, NODE_MEMORY_CAP_ALL);
-	node_set_memory_state(pgdat->node_id, high, normal, NODE_MEMORY_CAP_ALL);
+	node_set_memory_state(pgdat->node_id, high, normal,
+			      READ_ONCE(pgdat->memory_caps));
 }
 
 #if MAX_NUMNODES > 1
@@ -1904,6 +1983,7 @@ static void __init free_area_init(void)
 
 		pgdat = NODE_DATA(nid);
 		free_area_init_node(nid);
+		node_claim_boot_caps(pgdat);
 
 		/*
 		 * No sysfs hierarchy will be created via register_node()
