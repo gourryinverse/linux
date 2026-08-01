@@ -159,6 +159,24 @@ The node leaves ``N_MEMORY`` only when its last range is offlined.
 .. kernel-doc:: drivers/base/node.c
    :identifiers: node_memory_features_register node_memory_features_unregister
 
+Boot memory
+-----------
+
+Memory the boot path onlines never reaches that call - ``free_area_init()``
+publishes it as system RAM before any driver runs - so a CXL window the BIOS
+reports in E820 and the SRAT is never offered to dax/kmem.  It can be named
+on the command line instead::
+
+  private_node=<nid>[,<features>]
+
+``features`` defaults to 0 and follows the rules below.  The node carries the
+mask from boot, so a driver cannot later claim it.  Refused if the node owns
+CPUs or the kernel image.
+
+This covers firmware-described memory that no driver claims, and is also how
+private nodes are exercised on hardware that offers none.  Memory a device
+brings up does not need it: that driver declares its features at hotplug.
+
 Features (per-service opt-ins)
 ==============================
 

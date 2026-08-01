@@ -18,6 +18,7 @@
 #include <linux/page-isolation.h>
 #include <linux/padata.h>
 #include <linux/nmi.h>
+#include <linux/node.h>
 #include <linux/buffer_head.h>
 #include <linux/kmemleak.h>
 #include <linux/kfence.h>
@@ -27,11 +28,13 @@
 #include <linux/stackdepot.h>
 #include <linux/swap.h>
 #include <linux/cma.h>
+#include <linux/dma-map-ops.h>
 #include <linux/crash_dump.h>
 #include <linux/execmem.h>
 #include <linux/vmstat.h>
 #include <linux/kexec_handover.h>
 #include <linux/hugetlb.h>
+#include <asm/sections.h>
 #include "internal.h"
 #include "mm_init.h"
 #include "page_alloc.h"
@@ -1745,6 +1748,94 @@ static void __init free_area_init_node(int nid)
 	lru_gen_init_pgdat(pgdat);
 }
 
+#ifdef CONFIG_NUMA
+/*
+ * private_node=<nid>[,<features>] brings boot memory on <nid> up as a private
+ * node.  Memory the boot path onlines never reaches a driver's
+ * __add_memory_driver_managed(), so a CXL window the BIOS puts in E820
+ * and the SRAT has no other way to be isolated.  Features default to none.
+ */
+static nodemask_t private_nodes __initdata = NODE_MASK_NONE;
+static unsigned long private_node_features[MAX_NUMNODES] __initdata;
+
+static int __init parse_private_node(char *arg)
+{
+	unsigned long features = 0;
+	char *feat_str;
+	int nid;
+
+	if (!arg)
+		return -EINVAL;
+	feat_str = strchr(arg, ',');
+	if (feat_str)
+		*feat_str++ = '\0';
+	if (kstrtoint(arg, 0, &nid) || nid < 0 || nid >= MAX_NUMNODES)
+		return -EINVAL;
+	if (feat_str && kstrtoul(feat_str, 0, &features))
+		return -EINVAL;
+
+	node_set(nid, private_nodes);
+	private_node_features[nid] = features;
+	return 0;
+}
+early_param("private_node", parse_private_node);
+
+bool __init __weak arch_node_has_cpus(int nid)
+{
+	return false;
+}
+
+/*
+ * Runs before check_for_memory() publishes N_MEMORY: the register call
+ * refuses a node that already has memory, and hugetlb bootmem and CMA read the
+ * feature states as soon as free_area_init() returns.  A node that owns CPUs or
+ * the kernel image stays public - nothing may have a local node it cannot
+ * allocate from.
+ */
+static void __init node_claim_private(int nid, bool has_memory)
+{
+	unsigned long features = private_node_features[nid];
+
+	if (!node_isset(nid, private_nodes))
+		return;
+	if (!has_memory || arch_node_has_cpus(nid) ||
+	    nid == early_pfn_to_nid(PFN_DOWN(__pa_symbol(_text))))
+		goto warn;
+
+	/*
+	 * cma= and numa_cma= back dma_alloc_contiguous() for any device
+	 * without an area of its own, and cma_alloc() is PFN-addressed, so a
+	 * private node hosting one would hand its memory to arbitrary DMA
+	 * consumers with the zonelist never consulted.  hugetlb_cma= is fine:
+	 * its areas are per-node and its only consumer already honours the
+	 * pool's N_MEMORY_USER_NUMA gate.
+	 */
+	if (dma_contiguous_owns_node(nid)) {
+		pr_warn("private_node: node %d hosts a DMA CMA area (cma=/numa_cma=)\n",
+			nid);
+		goto warn;
+	}
+
+	if (node_memory_features_register(nid, features))
+		goto warn;
+
+	pr_info("private_node: node %d private, features %#lx\n",
+		nid, features);
+	return;
+warn:
+	pr_warn("private_node: node %d refused, onlining public\n", nid);
+}
+#else
+static void __init node_claim_private(int nid, bool has_memory) { }
+#endif
+
+static void __init node_claim_boot_features(pg_data_t *pgdat)
+{
+	/* A boot pgdat is zero-allocated, so every node starts public. */
+	WRITE_ONCE(pgdat->memory_features, NODE_MEMORY_FEAT_ALL);
+	node_claim_private(pgdat->node_id, pgdat->node_present_pages);
+}
+
 /* Publish the memory states of a node that has present pages. */
 static void __init check_for_memory(pg_data_t *pgdat)
 {
@@ -1759,8 +1850,8 @@ static void __init check_for_memory(pg_data_t *pgdat)
 			break;
 		}
 	}
-	WRITE_ONCE(pgdat->memory_features, NODE_MEMORY_FEAT_ALL);
-	node_set_memory_state(pgdat->node_id, high, normal, NODE_MEMORY_FEAT_ALL);
+	node_set_memory_state(pgdat->node_id, high, normal,
+			      READ_ONCE(pgdat->memory_features));
 }
 
 #if MAX_NUMNODES > 1
@@ -1899,6 +1990,7 @@ static void __init free_area_init(void)
 
 		pgdat = NODE_DATA(nid);
 		free_area_init_node(nid);
+		node_claim_boot_features(pgdat);
 
 		/*
 		 * No sysfs hierarchy will be created via register_node()

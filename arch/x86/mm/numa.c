@@ -64,6 +64,20 @@ int __init num_phys_nodes(void)
 	return bitmap_weight(numa_phys_nodes_parsed.bits, MAX_NUMNODES);
 }
 
+/*
+ * numa_init() has finished the early map by now: SRAT as rewritten by
+ * numa=fake, plus the numa_init_array() round robin for unplaced CPUs.
+ */
+bool __init arch_node_has_cpus(int nid)
+{
+	int cpu;
+
+	for_each_possible_cpu(cpu)
+		if (early_cpu_to_node(cpu) == nid)
+			return true;
+	return false;
+}
+
 cpumask_var_t node_to_cpumask_map[MAX_NUMNODES];
 EXPORT_SYMBOL(node_to_cpumask_map);
 
