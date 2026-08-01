@@ -5456,6 +5456,32 @@ Kernel parameters
 			       preemption will be forced. One preemption is when the
 			       task returns to user space.
 
+	private_node=	[KNL,NUMA,EARLY]
+			Format: <nid>[,reclaim][,compact][,contig][,demotion][,user]
+			Bring boot memory on node <nid> up as a private memory
+			node: kept out of the page allocator's fallback
+			zonelists, so only an explicit bind can allocate from
+			it.  Refused if <nid> owns CPUs or the kernel image, or
+			if Kexec Handover is enabled.
+
+			Boot memory is never offered to a driver, so this is
+			a development and bring-up interface for early systems
+			and for exercising private nodes without suitable
+			hardware.  Production private memory should be
+			provisioned by its owning driver.
+
+			The optional names select the MM services the node opts
+			into.  reclaim enables page reclaim; compact enables
+			compaction; contig enables contiguous allocation; demotion
+			enables tiering to and from the node and requires reclaim;
+			user enables explicit userspace NUMA placement and
+			migration, including HugeTLB pool placement.  With no
+			feature names, the node opts into none of these services.
+			Unknown and duplicate names are rejected.
+
+			May be given once per node.  See
+			Documentation/mm/numa_private_nodes.rst.
+
 	print-fatal-signals=
 			[KNL] debug: print fatal signals
 
