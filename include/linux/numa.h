@@ -31,6 +31,9 @@ void __init alloc_offline_node_data(int nid);
 /* Generic implementation available */
 int numa_nearest_node(int node, unsigned int state);
 
+/* Any CPU on @nid?  Usable before the per-CPU areas exist, unlike N_CPU. */
+bool __init arch_node_has_cpus(int nid);
+
 int nearest_node_nodemask(int node, nodemask_t *mask);
 
 #ifndef memory_add_physaddr_to_nid
