@@ -87,4 +87,19 @@ config DEV_DAX_KMEM
 
 	  Say N if unsure.
 
+config DEV_DAX_TEST
+	tristate "Test provider for private memory nodes"
+	depends on DEV_DAX_KMEM && NUMA && DEBUG_FS
+	help
+	  Build a test-only dax provider that declares a node's
+	  NODE_MEMORY_FEAT_* mask and abstract distance through the provider
+	  API, and a debugfs file whose mmap() returns anonymous memory bound
+	  to a chosen node.  The latter is the only way to place memory on a
+	  node that did not opt into userspace placement, and is used by the
+	  private-node selftests.  It is the only provider that declares a
+	  mask, so it is also the only way to bring a dax device up as a
+	  private node.
+
+	  Say N if unsure.
+
 endif

@@ -1187,7 +1187,7 @@ struct mempolicy *mempolicy_create(unsigned short mode, unsigned short flags,
 	}
 	return pol;
 }
-EXPORT_SYMBOL_FOR_MODULES(mempolicy_create, "kvm");
+EXPORT_SYMBOL_FOR_MODULES(mempolicy_create, "kvm,dax_test");
 
 /*
  * Return nodemask for policy for get_mempolicy() query
