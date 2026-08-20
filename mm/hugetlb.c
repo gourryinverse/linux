@@ -1391,7 +1391,8 @@ static struct folio *alloc_gigantic_frozen_folio(int order, gfp_t gfp_mask,
 		return NULL;
 
 	folio = (struct folio *)alloc_contig_frozen_pages(1 << order, gfp_mask,
-							  nid, nodemask);
+							  nid, nodemask,
+							  select_zonelist_flags(nid));
 	return folio;
 }
 #else /* !CONFIG_ARCH_HAS_GIGANTIC_PAGE || !CONFIG_CONTIG_ALLOC */
