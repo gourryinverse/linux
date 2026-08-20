@@ -208,6 +208,166 @@ static const struct file_operations dax_test_anon_fops = {
 };
 
 /* ------------------------------------------------------------------ */
+/* 3. contiguous allocation						*/
+/* ------------------------------------------------------------------ */
+
+/*
+ * Drives the contiguous allocator against the carved range so a test can
+ * exercise both entry points on a private node:
+ *
+ *   echo "range <offset_pages> <nr_pages>" > contig   over the carved range
+ *   echo "pfn <start_pfn> <nr_pages>" > contig       over any online PFNs
+ *   echo "pages <nr_pages>" > contig                 searched, private node
+ *   echo "public <nr_pages>" > contig                searched, plain
+ *   echo "free" > contig
+ *   cat contig     ->  "pfn=<pfn> nr=<n> nid=<nid> rc=<rc>"
+ *
+ * "pages" and "public" differ only in whether the search may see a private
+ * node, which is the distinction the search variant exists to make: "public"
+ * naming a private target is expected to land somewhere else entirely.
+ *
+ * One outstanding allocation at a time; that is all a test needs.
+ */
+static DEFINE_MUTEX(dax_test_contig_lock);
+static unsigned long dax_test_contig_pfn;
+static unsigned long dax_test_contig_nr;
+static int dax_test_contig_rc;
+
+static void dax_test_contig_release(void)
+{
+	if (!dax_test_contig_nr)
+		return;
+	free_contig_range(dax_test_contig_pfn, dax_test_contig_nr);
+	dax_test_contig_pfn = 0;
+	dax_test_contig_nr = 0;
+}
+
+static int dax_test_contig_alloc_pfn(unsigned long start, unsigned long nr)
+{
+	int rc;
+
+	if (!nr)
+		return -EINVAL;
+	if (!pfn_to_online_page(start) || !pfn_to_online_page(start + nr - 1))
+		return -ENXIO;
+
+	rc = alloc_contig_range(start, start + nr, ACR_FLAGS_NONE, GFP_KERNEL);
+	if (rc)
+		return rc;
+
+	dax_test_contig_pfn = start;
+	dax_test_contig_nr = nr;
+	return 0;
+}
+
+static int dax_test_contig_alloc_range(unsigned long off, unsigned long nr)
+{
+	if (!range_size)
+		return -EINVAL;
+	if (off + nr > PHYS_PFN(range_size))
+		return -ERANGE;
+
+	return dax_test_contig_alloc_pfn(PHYS_PFN(range_start) + off, nr);
+}
+
+/* Searched allocation; @private decides whether it may see a private node. */
+static int dax_test_contig_alloc_pages(unsigned long nr, bool private)
+{
+	struct page *page;
+
+	if (!nr || target_node == NUMA_NO_NODE)
+		return -EINVAL;
+
+	/*
+	 * Movable-capable: dax/kmem onlines into ZONE_MOVABLE by default, and
+	 * a GFP_KERNEL search stops at ZONE_NORMAL and never sees the node.
+	 */
+	if (private)
+		page = alloc_contig_pages_private(nr, GFP_HIGHUSER_MOVABLE,
+						  target_node);
+	else
+		page = alloc_contig_pages(nr, GFP_HIGHUSER_MOVABLE,
+					  target_node, NULL);
+	if (!page)
+		return -ENOMEM;
+
+	dax_test_contig_pfn = page_to_pfn(page);
+	dax_test_contig_nr = nr;
+	return 0;
+}
+
+static ssize_t dax_test_contig_write(struct file *file, const char __user *buf,
+				     size_t len, loff_t *ppos)
+{
+	unsigned long a, b;
+	char cmd[64];
+	ssize_t rc;
+
+	if (len >= sizeof(cmd))
+		return -EINVAL;
+	if (copy_from_user(cmd, buf, len))
+		return -EFAULT;
+	cmd[len] = '\0';
+
+	guard(mutex)(&dax_test_contig_lock);
+
+	if (sysfs_streq(cmd, "free")) {
+		dax_test_contig_release();
+		dax_test_contig_rc = 0;
+		return len;
+	}
+
+	/* A second allocation would leak the first. */
+	if (dax_test_contig_nr)
+		return -EBUSY;
+
+	if (sscanf(cmd, "range %lu %lu", &a, &b) == 2)
+		rc = dax_test_contig_alloc_range(a, b);
+	else if (sscanf(cmd, "pfn %lu %lu", &a, &b) == 2)
+		rc = dax_test_contig_alloc_pfn(a, b);
+	else if (sscanf(cmd, "pages %lu", &a) == 1)
+		rc = dax_test_contig_alloc_pages(a, true);
+	else if (sscanf(cmd, "public %lu", &a) == 1)
+		rc = dax_test_contig_alloc_pages(a, false);
+	else
+		return -EINVAL;
+
+	dax_test_contig_rc = rc;
+
+	/*
+	 * A refused allocation is a result the test wants to read back, not a
+	 * write error: report it through the file, not through errno.
+	 */
+	return len;
+}
+
+static int dax_test_contig_show(struct seq_file *m, void *v)
+{
+	guard(mutex)(&dax_test_contig_lock);
+
+	seq_printf(m, "pfn=%lu nr=%lu nid=%d rc=%d\n",
+		   dax_test_contig_pfn, dax_test_contig_nr,
+		   dax_test_contig_nr ?
+			   page_to_nid(pfn_to_page(dax_test_contig_pfn)) : -1,
+		   dax_test_contig_rc);
+	return 0;
+}
+
+static int dax_test_contig_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, dax_test_contig_show, NULL);
+}
+
+static const struct file_operations dax_test_contig_fops = {
+	.owner = THIS_MODULE,
+	.open = dax_test_contig_open,
+	.read = seq_read,
+	.write = dax_test_contig_write,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+/* ------------------------------------------------------------------ */
 
 static int __init dax_test_init(void)
 {
@@ -224,6 +384,8 @@ static int __init dax_test_init(void)
 	 */
 	debugfs_create_file_unsafe("anon", 0600, dax_test_debugfs, NULL,
 				   &dax_test_anon_fops);
+	debugfs_create_file("contig", 0600, dax_test_debugfs, NULL,
+			    &dax_test_contig_fops);
 
 	rc = register_mt_adistance_algorithm(&dax_test_adistance_nb);
 	if (rc)
@@ -271,6 +433,10 @@ err_debugfs:
 
 static void __exit dax_test_exit(void)
 {
+	/* An outstanding allocation would keep the memory from being removed. */
+	scoped_guard(mutex, &dax_test_contig_lock)
+		dax_test_contig_release();
+
 	if (!IS_ERR_OR_NULL(dax_test_pdev))
 		platform_device_unregister(dax_test_pdev);
 	if (dax_test_region_id >= 0)
