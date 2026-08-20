@@ -392,7 +392,8 @@ int alloc_contig_range_noprof(unsigned long start, unsigned long end,
 	alloc_hooks(alloc_contig_range_noprof(__VA_ARGS__))
 
 struct page *alloc_contig_frozen_pages_noprof(unsigned long nr_pages,
-		gfp_t gfp_mask, int nid, nodemask_t *nodemask);
+		gfp_t gfp_mask, int nid, nodemask_t *nodemask,
+		unsigned int alloc_flags);
 #define alloc_contig_frozen_pages(...) \
 	alloc_hooks(alloc_contig_frozen_pages_noprof(__VA_ARGS__))
 
@@ -400,6 +401,11 @@ struct page *alloc_contig_pages_noprof(unsigned long nr_pages, gfp_t gfp_mask,
 		int nid, nodemask_t *nodemask);
 #define alloc_contig_pages(...)	\
 	alloc_hooks(alloc_contig_pages_noprof(__VA_ARGS__))
+
+struct page *alloc_contig_pages_private_noprof(unsigned long nr_pages,
+		gfp_t gfp_mask, int nid);
+#define alloc_contig_pages_private(...)	\
+	alloc_hooks(alloc_contig_pages_private_noprof(__VA_ARGS__))
 
 void free_contig_frozen_range(unsigned long pfn, unsigned long nr_pages);
 void free_contig_range(unsigned long pfn, unsigned long nr_pages);

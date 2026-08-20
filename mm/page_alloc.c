@@ -7696,17 +7696,30 @@ static bool zone_spans_last_pfn(const struct zone *zone,
  * Return: pointer to contiguous frozen pages on success, or NULL if not successful.
  */
 struct page *alloc_contig_frozen_pages_noprof(unsigned long nr_pages,
-		gfp_t gfp_mask, int nid, nodemask_t *nodemask)
+		gfp_t gfp_mask, int nid, nodemask_t *nodemask,
+		unsigned int alloc_flags)
 {
 	unsigned long ret, pfn, flags;
 	struct zonelist *zonelist;
 	struct zone *zone;
 	struct zoneref *z;
+	nodemask_t targets;
 	bool skip_hugetlb = true;
 	bool skipped_hugetlb = false;
 
+	/*
+	 * ALLOC_ZONELIST_PRIVATE grants the search access to private nodes,
+	 * but the private zonelist is built over all of N_MEMORY, so without
+	 * a nodemask it would also offer up other devices' nodes.  Confine it
+	 * to @nid and the public nodes.  A caller that supplied its own
+	 * nodemask has already said what it will accept.
+	 */
+	if ((alloc_flags & ALLOC_ZONELIST_PRIVATE) && !nodemask &&
+	    contig_private_targets(nid, &targets))
+		nodemask = &targets;
+
 retry:
-	zonelist = node_zonelist(nid, gfp_mask);
+	zonelist = select_zonelist(nid, gfp_mask, alloc_flags);
 	for_each_zone_zonelist_nodemask(zone, z, zonelist,
 					gfp_zone(gfp_mask), nodemask) {
 		spin_lock_irqsave(&zone->lock, flags);
@@ -7776,13 +7789,46 @@ struct page *alloc_contig_pages_noprof(unsigned long nr_pages, gfp_t gfp_mask,
 		return NULL;
 
 	page = alloc_contig_frozen_pages_noprof(nr_pages, gfp_mask, nid,
-						nodemask);
+						nodemask, ALLOC_DEFAULT);
 	if (page)
 		set_pages_refcounted(page, nr_pages);
 
 	return page;
 }
 EXPORT_SYMBOL(alloc_contig_pages_noprof);
+
+/**
+ * alloc_contig_pages_private() -- contiguous pages on a private node
+ * @nr_pages:	Number of contiguous pages to allocate
+ * @gfp_mask:	GFP mask
+ * @nid:	Target node, which may be private
+ *
+ * Like alloc_contig_pages(), but the search is allowed to see private nodes.
+ * A private node is absent from its own fallback list, so alloc_contig_pages()
+ * naming one searches public memory instead and quietly succeeds elsewhere; a
+ * caller that means that node has to say so, which is what this is for.
+ *
+ * The search is confined to @nid and the public nodes, never to a different
+ * private node - that memory belongs to another device.
+ *
+ * Return: pointer to contiguous pages on success, or NULL if not successful.
+ */
+struct page *alloc_contig_pages_private_noprof(unsigned long nr_pages,
+		gfp_t gfp_mask, int nid)
+{
+	struct page *page;
+
+	if (WARN_ON(gfp_mask & __GFP_COMP))
+		return NULL;
+
+	page = alloc_contig_frozen_pages_noprof(nr_pages, gfp_mask, nid, NULL,
+						ALLOC_ZONELIST_PRIVATE);
+	if (page)
+		set_pages_refcounted(page, nr_pages);
+
+	return page;
+}
+EXPORT_SYMBOL_FOR_MODULES(alloc_contig_pages_private_noprof, "dax_test");
 
 /**
  * free_contig_frozen_range() -- free the contiguous range of frozen pages
