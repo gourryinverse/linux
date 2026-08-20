@@ -245,6 +245,43 @@ static inline void __init dma_numa_cma_reserve(void)
  * has been activated and all other subsystems have already allocated/reserved
  * memory.
  */
+/**
+ * dma_contiguous_owns_node - is a DMA-owned CMA area hosted by this node?
+ * @nid: node to test
+ *
+ * The default area (cma=) and the per-node areas (numa_cma=, cma_pernuma=)
+ * back dma_alloc_contiguous() for any device that has no area of its own, so
+ * whoever hosts them has to keep serving arbitrary DMA consumers.
+ *
+ * Only the endpoints are resolved, which matches how the rest of early boot
+ * asks this question and is exact for an area that lies within one node.
+ */
+bool __init dma_contiguous_owns_node(int nid)
+{
+	struct cma *areas[] = {
+		dma_contiguous_default_area,
+#ifdef CONFIG_DMA_NUMA_CMA
+		dma_contiguous_numa_area[nid],
+#endif
+	};
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(areas); i++) {
+		phys_addr_t base, last;
+
+		if (!areas[i])
+			continue;
+		base = cma_get_base(areas[i]);
+		last = base + cma_get_size(areas[i]) - 1;
+
+		if (early_pfn_to_nid(PFN_DOWN(base)) == nid ||
+		    early_pfn_to_nid(PFN_DOWN(last)) == nid)
+			return true;
+	}
+
+	return false;
+}
+
 void __init dma_contiguous_reserve(phys_addr_t limit)
 {
 	phys_addr_t selected_size = 0;

@@ -93,6 +93,7 @@ static inline void set_dma_ops(struct device *dev,
 #ifdef CONFIG_DMA_CMA
 struct cma *dev_get_cma_area(struct device *dev);
 struct cma *dma_contiguous_get_area_by_idx(unsigned int idx);
+bool __init dma_contiguous_owns_node(int nid);
 
 void dma_contiguous_reserve(phys_addr_t addr_limit);
 int __init dma_contiguous_reserve_area(phys_addr_t size, phys_addr_t base,
@@ -110,6 +111,10 @@ void dma_contiguous_early_fixup(phys_addr_t base, unsigned long size);
 static inline struct cma *dev_get_cma_area(struct device *dev)
 {
 	return NULL;
+}
+static inline bool dma_contiguous_owns_node(int nid)
+{
+	return false;
 }
 static inline struct cma *dma_contiguous_get_area_by_idx(unsigned int idx)
 {
