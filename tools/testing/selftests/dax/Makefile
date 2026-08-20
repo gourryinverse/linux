@@ -13,6 +13,7 @@ TEST_PROGS += private_node_pressure.sh
 TEST_PROGS += private_node_reclaim.sh
 TEST_PROGS += private_node_compaction.sh
 TEST_PROGS += private_node_cma.sh
+TEST_PROGS += private_node_contig.sh
 TEST_PROGS += private_node_cpuset_governed.sh
 TEST_PROGS += private_node_cpuset_fallback.sh
 TEST_PROGS += private_node_mempolicy.sh
