@@ -7247,19 +7247,45 @@ static void alloc_contig_dump_pages(struct list_head *page_list)
 }
 
 /* [start, end) must belong to a single zone. */
+/*
+ * Which nodes a contiguous allocation for @nid may use.  A public
+ * node keeps the historical NULL nodemask: prefer the node, spill anywhere.
+ * A private node may not spill onto a *different* private node - that memory
+ * belongs to another device - so it gets the node itself plus every public
+ * node, in that preference order via ZONELIST_PRIVATE.
+ *
+ * Returns false for a public node, leaving @mask untouched.
+ */
+static bool contig_private_targets(int nid, nodemask_t *mask)
+{
+	if (!node_state(nid, N_MEMORY) || node_state(nid, N_MEMORY_PUBLIC))
+		return false;
+
+	*mask = node_states[N_MEMORY_PUBLIC];
+	node_set(nid, *mask);
+	return true;
+}
+
 static int __alloc_contig_migrate_range(struct compact_control *cc,
 					unsigned long start, unsigned long end)
 {
 	/* This function is based on compact_zone() from compaction.c. */
+	const int nid = zone_to_nid(cc->zone);
 	unsigned int nr_reclaimed;
 	unsigned long pfn = start;
 	unsigned int tries = 0;
 	int ret = 0;
+	nodemask_t dst_nodes;
 	struct migration_target_control mtc = {
-		.nid = zone_to_nid(cc->zone),
+		.nid = nid,
 		.gfp_mask = cc->gfp_mask,
 		.reason = MR_CONTIG_RANGE,
 	};
+
+	if (contig_private_targets(nid, &dst_nodes)) {
+		mtc.nmask = &dst_nodes;
+		mtc.alloc_flags = ALLOC_ZONELIST_PRIVATE;
+	}
 
 	lru_cache_disable();
 
@@ -7278,6 +7304,25 @@ static int __alloc_contig_migrate_range(struct compact_control *cc,
 			tries = 0;
 		} else if (++tries == 5) {
 			ret = -EBUSY;
+			break;
+		}
+
+		/*
+		 * Displacing a node's folios to make room is reclaim-class
+		 * work, so it needs the node to have opted into it.  This is
+		 * only reached once something has actually been isolated: a
+		 * range that is already free never gets here, which is the
+		 * case a device carving its own memory hits.
+		 *
+		 * -EPERM rather than -EBUSY: the request is not going to
+		 * start working, so a caller that retries on -EBUSY (CMA
+		 * does) should not spin on it.
+		 */
+		if (!list_empty(&cc->migratepages) &&
+		    !node_state(nid, N_MEMORY_RECLAIM)) {
+			putback_movable_pages(&cc->migratepages);
+			cc->nr_migratepages = 0;
+			ret = -EPERM;
 			break;
 		}
 
