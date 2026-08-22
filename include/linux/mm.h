@@ -4065,6 +4065,10 @@ extern unsigned long free_reserved_area(void *start, void *end,
 
 extern void adjust_managed_page_count(struct page *page, long count);
 
+/* Withdraw a ZONE_MOVABLE zone from the allocator so its owner can drain it. */
+int zone_set_no_alloc(struct zone *zone);
+void zone_clear_no_alloc(struct zone *zone);
+
 void free_reserved_pages(struct page *page, unsigned int order);
 
 static inline void free_reserved_page(struct page *page)

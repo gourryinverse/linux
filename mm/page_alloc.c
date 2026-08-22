@@ -6415,6 +6415,72 @@ __meminit void zone_pcp_init(struct zone *zone)
 			 zone->present_pages, zone_batchsize(zone));
 }
 
+/**
+ * zone_set_no_alloc() - withdraw a zone from the page allocator
+ * @zone: the zone
+ *
+ * The allocator skips @zone entirely until zone_clear_no_alloc().  For an
+ * owner that has to take memory back -- a balloon, a device whose backing
+ * shrank -- this is the difference between draining deterministically and
+ * racing every other allocator for pages as they are freed.  Existing
+ * residents are untouched; only new allocations are refused.
+ *
+ * The skip is absolute, so an owner that tried to allocate would block itself.
+ * Take the memory back with alloc_contig_range(), which is PFN-addressed and
+ * so never consults the zone's allocator state -- the same reason unplug keeps
+ * working on a withdrawn zone.
+ *
+ * Other holders of the zone's memory are not consulted, and a withdrawal does
+ * not evict them.  A balloon inflated on the zone keeps its pages; it just
+ * cannot grow there, because the allocator it inflates through skips the zone
+ * like everything else.  That is a stipulation rather than a mechanism, and
+ * the same one hot-unplug already lives with in the other direction: memory
+ * the balloon holds cannot be unplugged.  Whoever got to the memory first
+ * keeps it.
+ *
+ * Restricted to ZONE_MOVABLE, which is what makes an absolute skip safe.  A
+ * GFP_KERNEL allocation resolves to ZONE_NORMAL, and next_zones_zonelist()
+ * bounds the walk by that index, so kernel and reserve allocations cannot
+ * reach a movable zone in the first place -- ALLOC_NO_WATERMARKS, ALLOC_OOM
+ * and __GFP_MEMALLOC relax watermarks, not the zone index.  Withdrawing a
+ * movable zone therefore cannot starve an emergency allocation.  What can
+ * target it -- user faults, page cache, migration targets, THP -- falls back
+ * to another zone or node, or fails, which is the intended answer.
+ *
+ * Claims the zone: a second caller gets -EBUSY rather than silently sharing
+ * it.  There is no refcount because there is no sane two-owner semantic --
+ * whoever clears it would be lifting someone else's withdrawal -- and in
+ * practice a zone has one owner.  Making that explicit turns a subtle bug into
+ * an error return.
+ *
+ * Return: 0, -EINVAL if @zone is not ZONE_MOVABLE, -EBUSY if already withdrawn.
+ */
+int zone_set_no_alloc(struct zone *zone)
+{
+	if (zone_idx(zone) != ZONE_MOVABLE)
+		return -EINVAL;
+
+	if (test_and_set_bit(ZONE_NO_ALLOC, &zone->flags))
+		return -EBUSY;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(zone_set_no_alloc);
+
+/**
+ * zone_clear_no_alloc() - return a withdrawn zone to the page allocator
+ * @zone: the zone
+ *
+ * Only the caller whose zone_set_no_alloc() returned 0 may clear it.  Clearing
+ * a zone that was not withdrawn means the ownership assumption has already
+ * broken somewhere, so say so.
+ */
+void zone_clear_no_alloc(struct zone *zone)
+{
+	WARN_ON_ONCE(!test_and_clear_bit(ZONE_NO_ALLOC, &zone->flags));
+}
+EXPORT_SYMBOL_GPL(zone_clear_no_alloc);
+
 static void setup_per_zone_lowmem_reserve(void);
 
 void adjust_managed_page_count(struct page *page, long count)

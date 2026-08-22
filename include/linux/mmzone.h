@@ -1174,6 +1174,10 @@ enum zone_flags {
 					 */
 	ZONE_RECLAIM_ACTIVE,		/* kswapd may be scanning the zone. */
 	ZONE_BELOW_HIGH,		/* zone is below high watermark. */
+	ZONE_NO_ALLOC,			/* owner has withdrawn the zone from
+					 * the allocator.  See
+					 * zone_set_no_alloc().
+					 */
 };
 
 static inline unsigned long wmark_pages(const struct zone *z,

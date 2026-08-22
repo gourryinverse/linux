@@ -319,18 +319,21 @@ static inline int gfp_migratetype(const gfp_t gfp_flags)
  * @gfp: the allocation's gfp mask
  * @alloc_flags: the allocation's ALLOC_* flags
  *
- * The allocator and everything that reacts to an allocation failure --
- * reclaim, compaction, kswapd wakeup, the OOM constraint -- have to agree on
- * which zones were candidates, or they work to relieve pressure on a zone the
- * allocation could never have used.  This is that shared answer.
+ * The allocator and everything reacting to its failure -- reclaim, compaction,
+ * kswapd wakeup, the OOM constraint -- must agree on which zones were
+ * candidates, or they relieve pressure on a zone the allocation could not have
+ * used.  This is that shared answer.
  *
- * ALLOC_CPUSET is what the slowpath clears to relax the cpuset constraint
- * under pressure, so a caller that has already given up on cpusets is not
- * held to it here either.
+ * Order matters: the slowpath clears ALLOC_CPUSET to relax cpusets under
+ * pressure, but a withdrawn zone is never relaxed, so it is tested first.
+ * Pass alloc_flags == 0 to ask about the zone alone.
  */
 static inline bool zone_allows_alloc(struct zone *zone, gfp_t gfp,
 				     unsigned int alloc_flags)
 {
+	if (unlikely(test_bit(ZONE_NO_ALLOC, &zone->flags)))
+		return false;
+
 	if (cpusets_enabled() && (alloc_flags & ALLOC_CPUSET))
 		return __cpuset_zone_allowed(zone, gfp);
 
