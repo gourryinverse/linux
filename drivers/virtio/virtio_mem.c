@@ -17,6 +17,7 @@
 #include <linux/memory.h>
 #include <linux/hrtimer.h>
 #include <linux/crash_dump.h>
+#include <linux/debugfs.h>
 #include <linux/mutex.h>
 #include <linux/bitmap.h>
 #include <linux/lockdep.h>
@@ -131,6 +132,9 @@ struct virtio_mem {
 	int nid;
 	/* Whether we hold this node's ZONE_MOVABLE out of the allocator. */
 	bool no_alloc;
+#ifdef CONFIG_DEBUG_FS
+	struct dentry		*debugfs_no_alloc;
+#endif
 	/* Physical start address of the memory region. */
 	uint64_t addr;
 	/* Maximum region size in bytes. */
@@ -340,6 +344,59 @@ static ssize_t no_alloc_show(struct device *dev, struct device_attribute *attr,
 	return sysfs_emit(buf, "%d\n", READ_ONCE(vm->no_alloc));
 }
 static DEVICE_ATTR_RO(no_alloc);
+
+#ifdef CONFIG_DEBUG_FS
+/*
+ * [TEST] stand in for the host setting VIRTIO_MEM_F_NO_ALLOC's config field.
+ *
+ * The real producer is the device, and no QEMU implements the feature yet, so
+ * there is otherwise no way to exercise the guest side at all.  This exists
+ * only so the selftest can drive it; it is not an interface for anyone else,
+ * which is why it is debugfs and not the read-only sysfs attribute above.
+ */
+static int virtio_mem_no_alloc_set(void *data, u64 val)
+{
+	struct virtio_mem *vm = data;
+
+	mutex_lock(&vm->hotplug_mutex);
+	virtio_mem_apply_no_alloc(vm, !!val);
+	mutex_unlock(&vm->hotplug_mutex);
+
+	return 0;
+}
+
+static int virtio_mem_no_alloc_get(void *data, u64 *val)
+{
+	struct virtio_mem *vm = data;
+
+	*val = READ_ONCE(vm->no_alloc);
+	return 0;
+}
+DEFINE_DEBUGFS_ATTRIBUTE(virtio_mem_no_alloc_fops, virtio_mem_no_alloc_get,
+			 virtio_mem_no_alloc_set, "%llu\n");
+
+static struct dentry *virtio_mem_debugfs_dir;
+
+static void virtio_mem_debugfs_add(struct virtio_mem *vm)
+{
+	if (!virtio_mem_debugfs_dir)
+		virtio_mem_debugfs_dir = debugfs_create_dir("virtio-mem", NULL);
+
+	vm->debugfs_no_alloc = debugfs_create_file(dev_name(&vm->vdev->dev),
+						   0600, virtio_mem_debugfs_dir,
+						   vm,
+						   &virtio_mem_no_alloc_fops);
+}
+
+static void virtio_mem_debugfs_del(struct virtio_mem *vm)
+{
+	debugfs_remove(vm->debugfs_no_alloc);
+	vm->debugfs_no_alloc = NULL;
+}
+#else
+static void virtio_mem_debugfs_add(struct virtio_mem *vm) { }
+static void virtio_mem_debugfs_del(struct virtio_mem *vm) { }
+#endif /* CONFIG_DEBUG_FS */
 
 static struct attribute *virtio_mem_attrs[] = {
 	&dev_attr_no_alloc.attr,
@@ -3052,6 +3109,8 @@ static int virtio_mem_probe(struct virtio_device *vdev)
 		queue_work(system_freezable_wq, &vm->wq);
 	}
 
+	virtio_mem_debugfs_add(vm);
+
 	return 0;
 out_del_vq:
 	vdev->config->del_vqs(vdev);
@@ -3139,6 +3198,8 @@ static void virtio_mem_deinit_kdump(struct virtio_mem *vm)
 static void virtio_mem_remove(struct virtio_device *vdev)
 {
 	struct virtio_mem *vm = vdev->priv;
+
+	virtio_mem_debugfs_del(vm);
 
 	mutex_lock(&vm->hotplug_mutex);
 	virtio_mem_apply_no_alloc(vm, false);
