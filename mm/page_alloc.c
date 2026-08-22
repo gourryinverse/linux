@@ -6436,7 +6436,8 @@ __meminit void zone_pcp_init(struct zone *zone)
  * like everything else.  That is a stipulation rather than a mechanism, and
  * the same one hot-unplug already lives with in the other direction: memory
  * the balloon holds cannot be unplugged.  Whoever got to the memory first
- * keeps it.
+ * keeps it.  Deflating is the case worth being careful about -- see
+ * balloon_page_list_dequeue_allocatable().
  *
  * Restricted to ZONE_MOVABLE, which is what makes an absolute skip safe.  A
  * GFP_KERNEL allocation resolves to ZONE_NORMAL, and next_zones_zonelist()

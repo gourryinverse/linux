@@ -66,6 +66,9 @@ size_t balloon_page_list_enqueue(struct balloon_dev_info *b_dev_info,
 		struct list_head *pages);
 size_t balloon_page_list_dequeue(struct balloon_dev_info *b_dev_info,
 		struct list_head *pages, size_t n_req_pages);
+size_t balloon_page_list_dequeue_allocatable(struct balloon_dev_info *b_dev_info,
+					     struct list_head *pages,
+					     size_t n_req_pages);
 
 static inline void balloon_devinfo_init(struct balloon_dev_info *balloon)
 {

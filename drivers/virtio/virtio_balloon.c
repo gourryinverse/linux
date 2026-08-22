@@ -242,6 +242,14 @@ static void set_page_pfns(struct virtio_balloon *vb,
 					  page_to_balloon_pfn(page) + i);
 }
 
+/*
+ * Inflating does not need to know about zone_set_no_alloc(): the allocator
+ * already skips a withdrawn zone, so the balloon simply takes its pages from
+ * somewhere else, or fails.  A balloon that grew on a withdrawn zone anyway
+ * would be taking memory the zone's owner has already claimed -- the same
+ * conflict as hot-unplugging memory the balloon is holding, and settled the
+ * same way: whoever got there first keeps it.
+ */
 static unsigned int fill_balloon(struct virtio_balloon *vb, size_t num)
 {
 	unsigned int num_allocated_pages;
@@ -301,7 +309,8 @@ static void release_pages_balloon(struct virtio_balloon *vb,
 	}
 }
 
-static unsigned int leak_balloon(struct virtio_balloon *vb, size_t num)
+static unsigned int leak_balloon(struct virtio_balloon *vb, size_t num,
+				 bool allocatable_only)
 {
 	unsigned int num_freed_pages;
 	struct page *page;
@@ -314,13 +323,30 @@ static unsigned int leak_balloon(struct virtio_balloon *vb, size_t num)
 	mutex_lock(&vb->balloon_lock);
 	/* We can't release more pages than taken */
 	num = min(num, (size_t)vb->num_pages);
-	for (vb->num_pfns = 0; vb->num_pfns < num;
-	     vb->num_pfns += VIRTIO_BALLOON_PAGES_PER_PAGE) {
-		page = balloon_page_dequeue(vb_dev_info);
-		if (!page)
-			break;
+
+	if (allocatable_only) {
+		/*
+		 * Take the batch in one pass: this variant walks past pages
+		 * it will not return, so asking a page at a time would rescan
+		 * the balloon once per page.
+		 */
+		balloon_page_list_dequeue_allocatable(vb_dev_info, &pages,
+						      num / VIRTIO_BALLOON_PAGES_PER_PAGE);
+	} else {
+		size_t n;
+
+		for (n = 0; n < num; n += VIRTIO_BALLOON_PAGES_PER_PAGE) {
+			page = balloon_page_dequeue(vb_dev_info);
+			if (!page)
+				break;
+			list_add_tail(&page->lru, &pages);
+		}
+	}
+
+	vb->num_pfns = 0;
+	list_for_each_entry(page, &pages, lru) {
 		set_page_pfns(vb, vb->pfns + vb->num_pfns, page);
-		list_add(&page->lru, &pages);
+		vb->num_pfns += VIRTIO_BALLOON_PAGES_PER_PAGE;
 		vb->num_pages -= VIRTIO_BALLOON_PAGES_PER_PAGE;
 	}
 
@@ -570,7 +596,7 @@ static void update_balloon_size_func(struct work_struct *work)
 		if (diff > 0)
 			diff -= fill_balloon(vb, diff);
 		else
-			diff += leak_balloon(vb, -diff);
+			diff += leak_balloon(vb, -diff, false);
 		update_balloon_size(vb);
 	}
 
@@ -895,7 +921,13 @@ static int virtio_balloon_oom_notify(struct notifier_block *nb,
 						 struct virtio_balloon, oom_nb);
 	unsigned long *freed = parm;
 
-	*freed += leak_balloon(vb, VIRTIO_BALLOON_OOM_NR_PAGES) /
+	/*
+	 * Only pages that can be allocated again count as relief here.  If the
+	 * host has withdrawn the zone the balloon is sitting on, this frees
+	 * nothing and the OOM proceeds -- which is the host saying it cannot
+	 * back the memory, so the guest should take the kill instead.
+	 */
+	*freed += leak_balloon(vb, VIRTIO_BALLOON_OOM_NR_PAGES, true) /
 		  VIRTIO_BALLOON_PAGES_PER_PAGE;
 	update_balloon_size(vb);
 
@@ -1088,7 +1120,7 @@ static void remove_common(struct virtio_balloon *vb)
 {
 	/* There might be pages left in the balloon: free them. */
 	while (vb->num_pages)
-		leak_balloon(vb, vb->num_pages);
+		leak_balloon(vb, vb->num_pages, false);
 	update_balloon_size(vb);
 
 	/* There might be free pages that are being reported: release them. */

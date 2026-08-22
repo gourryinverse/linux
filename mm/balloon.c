@@ -10,6 +10,8 @@
 #include <linux/export.h>
 #include <linux/balloon.h>
 
+#include "page_alloc.h"
+
 /*
  * Lock protecting the balloon_dev_info of all devices. We don't really
  * expect more than one device.
@@ -108,8 +110,10 @@ EXPORT_SYMBOL_GPL(balloon_page_list_enqueue);
  *
  * Return: number of pages that were added to the @pages list.
  */
-size_t balloon_page_list_dequeue(struct balloon_dev_info *b_dev_info,
-				 struct list_head *pages, size_t n_req_pages)
+static size_t __balloon_page_list_dequeue(struct balloon_dev_info *b_dev_info,
+					  struct list_head *pages,
+					  size_t n_req_pages,
+					  bool allocatable_only)
 {
 	struct page *page, *tmp;
 	unsigned long flags;
@@ -119,6 +123,9 @@ size_t balloon_page_list_dequeue(struct balloon_dev_info *b_dev_info,
 	list_for_each_entry_safe(page, tmp, &b_dev_info->pages, lru) {
 		if (n_pages == n_req_pages)
 			break;
+		if (allocatable_only &&
+		    !zone_allows_alloc(page_zone(page), GFP_HIGHUSER_MOVABLE, 0))
+			continue;
 		list_del(&page->lru);
 		if (b_dev_info->adjust_managed_page_count)
 			adjust_managed_page_count(page, 1);
@@ -132,7 +139,42 @@ size_t balloon_page_list_dequeue(struct balloon_dev_info *b_dev_info,
 
 	return n_pages;
 }
+
+size_t balloon_page_list_dequeue(struct balloon_dev_info *b_dev_info,
+				 struct list_head *pages, size_t n_req_pages)
+{
+	return __balloon_page_list_dequeue(b_dev_info, pages, n_req_pages, false);
+}
 EXPORT_SYMBOL_GPL(balloon_page_list_dequeue);
+
+/**
+ * balloon_page_list_dequeue_allocatable() - dequeue pages the allocator will
+ *					     hand back out again
+ * @b_dev_info: balloon device descriptor where we will grab pages from.
+ * @pages: pointer to the list of pages that would be returned to the caller.
+ * @n_req_pages: number of requested pages.
+ *
+ * Like balloon_page_list_dequeue(), but skips pages in a zone whose owner
+ * withdrew it with zone_set_no_alloc().  For deflating under memory pressure,
+ * where handing a page back only helps if something can then allocate it:
+ * freeing into a withdrawn zone shrinks the balloon without relieving the
+ * pressure, turning an OOM kill into an OOM kill with a smaller balloon.
+ *
+ * Ask for the whole batch in one call.  Skipped pages are walked past, so a
+ * page-at-a-time caller rescans the balloon once per page returned, under the
+ * balloon lock with interrupts off, on a path that only runs under OOM.
+ *
+ * Return: number of pages that were added to the @pages list.  Zero is an
+ * ordinary answer and means the caller should let the pressure take its
+ * course.
+ */
+size_t balloon_page_list_dequeue_allocatable(struct balloon_dev_info *b_dev_info,
+					     struct list_head *pages,
+					     size_t n_req_pages)
+{
+	return __balloon_page_list_dequeue(b_dev_info, pages, n_req_pages, true);
+}
+EXPORT_SYMBOL_GPL(balloon_page_list_dequeue_allocatable);
 
 /**
  * balloon_page_alloc - allocates a new page for insertion into the balloon
