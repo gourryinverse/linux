@@ -1,0 +1,32 @@
+What:		/sys/bus/virtio/devices/<dev>/no_alloc
+Date:		August 2026
+Contact:	virtualization@lists.linux.dev
+Description:
+		Read-only.  1 means the host has told this device it can no
+		longer stand behind the memory it has plugged, and the guest
+		has stopped allocating from it.
+
+		This is host state, not guest policy, which is why it cannot
+		be written.  A guest able to set it could withdraw memory the
+		host never asked to withdraw; a guest able to clear it could
+		keep allocating memory the host has already said it cannot
+		back.  The host sets it through the device's configuration
+		space (VIRTIO_MEM_F_NO_ALLOC).
+
+		It is exposed so an administrator can see *why* the guest is
+		under pressure.  A 1 here means allocations from this memory
+		fail rather than being backed, and virtio-balloon will not
+		deflate into it to rescue an OOM -- so a guest that is being
+		OOM-killed while apparently holding free memory is a guest
+		whose host is over-committed, not a guest with a leak.
+
+		Existing residents are untouched: nothing is migrated or
+		reclaimed on account of the withdrawal, and unplug continues
+		to work normally.
+
+		The unit is the ZONE_MOVABLE of the device's NUMA node, not
+		the device, so this is only meaningful where the device owns
+		that node's movable memory.  Memory this device onlined to
+		ZONE_NORMAL rather than ZONE_MOVABLE is not covered, and
+		reads 0 regardless of what the host asked for.
+Users:		virtio-mem management tooling

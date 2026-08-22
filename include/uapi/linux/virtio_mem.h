@@ -92,6 +92,8 @@
 #define VIRTIO_MEM_F_UNPLUGGED_INACCESSIBLE	1
 /* plugged memory will remain plugged when suspending+resuming */
 #define VIRTIO_MEM_F_PERSISTENT_SUSPEND		2
+/* the device can tell the driver to stop allocating from its memory */
+#define VIRTIO_MEM_F_NO_ALLOC			3
 
 
 /* --- virtio-mem: guest -> host requests --- */
@@ -211,6 +213,13 @@ struct virtio_mem_config {
 	__le64 plugged_size;
 	/* Requested size. New plug requests cannot exceed it. Can change. */
 	__le64 requested_size;
+	/*
+	 * Valid with VIRTIO_MEM_F_NO_ALLOC.  Nonzero means the device can no
+	 * longer stand behind the memory it has plugged: the driver stops the
+	 * allocator handing out any more of it, without unplugging it and
+	 * without disturbing what is already there.  Can change.
+	 */
+	__le64 no_alloc;
 };
 
 #endif /* _LINUX_VIRTIO_MEM_H */

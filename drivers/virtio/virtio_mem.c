@@ -129,6 +129,8 @@ struct virtio_mem {
 	uint64_t device_block_size;
 	/* The determined node id for all memory of the device. */
 	int nid;
+	/* Whether we hold this node's ZONE_MOVABLE out of the allocator. */
+	bool no_alloc;
 	/* Physical start address of the memory region. */
 	uint64_t addr;
 	/* Maximum region size in bytes. */
@@ -275,6 +277,75 @@ struct virtio_mem {
  * devices. We use RCU to iterate the list in the callback.
  */
 static DEFINE_MUTEX(virtio_mem_mutex);
+
+static struct zone *virtio_mem_zone(struct virtio_mem *vm)
+{
+	return &NODE_DATA(vm->nid)->node_zones[ZONE_MOVABLE];
+}
+
+/*
+ * The host tells us it can no longer stand behind the memory it plugged.
+ *
+ * Deliberately not part of unplugging.  Unplug takes memory back a block at a
+ * time and needs the zone working normally so residents can be migrated out;
+ * this is the different statement "stop putting things here", which the host
+ * wants for reasons unplug does not cover -- and the two compose, because
+ * alloc_contig_range() and offline_pages() do not walk the zonelist.
+ *
+ * Granularity is the ZONE_MOVABLE of the device's node, not the device.  That
+ * is right when the device owns that node's movable memory, which is the
+ * layout virtio-mem is deployed in, and too coarse otherwise.  A second
+ * claimant on the same zone gets -EBUSY.  Memory this device onlined to
+ * ZONE_NORMAL instead is not covered.
+ */
+static void virtio_mem_apply_no_alloc(struct virtio_mem *vm, bool set)
+{
+	int rc;
+
+	lockdep_assert_held(&vm->hotplug_mutex);
+
+	if (vm->nid == NUMA_NO_NODE || set == vm->no_alloc)
+		return;
+
+	if (set) {
+		rc = zone_set_no_alloc(virtio_mem_zone(vm));
+		if (rc) {
+			dev_warn(&vm->vdev->dev,
+				 "cannot withdraw node %d: %d\n", vm->nid, rc);
+			return;
+		}
+		dev_info(&vm->vdev->dev,
+			 "host withdrew node %d: allocations from it will now fail rather than be backed\n",
+			 vm->nid);
+	} else {
+		zone_clear_no_alloc(virtio_mem_zone(vm));
+		dev_info(&vm->vdev->dev, "host restored node %d\n", vm->nid);
+	}
+	vm->no_alloc = set;
+}
+
+/*
+ * Read-only on purpose.  This is host state, not guest policy: a guest that
+ * could set it could withdraw memory the host never asked to withdraw, and a
+ * guest that could clear it could keep allocating memory the host has said it
+ * cannot back.  It is exposed so an administrator can see WHY the guest is
+ * under pressure -- a 1 here means the host is over-committed and the balloon
+ * will not deflate to rescue an OOM.
+ */
+static ssize_t no_alloc_show(struct device *dev, struct device_attribute *attr,
+			     char *buf)
+{
+	struct virtio_mem *vm = dev_to_virtio(dev)->priv;
+
+	return sysfs_emit(buf, "%d\n", READ_ONCE(vm->no_alloc));
+}
+static DEVICE_ATTR_RO(no_alloc);
+
+static struct attribute *virtio_mem_attrs[] = {
+	&dev_attr_no_alloc.attr,
+	NULL,
+};
+ATTRIBUTE_GROUPS(virtio_mem);
 static LIST_HEAD(virtio_mem_devices);
 
 static void virtio_mem_online_page_cb(struct page *page, unsigned int order);
@@ -2405,6 +2476,16 @@ static void virtio_mem_refresh_config(struct virtio_mem *vm)
 	virtio_cread_le(vm->vdev, struct virtio_mem_config, requested_size,
 			&vm->requested_size);
 
+	if (virtio_has_feature(vm->vdev, VIRTIO_MEM_F_NO_ALLOC)) {
+		uint64_t no_alloc;
+
+		virtio_cread_le(vm->vdev, struct virtio_mem_config, no_alloc,
+				&no_alloc);
+		mutex_lock(&vm->hotplug_mutex);
+		virtio_mem_apply_no_alloc(vm, !!no_alloc);
+		mutex_unlock(&vm->hotplug_mutex);
+	}
+
 	dev_info(&vm->vdev->dev, "plugged size: 0x%llx", vm->plugged_size);
 	dev_info(&vm->vdev->dev, "requested size: 0x%llx", vm->requested_size);
 }
@@ -3059,6 +3140,10 @@ static void virtio_mem_remove(struct virtio_device *vdev)
 {
 	struct virtio_mem *vm = vdev->priv;
 
+	mutex_lock(&vm->hotplug_mutex);
+	virtio_mem_apply_no_alloc(vm, false);
+	mutex_unlock(&vm->hotplug_mutex);
+
 	if (vm->in_kdump)
 		virtio_mem_deinit_kdump(vm);
 	else
@@ -3130,6 +3215,7 @@ static unsigned int virtio_mem_features[] = {
 #endif
 	VIRTIO_MEM_F_UNPLUGGED_INACCESSIBLE,
 	VIRTIO_MEM_F_PERSISTENT_SUSPEND,
+	VIRTIO_MEM_F_NO_ALLOC,
 };
 
 static const struct virtio_device_id virtio_mem_id_table[] = {
@@ -3141,6 +3227,7 @@ static struct virtio_driver virtio_mem_driver = {
 	.feature_table = virtio_mem_features,
 	.feature_table_size = ARRAY_SIZE(virtio_mem_features),
 	.driver.name = KBUILD_MODNAME,
+	.driver.dev_groups = virtio_mem_groups,
 	.id_table = virtio_mem_id_table,
 	.probe = virtio_mem_probe,
 	.remove = virtio_mem_remove,
