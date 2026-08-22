@@ -62,12 +62,12 @@
 #include <linux/shmem_fs.h>
 #include <linux/sysctl.h>
 
-#define CREATE_TRACE_POINTS
-#include <trace/events/memory-failure.h>
-
 #include "swap.h"
 #include "page_alloc.h"
 #include "internal.h"
+
+#define CREATE_TRACE_POINTS
+#include <trace/events/memory-failure.h>
 
 static int sysctl_memory_failure_early_kill __read_mostly;
 
