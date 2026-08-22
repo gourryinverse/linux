@@ -2494,8 +2494,7 @@ bool compaction_zonelist_suitable(struct alloc_context *ac, int order,
 		if (!node_state(zone_to_nid(zone), N_MEMORY_RECLAIM))
 			continue;
 
-		if (cpusets_enabled() && (alloc_flags & ALLOC_CPUSET) &&
-		    !__cpuset_zone_allowed(zone, gfp_mask))
+		if (!zone_allows_alloc(zone, gfp_mask, alloc_flags))
 			continue;
 
 		/*
@@ -2853,10 +2852,8 @@ enum compact_result try_to_compact_pages(gfp_t gfp_mask, unsigned int order,
 				 ac->nodemask, N_MEMORY_COMPACTION) {
 		enum compact_result status;
 
-		if (cpusets_enabled() &&
-			(alloc_flags & ALLOC_CPUSET) &&
-			!__cpuset_zone_allowed(zone, gfp_mask))
-				continue;
+		if (!zone_allows_alloc(zone, gfp_mask, alloc_flags))
+			continue;
 
 		if (prio > MIN_COMPACT_PRIORITY
 					&& compaction_deferred(zone, order)) {

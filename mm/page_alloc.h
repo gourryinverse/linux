@@ -6,6 +6,8 @@
 #ifndef __MM_PAGE_ALLOC_H
 #define __MM_PAGE_ALLOC_H
 
+#include <linux/cpuset.h>
+
 #include <linux/mm.h>
 #include <linux/mmzone.h>
 #include <linux/nodemask.h>
@@ -306,6 +308,31 @@ static inline int gfp_migratetype(const gfp_t gfp_flags)
 }
 #undef GFP_MOVABLE_MASK
 #undef GFP_MOVABLE_SHIFT
+
+/**
+ * zone_allows_alloc() - may an allocation constrained by @gfp and
+ *			 @alloc_flags use @zone?
+ * @zone: the zone
+ * @gfp: the allocation's gfp mask
+ * @alloc_flags: the allocation's ALLOC_* flags
+ *
+ * The allocator and everything that reacts to an allocation failure --
+ * reclaim, compaction, kswapd wakeup, the OOM constraint -- have to agree on
+ * which zones were candidates, or they work to relieve pressure on a zone the
+ * allocation could never have used.  This is that shared answer.
+ *
+ * ALLOC_CPUSET is what the slowpath clears to relax the cpuset constraint
+ * under pressure, so a caller that has already given up on cpusets is not
+ * held to it here either.
+ */
+static inline bool zone_allows_alloc(struct zone *zone, gfp_t gfp,
+				     unsigned int alloc_flags)
+{
+	if (cpusets_enabled() && (alloc_flags & ALLOC_CPUSET))
+		return __cpuset_zone_allowed(zone, gfp);
+
+	return true;
+}
 
 bool decay_pcp_high(struct zone *zone, struct per_cpu_pages *pcp);
 void drain_zone_pages(struct zone *zone, struct per_cpu_pages *pcp);

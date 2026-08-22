@@ -6666,8 +6666,8 @@ static void shrink_zones(struct zonelist *zonelist, struct scan_control *sc)
 		 * to global LRU.
 		 */
 		if (!cgroup_reclaim(sc)) {
-			if (!cpuset_zone_allowed(zone,
-						 GFP_KERNEL | __GFP_HARDWALL))
+			if (!zone_allows_alloc(zone, GFP_KERNEL | __GFP_HARDWALL,
+					       ALLOC_CPUSET))
 				continue;
 
 			/*
@@ -7736,7 +7736,7 @@ void wakeup_kswapd(struct zone *zone, gfp_t gfp_flags, int order,
 	if (!managed_zone(zone))
 		return;
 
-	if (!cpuset_zone_allowed(zone, gfp_flags))
+	if (!zone_allows_alloc(zone, gfp_flags, ALLOC_CPUSET))
 		return;
 
 	pgdat = zone->zone_pgdat;
