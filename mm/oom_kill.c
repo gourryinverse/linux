@@ -48,6 +48,7 @@
 
 #include <asm/tlb.h>
 #include "internal.h"
+#include "page_alloc.h"
 #include "slab.h"
 
 #define CREATE_TRACE_POINTS
@@ -284,7 +285,7 @@ static enum oom_constraint constrained_alloc(struct oom_control *oc)
 	/* Check this allocation failure is caused by cpuset's wall function */
 	for_each_zone_zonelist_nodemask(zone, z, oc->zonelist,
 			highest_zoneidx, oc->nodemask)
-		if (!cpuset_zone_allowed(zone, oc->gfp_mask))
+		if (!zone_allows_alloc(zone, oc->gfp_mask, ALLOC_CPUSET))
 			cpuset_limited = true;
 
 	if (cpuset_limited) {
