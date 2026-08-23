@@ -217,6 +217,13 @@ the driver's behalf:
 ``NODE_MEMORY_FEAT_PUBLIC`` is what makes a node ordinary: a node with it
 set holds every feature, and its absence is what makes a node private.
 
+What such a node may be *given* follows from the same rule.
+``folio_placement_eligible()`` accepts anon, which leaves by COW on the first
+write, and page cache only while it is still free to drop: clean, reclaimable,
+and re-readable.  A dirty folio would owe writeback before its frame could be
+reused and a synchronous promote on the next write, which is the stall the
+fence exists to avoid.
+
 Dependencies between features are enforced **once**, by
 ``node_features_register()`` at hotplug, rather than by whatever sets
 the bits:

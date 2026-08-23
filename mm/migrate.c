@@ -602,7 +602,7 @@ static int __folio_migrate_mapping(struct address_space *mapping,
 	 * about to be frozen, so the state is stable; a refused migration
 	 * returns -EBUSY and the caller falls back to normal reclaim.
 	 */
-	if (!folio_placement_eligible(folio_nid(newfolio), folio))
+	if (!folio_placement_eligible(folio_nid(newfolio), mapping, folio))
 		return -EBUSY;
 
 	if (!mapping) {
@@ -2244,7 +2244,7 @@ struct folio *alloc_migration_target(struct folio *src, unsigned long private)
 	 */
 	if (!PageOffline(&src->page) &&
 	    (!mtc->nmask || node_isset(nid, *mtc->nmask)) &&
-	    !folio_placement_eligible(nid, src))
+	    !folio_placement_eligible(nid, folio_mapping(src), src))
 		return NULL;
 
 	if (folio_test_hugetlb(src)) {

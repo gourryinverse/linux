@@ -1742,22 +1742,70 @@ static inline bool migration_remap_writable(struct folio *folio, bool was_write,
 #endif /* CONFIG_MMU */
 
 /**
- * folio_placement_eligible() - is @folio the kind of folio node @nid takes?
+ * folio_wrfence_eligible() - may @folio live behind a write fence?
+ * @folio: the folio being placed
+ * @mapping: its address space, NULL for anon
+ *
+ * A write-fenced node cannot have its content written in place, so it may only
+ * host folios whose every exit is something other than a write to them there.
+ * Anon has one: the write faults, folio_must_cow() refuses to reuse the folio,
+ * and the COW lands on a public node.  Page cache has no such route, so it may
+ * live there only while it is still free to DROP, which is what the remaining
+ * tests ask.  Each names an exit the node would otherwise owe a write for: a
+ * dirty folio owes writeback before its frame can be reused, an unevictable
+ * one never leaves at all, and one without read_folio holds the only copy.
+ *
+ * Those three are affordability rather than safety -- writeback only reads a
+ * folio, so a fence is perfectly capable of it.  But a fence whose folios
+ * routinely needed a synchronous promote would be a slow node rather than a
+ * fence, so the cost model belongs to the fence and not to whichever device
+ * claims it.
+ */
+static inline bool folio_wrfence_eligible(struct folio *folio,
+					  struct address_space *mapping)
+{
+	/* Filling a !uptodate folio is itself a write into it. */
+	if (!folio_test_uptodate(folio))
+		return false;
+
+	if (folio_test_anon(folio))
+		return true;
+
+	return !folio_test_dirty(folio) && !folio_test_writeback(folio) &&
+	       folio_evictable(folio) &&
+	       mapping && mapping->a_ops && mapping->a_ops->read_folio;
+}
+
+/**
+ * folio_placement_eligible() - may node @nid host @folio?
  * @nid: the node the folio would be placed on
+ * @mapping: the folio's address space, NULL for anon
  * @folio: the folio being migrated
  *
- * A write-fenced node maps its folios read-only, so only a folio with a route
- * out of that mapping on its first write may live there.  Anon has one: the
- * write faults, folio_must_cow() refuses to reuse the folio, and the COW lands
- * on a public node.  Nothing else does, so nothing else is accepted.
+ * @nid is the destination and @folio the source; they are different objects at
+ * both call sites, so the node cannot be derived from the folio.
  *
- * Asked twice: at allocation, before the destination is written, so an
- * ineligible folio never reaches the device; and again at the migration commit
- * point, where the source folio is locked and about to be frozen.
+ * Asked twice.  At allocation, before the destination is written, because
+ * __migrate_folio() copies into it before the commit-point recheck -- so a
+ * folio refused only at the commit point has already reached the device.
+ * Again at the commit point, where the source is locked and about to be
+ * frozen, so a folio that turned dirty in between cannot be committed.
+ *
+ * The write fence is the only node property gating placement; a second one
+ * would be another disjunct here.
+ *
+ * NOT expressed here: AS_INACCESSIBLE (guest_memfd).  Placing one of those on
+ * a read-in-place tier is pointless rather than unsafe -- the tier earns its
+ * keep by serving reads and AS_INACCESSIBLE forbids exactly that -- which
+ * makes it a tier-SELECTION question, not an eligibility one.  It is refused
+ * by the tier that cares, not here.
  */
-static inline bool folio_placement_eligible(int nid, struct folio *folio)
+static inline bool folio_placement_eligible(int nid,
+					    struct address_space *mapping,
+					    struct folio *folio)
 {
-	return !node_write_fenced(nid) || folio_test_anon(folio);
+	return !node_write_fenced(nid) ||
+	       folio_wrfence_eligible(folio, mapping);
 }
 
 /* char-mem.c */
