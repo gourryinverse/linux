@@ -2219,6 +2219,30 @@ struct folio *alloc_migration_target(struct folio *src, unsigned long private)
 	if (nid == NUMA_NO_NODE)
 		nid = folio_nid(src);
 
+	/*
+	 * Refuse before the destination exists: __migrate_folio() copies into it
+	 * before the commit-point recheck, so a folio refused only there has
+	 * already been written to the device.
+	 *
+	 * Ask only about a node it could land on.  nid is a preference,
+	 * mtc->nmask the constraint, and do_migrate_range() makes them disagree
+	 * deliberately -- nid is the node being emptied, cleared from nmask.
+	 */
+	/*
+	 * PageOffline is exempt: the fence protects folio CONTENT, and a balloon
+	 * page carries none -- it is its owner's own withdrawn memory being
+	 * shuffled within the node, not placed on it as tier content.  Asking
+	 * refused the owner's reservation a home on its own node, which is how
+	 * compaction and alloc_contig_range() hit -ENOMEM on a private node.
+	 *
+	 * Only PageOffline, not every movable_ops page: zsmalloc has them too
+	 * and its pages DO carry content.
+	 */
+	if (!PageOffline(&src->page) &&
+	    (!mtc->nmask || node_isset(nid, *mtc->nmask)) &&
+	    !folio_placement_eligible(nid, src))
+		return NULL;
+
 	if (folio_test_hugetlb(src)) {
 		struct hstate *h = folio_hstate(src);
 
