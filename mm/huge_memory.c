@@ -2291,11 +2291,14 @@ static inline bool can_change_pmd_writable(struct vm_area_struct *vma,
 	if (userfaultfd_huge_pmd_wp(vma, pmd))
 		return false;
 
-	if (!(vma->vm_flags & VM_SHARED)) {
+	page = vm_normal_page_pmd(vma, addr, pmd);
+
+	if (page_write_fenced(page))
+		return false;
+
+	if (!(vma->vm_flags & VM_SHARED))
 		/* See can_change_pte_writable(). */
-		page = vm_normal_page_pmd(vma, addr, pmd);
 		return page && PageAnon(page) && PageAnonExclusive(page);
-	}
 
 	/* See can_change_pte_writable(). */
 	return pmd_dirty(pmd);
