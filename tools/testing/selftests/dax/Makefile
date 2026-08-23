@@ -38,3 +38,5 @@ TEST_PROGS += tier_latency.sh
 TEST_FILES += collect_stats.sh dcperf_taobench.sh
 
 include ../lib.mk
+
+TEST_PROGS += private_node_fence.sh
