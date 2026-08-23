@@ -95,7 +95,8 @@ static bool can_change_shared_pte_writable(struct vm_area_struct *vma,
 	if (!pte_dirty(pte))
 		return false;
 
-	return true;
+	/* The dirty-means-notified assumption does not hold on a fenced node. */
+	return !page_write_fenced(page);
 }
 
 bool can_change_pte_writable(struct vm_area_struct *vma, unsigned long addr,
@@ -303,6 +304,10 @@ static __always_inline void change_present_ptes(struct mmu_gather *tlb,
 
 	oldpte = modify_prot_start_ptes(vma, addr, ptep, nr_ptes);
 	ptent = pte_modify(oldpte, newprot);
+
+	/* pte_modify() hands back newprot's write bit without asking the gates. */
+	if (folio_write_fenced(folio))
+		ptent = pte_wrprotect(ptent);
 
 	if (uffd_prot)
 		ptent = pte_mkuffd(ptent);

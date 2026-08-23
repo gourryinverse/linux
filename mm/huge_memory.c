@@ -2838,6 +2838,10 @@ int change_huge_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 	if (userfaultfd_rwp(vma) && pmd_uffd(entry))
 		entry = pmd_modify(entry, PAGE_NONE);
 
+	/* oldpmd, not pmd: *pmd was invalidated above, so only it holds the pfn. */
+	if (page_write_fenced(vm_normal_page_pmd(vma, addr, oldpmd)))
+		entry = pmd_wrprotect(entry);
+
 	/* See change_pte_range(). */
 	if ((cp_flags & MM_CP_TRY_CHANGE_WRITABLE) && !pmd_write(entry) &&
 	    can_change_pmd_writable(vma, addr, entry))
