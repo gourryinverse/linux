@@ -109,6 +109,18 @@ static void page_table_check_set(unsigned long pfn, unsigned long pgcnt,
 	BUG_ON(PageSlab(page));
 	anon = PageAnon(page);
 
+	/*
+	 * A folio on a node withholding NODE_MEMORY_FEAT_USER_WRITE must never
+	 * be mapped writable: the write has to fault so the folio can be moved
+	 * to a node that grants it first.  The write bit reaches a PTE by two
+	 * routes that never meet -- folio_mk_pte() copying vm_page_prot, and
+	 * pte_modify() handing back newprot -- so no one site can enforce this,
+	 * and a new install path can drop the fence in silence.  That is a
+	 * corrupted page rather than a crash, so it is worth a check: every
+	 * install passes through here, whatever the architecture.
+	 */
+	WARN_ON_ONCE(rw && node_write_fenced(page_to_nid(page)));
+
 	rcu_read_lock();
 	for_each_page_ext(page, pgcnt, page_ext, iter) {
 		struct page_table_check *ptc = get_page_table_check(page_ext);
