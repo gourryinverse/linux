@@ -10,3 +10,9 @@ cram_gate_tool
 cram_converge_tool
 cram_noalloc_tool
 cram_hot_tool
+cram_pgcache_tool
+cram_pgcache_large_tool
+cram_coherence_tool
+cram_readahead_tool
+cram_dropwrite_tool
+cram_file_perf_tool

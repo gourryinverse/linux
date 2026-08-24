@@ -48,6 +48,12 @@ TEST_GEN_FILES += cram_gate_tool
 TEST_GEN_FILES += cram_converge_tool
 TEST_GEN_FILES += cram_noalloc_tool
 TEST_GEN_FILES += cram_hot_tool
+TEST_GEN_FILES += cram_pgcache_tool
+TEST_GEN_FILES += cram_pgcache_large_tool
+TEST_GEN_FILES += cram_coherence_tool
+TEST_GEN_FILES += cram_readahead_tool
+TEST_GEN_FILES += cram_dropwrite_tool
+TEST_GEN_FILES += cram_file_perf_tool
 include ../lib.mk
 
 TEST_PROGS += private_node_fence.sh
@@ -67,3 +73,11 @@ TEST_PROGS += cram_hot.sh
 TEST_PROGS += cram_trim.sh
 TEST_PROGS += cram_control.sh
 TEST_PROGS += cram_balloon_migrate.sh
+
+TEST_PROGS += cram_pgcache.sh
+TEST_PROGS += cram_pgcache_large.sh
+TEST_PROGS += cram_coherence.sh
+TEST_PROGS += cram_readahead.sh
+TEST_PROGS += cram_dropwrite.sh
+TEST_PROGS += cram_fs_matrix.sh
+TEST_PROGS += cram_file_perf.sh
