@@ -77,6 +77,8 @@ config DEV_DAX_KMEM
 	default DEV_DAX
 	depends on DEV_DAX
 	depends on MEMORY_HOTPLUG # for add_memory() and friends
+	# CRAM is optional, but a built-in kmem cannot call into a modular one
+	depends on CRAM || CRAM=n
 	help
 	  Support access to persistent, or other performance
 	  differentiated memory as if it were System RAM. This allows
