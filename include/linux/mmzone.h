@@ -310,6 +310,8 @@ enum node_stat_item {
 	 */
 	PGPROMOTE_CANDIDATE_NRL,
 #endif
+	/* Pages evicted by alloc_contig_range() under ACR_FLAGS_RECLAIM. */
+	PGCONTIG_RECLAIM,
 	/* PGDEMOTE_*: pages demoted */
 	PGDEMOTE_KSWAPD,
 	PGDEMOTE_DIRECT,

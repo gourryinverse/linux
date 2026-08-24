@@ -7400,6 +7400,97 @@ static void __free_contig_frozen_range(unsigned long pfn, unsigned long nr_pages
  *
  * Return: zero on success or negative error code.
  */
+/* A folio at @pfn that is on the LRU and safe to isolate, or NULL. */
+static struct folio *contig_get_lru_folio(unsigned long pfn)
+{
+	struct page *page = pfn_to_online_page(pfn);
+	struct folio *folio;
+
+	if (!page)
+		return NULL;
+	folio = page_folio(page);
+	if (!folio_test_lru(folio) || !folio_try_get(folio))
+		return NULL;
+	if (unlikely(page_folio(page) != folio || !folio_test_lru(folio))) {
+		folio_put(folio);
+		return NULL;
+	}
+	return folio;
+}
+
+#define CONTIG_RECLAIM_BATCH	512
+
+/*
+ * ACR_FLAGS_RECLAIM: evict the folios in [@start, @end) that migration could
+ * not move.  Ages them down first so reclaim does not decline on the strength
+ * of a recent reference -- the caller is not asking for a hint.
+ *
+ * Return: pages reclaimed.
+ */
+static unsigned long contig_range_reclaim(unsigned long start, unsigned long end)
+{
+	unsigned long pfn = start, reclaimed = 0, isolated = 0;
+	LIST_HEAD(folio_list);
+
+	while (pfn < end) {
+		struct folio *folio = contig_get_lru_folio(pfn);
+
+		if (!folio) {
+			pfn++;
+			continue;
+		}
+		pfn += folio_nr_pages(folio);
+
+		folio_clear_referenced(folio);
+		folio_test_clear_young(folio);
+		if (!folio_isolate_lru(folio))
+			goto put;
+		if (folio_test_unevictable(folio)) {
+			folio_putback_lru(folio);
+		} else {
+			list_add(&folio->lru, &folio_list);
+			isolated += folio_nr_pages(folio);
+		}
+put:
+		/* isolation took its own reference; drop the lookup's */
+		folio_put(folio);
+
+		if (isolated >= CONTIG_RECLAIM_BATCH) {
+			reclaimed += reclaim_pages(&folio_list);
+			isolated = 0;
+			cond_resched();
+			if (fatal_signal_pending(current))
+				break;
+		}
+	}
+	reclaimed += reclaim_pages(&folio_list);
+
+	return reclaimed;
+}
+
+/*
+ * ACR_FLAGS_RECLAIM is attempted only after migration could not clear the
+ * range.  A caller that needs stronger convergence can retry.
+ *
+ * Return: true if something was freed and the range is worth retrying.
+ */
+static bool contig_range_escalate(unsigned long start, unsigned long end,
+				  acr_flags_t alloc_flags, struct zone *zone)
+{
+	unsigned long nr;
+
+	if (alloc_flags & ACR_FLAGS_RECLAIM) {
+		nr = contig_range_reclaim(start, end);
+		if (nr) {
+			mod_node_page_state(zone->zone_pgdat,
+					    PGCONTIG_RECLAIM, nr);
+			return true;
+		}
+	}
+
+	return false;
+}
+
 int alloc_contig_frozen_range_noprof(unsigned long start, unsigned long end,
 		acr_flags_t alloc_flags, gfp_t gfp_mask)
 {
@@ -7481,6 +7572,9 @@ int alloc_contig_frozen_range_noprof(unsigned long start, unsigned long end,
 	 * -EBUSY is not accidentally used or returned to caller.
 	 */
 	ret = __alloc_contig_migrate_range(&cc, start, end);
+	if (ret == -EBUSY && (alloc_flags & ACR_FLAGS_RECLAIM) &&
+	    contig_range_escalate(start, end, alloc_flags, cc.zone))
+		ret = __alloc_contig_migrate_range(&cc, start, end);
 	if (ret && ret != -EBUSY)
 		goto done;
 
