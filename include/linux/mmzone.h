@@ -310,6 +310,14 @@ enum node_stat_item {
 	 */
 	PGPROMOTE_CANDIDATE_NRL,
 #endif
+	/*
+	 * alloc_contig_range() escalating past migration to get a range back:
+	 * pages evicted under ACR_FLAGS_RECLAIM, and kills issued under
+	 * ACR_FLAGS_OOM.  Counted on the range's node, which is the one whose
+	 * owner is reclaiming.
+	 */
+	PGCONTIG_RECLAIM,
+	PGCONTIG_OOM,
 	/* PGDEMOTE_*: pages demoted */
 	PGDEMOTE_KSWAPD,
 	PGDEMOTE_DIRECT,

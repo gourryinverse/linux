@@ -379,6 +379,17 @@ extern gfp_t vma_thp_gfp_mask(struct vm_area_struct *vma);
 typedef unsigned int __bitwise acr_flags_t;
 #define ACR_FLAGS_NONE ((__force acr_flags_t)0) // ordinary allocation request
 #define ACR_FLAGS_CMA ((__force acr_flags_t)BIT(0)) // allocate for CMA
+/*
+ * Try harder to clear the range.  Migration alone gives up as soon as a folio
+ * has nowhere to go, which for an owner reclaiming its own memory -- a device
+ * whose backing shrank, a hypervisor unplugging -- is not an answer: the memory
+ * has to come back or the device is overcommitted.  RECLAIM evicts what would
+ * not move; OOM additionally kills a task on the range's node when eviction
+ * frees nothing.  Both are last resorts and neither is retried here; the caller
+ * decides whether to come round again.
+ */
+#define ACR_FLAGS_RECLAIM ((__force acr_flags_t)BIT(1)) // evict what will not move
+#define ACR_FLAGS_OOM ((__force acr_flags_t)BIT(2)) // ...and kill if that fails
 
 /* The below functions must be run on a range from a single zone. */
 int alloc_contig_frozen_range_noprof(unsigned long start, unsigned long end,
