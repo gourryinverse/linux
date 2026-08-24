@@ -1046,6 +1046,9 @@ int node_features_register(int nid, unsigned long features)
 		return -EBUSY;
 
 	WRITE_ONCE(pgdat->memory_features, features);
+
+	if (!(features & NODE_MEMORY_FEAT_USER_WRITE))
+		node_write_fence_enable();
 	return 0;
 }
 EXPORT_SYMBOL_GPL(node_features_register);

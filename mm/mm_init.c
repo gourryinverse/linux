@@ -1839,6 +1839,55 @@ warn:
 static void __init node_claim_private(int nid, bool has_memory) { }
 #endif
 
+DEFINE_STATIC_KEY_FALSE(node_write_fence_enabled);
+
+/* Set once a node withholds NODE_MEMORY_FEAT_USER_WRITE; see below. */
+static bool node_write_fence_deferred;
+
+/**
+ * node_write_fence_enable - start asking whether folios are write-fenced
+ *
+ * The enforcement sites are on the fault path and there are twenty of them, so
+ * node_write_fenced() is patched out until a node claims a mask without
+ * %NODE_MEMORY_FEAT_USER_WRITE.  Called from node_features_register().
+ *
+ * Never cleared.  A node can come and go, and flipping a static branch per
+ * hotplug event costs more than the branch saves; leaving it set once the last
+ * fenced node departs forfeits an optimisation on a machine that has already
+ * shown it owns the hardware.
+ */
+void node_write_fence_enable(void)
+{
+	/*
+	 * Boot-parameter nodes are claimed from free_area_init(), which
+	 * start_kernel() reaches through mm_core_init_early() -- before
+	 * jump_label_init(), where patching a branch is not yet allowed.  Defer
+	 * to an initcall.  Nothing has mapped a folio anywhere by then.
+	 */
+	if (!static_key_initialized) {
+		node_write_fence_deferred = true;
+		return;
+	}
+	/*
+	 * The runtime caller is __add_memory_resource(), which already holds
+	 * cpu_hotplug_lock for read.  static_branch_enable() would take it
+	 * again, and a recursive read on a percpu-rwsem deadlocks against a
+	 * writer that arrives between the two -- lockdep reports it as
+	 * "possible recursive locking".  Use the _cpuslocked() form and assert
+	 * the caller really is holding it.
+	 */
+	lockdep_assert_cpus_held();
+	static_branch_enable_cpuslocked(&node_write_fence_enabled);
+}
+
+static int __init node_write_fence_init(void)
+{
+	if (node_write_fence_deferred)
+		static_branch_enable(&node_write_fence_enabled);
+	return 0;
+}
+early_initcall(node_write_fence_init);
+
 static void __init node_claim_boot_features(pg_data_t *pgdat)
 {
 	/* A boot pgdat is zero-allocated, so every node starts public. */

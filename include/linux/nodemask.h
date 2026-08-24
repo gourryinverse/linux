@@ -91,6 +91,7 @@
 #include <linux/bitmap.h>
 #include <linux/minmax.h>
 #include <linux/nodemask_types.h>
+#include <linux/jump_label.h>
 #include <linux/random.h>
 
 extern nodemask_t _unused_nodemask_arg_;
@@ -595,8 +596,18 @@ static __always_inline void node_clear_memory_state(int nid)
  * fault reuse predicate (folio_must_cow()) and the migration re-install
  * helpers.
  */
+DECLARE_STATIC_KEY_FALSE(node_write_fence_enabled);
+void node_write_fence_enable(void);
+
 static __always_inline bool node_write_fenced(int nid)
 {
+	/*
+	 * No node has ever withheld the feature on almost every machine, and
+	 * the enforcement sites sit on the fault path, so make the question
+	 * free to ask until some node makes it worth asking.
+	 */
+	if (!static_branch_unlikely(&node_write_fence_enabled))
+		return false;
 	return !node_state(nid, N_MEMORY_USER_WRITE);
 }
 
