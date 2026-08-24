@@ -1661,9 +1661,7 @@ static inline bool can_spin_trylock(void)
  * has no such path, so the gates that would hand a writer a fenced folio call
  * this and retry.
  */
-int nearest_public_node(int nid);
 bool drain_and_isolate_folio(struct folio *folio, struct list_head *list);
-int migrate_folio_to_node(struct folio *folio, int dst_nid);
 int promote_fenced_folio(struct address_space *mapping, pgoff_t index,
 			 bool nowait);
 

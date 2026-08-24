@@ -73,6 +73,15 @@ int folio_migrate_mapping(struct address_space *mapping,
 		struct folio *newfolio, struct folio *folio, int extra_count);
 int set_movable_ops(const struct movable_operations *ops, enum pagetype type);
 
+/*
+ * Move one folio to a named node, and find a public node to move it to.
+ * @dst_nid may be private: the target is named rather than searched, so these
+ * select the private zonelist for it -- an ordinary allocation could not,
+ * because a private node is absent from its own fallback list.
+ */
+int nearest_public_node(int nid);
+int migrate_folio_to_node(struct folio *folio, int dst_nid);
+
 #else
 
 static inline void putback_movable_pages(struct list_head *l) {}
@@ -105,6 +114,16 @@ static inline void softleaf_entry_wait_on_locked(softleaf_t entry, spinlock_t *p
 	WARN_ON_ONCE(1);
 
 	spin_unlock(ptl);
+}
+
+static inline int nearest_public_node(int nid)
+{
+	return NUMA_NO_NODE;
+}
+
+static inline int migrate_folio_to_node(struct folio *folio, int dst_nid)
+{
+	return -EAGAIN;
 }
 
 #endif /* CONFIG_MIGRATION */

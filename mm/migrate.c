@@ -2299,6 +2299,7 @@ int nearest_public_node(int nid)
 	}
 	return best;
 }
+EXPORT_SYMBOL_FOR_MODULES(nearest_public_node, "cram");
 
 /**
  * drain_and_isolate_folio() - isolate @folio for migration, draining first
@@ -2328,14 +2329,37 @@ bool drain_and_isolate_folio(struct folio *folio, struct list_head *list)
  * @folio: the folio to move.  The caller's reference is consumed either way.
  * @dst_nid: destination node
  *
+ * @dst_nid may be private: the target is named, not searched, so the private
+ * zonelist is selected for it and the folio is confined to it.
+ *
  * Return: 0 on success, -EAGAIN if the folio could not be isolated or the
  * migration did not complete.  Both are transient.
  */
 int migrate_folio_to_node(struct folio *folio, int dst_nid)
 {
+	const bool public = node_state(dst_nid, N_MEMORY_PUBLIC);
+	nodemask_t target = nodemask_of_node(dst_nid);
 	struct migration_target_control mtc = {
 		.nid = dst_nid,
-		.gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_NOWARN,
+		/*
+		 * A public destination may spill and may reclaim to make room:
+		 * that is what promotion wants, and it has the whole fallback
+		 * list to fall back to.
+		 *
+		 * A private one is confined to itself, because the private
+		 * zonelist grants access without confining and a NULL nodemask
+		 * would let the folio land anywhere but @dst_nid -- tripping
+		 * the PRIVATE-with-no-nodemask backstop in prepare_alloc_pages()
+		 * on the way past.  Confined, it must NOT reclaim: with one
+		 * node in the mask the slowpath has nowhere else to go, so
+		 * "this node is full" would become an OOM kill instead of a
+		 * failed migration.
+		 */
+		.gfp_mask = public ? (GFP_HIGHUSER_MOVABLE | __GFP_NOWARN)
+				   : ((GFP_HIGHUSER_MOVABLE & ~__GFP_RECLAIM) |
+				      __GFP_NOMEMALLOC | __GFP_NOWARN | GFP_NOWAIT),
+		.alloc_flags = select_zonelist_flags(dst_nid),
+		.nmask = public ? NULL : &target,
 		.reason = MR_NUMA_MISPLACED,
 	};
 	LIST_HEAD(list);
@@ -2356,6 +2380,7 @@ int migrate_folio_to_node(struct folio *folio, int dst_nid)
 
 	return ret ? -EAGAIN : 0;
 }
+EXPORT_SYMBOL_FOR_MODULES(migrate_folio_to_node, "cram");
 
 /**
  * promote_fenced_folio() - move a page-cache folio off a write-fenced node
