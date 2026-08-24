@@ -2710,6 +2710,7 @@ bool numa_promotion_rate_limited(int node, int nr)
 	rate_limit = MB_TO_PAGES(sysctl_numa_balancing_promote_rate_limit);
 	return numa_promotion_rate_limit(NODE_DATA(node), rate_limit, nr);
 }
+EXPORT_SYMBOL_FOR_MODULES(numa_promotion_rate_limited, "cram");
 
 #define NUMA_MIGRATION_ADJUST_STEPS	16
 

@@ -79,6 +79,7 @@ obj-y				+= dax/
 obj-$(CONFIG_DMA_SHARED_BUFFER) += dma-buf/
 obj-$(CONFIG_NUBUS)		+= nubus/
 obj-y				+= cxl/
+obj-$(CONFIG_CRAM)		+= cram/
 obj-y				+= macintosh/
 obj-y				+= scsi/
 obj-y				+= nvme/

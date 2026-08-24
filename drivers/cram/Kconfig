@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-2.0
+config CRAM
+	tristate "Compressed-RAM private-node read-only tier"
+	depends on NUMA && MIGRATION && MMU && MEMORY_HOTPLUG
+	select BALLOON
+	help
+	  Manage folios demoted onto private memory nodes (e.g. compressed
+	  CXL memory) as a read-only tier.  Folios are diverted onto a CRAM
+	  private node during reclaim and mapped present read-only so reads
+	  are zero-copy; write faults promote the folio back to DRAM.  Entry
+	  is by migration (no swap dependency).
+
+	  A device driver registers its memory with cram_register(); the
+	  write fence itself is core mm and needs nothing from here.
+
+	  If unsure, say N.
