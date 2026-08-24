@@ -396,6 +396,15 @@ typedef unsigned int __bitwise acr_flags_t;
 #define ACR_FLAGS_NONE ((__force acr_flags_t)0) // ordinary allocation request
 #define ACR_FLAGS_CMA ((__force acr_flags_t)BIT(0)) // allocate for CMA
 #define ACR_FLAGS_PRIVATE ((__force acr_flags_t)BIT(1)) // allocate private memory
+/*
+ * Try harder to clear the range.  Migration alone gives up as soon as a folio
+ * has nowhere to go, which for an owner reclaiming its own memory -- a device
+ * whose backing shrank, a hypervisor unplugging -- is not an answer: the memory
+ * has to come back or the device is overcommitted.  RECLAIM evicts what would
+ * not move.  It is a last resort and is not retried here; the caller decides
+ * whether to come round again.
+ */
+#define ACR_FLAGS_RECLAIM ((__force acr_flags_t)BIT(2)) // evict what will not move
 
 /* The below functions must be run on a range from a single zone. */
 int alloc_contig_frozen_range_noprof(unsigned long start, unsigned long end,
