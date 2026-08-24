@@ -378,6 +378,52 @@ static int do_daxmaphold(const char *path, long mb, int nid, long hold)
 }
 
 /*
+ * daxmaphold in two phases: fault half, hold while the caller edits the
+ * driver-owned bind out from under us, then fault the rest.  A bind left with
+ * an empty nodemask is one policy_nodemask() declines to apply, dropping
+ * ALLOC_ZONELIST_PRIVATE with it, so phase 2 has to complete on public memory
+ * rather than livelock on a zonelist that can no longer reach the node.
+ */
+static int do_daxmaprefault(const char *path, long mb, int nid, long hold)
+{
+	size_t len = (size_t)mb << 20, half = len / 2, i;
+	unsigned long total, on_nid;
+	long ps = sysconf(_SC_PAGESIZE);
+	int fd = open(path, O_RDWR);
+	char *p;
+
+	if (fd < 0) {
+		fprintf(stderr, "daxmaprefault: open(%s): %m\n", path);
+		return KSFT_SKIP;
+	}
+	p = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+	close(fd);
+	if (p == MAP_FAILED) {
+		fprintf(stderr, "daxmaprefault: mmap(%ld MB): %m\n", mb);
+		return KSFT_SKIP;
+	}
+	for (i = 0; i < half; i += ps)
+		*(volatile char *)(p + i) = 1;		/* phase 1 */
+	/*
+	 * numa_maps, not move_pages(2): the driver's pages report -ENOENT
+	 * through move_pages, which would make an off-node count
+	 * indistinguishable from a page it simply could not report on.
+	 */
+	numa_residency((unsigned long)p, nid, &total, &on_nid, NULL);
+	printf("daxmaprefault: pid=%d addr=0x%lx phase1 total=%lu on_node%d=%lu\n",
+	       getpid(), (unsigned long)p, total, nid, on_nid);
+	fflush(stdout);
+	sleep(hold);
+	for (i = half; i < len; i += ps)
+		*(volatile char *)(p + i) = 1;		/* phase 2: fresh pages */
+	numa_residency((unsigned long)p, nid, &total, &on_nid, NULL);
+	printf("daxmaprefault: phase2 total=%lu on_node%d=%lu\n", total, nid, on_nid);
+	fflush(stdout);
+	munmap(p, len);
+	return 0;
+}
+
+/*
  * Walk a dax mapping: fault @mb repeatedly for @secs.  Sustains pressure on the
  * private node so its reclaim/demotion path drains it (used to drive demotion
  * *out* of a private node that sits above DRAM in the tier order).
@@ -1188,6 +1234,9 @@ int main(int argc, char **argv)
 	if (argc == 6 && !strcmp(argv[1], "daxmaphold"))
 		return do_daxmaphold(argv[2], atol(argv[3]), atoi(argv[4]),
 				     atol(argv[5]));
+	if (argc == 6 && !strcmp(argv[1], "daxmaprefault"))
+		return do_daxmaprefault(argv[2], atol(argv[3]), atoi(argv[4]),
+					atol(argv[5]));
 	if (argc >= 4 && !strcmp(argv[1], "daxchurn"))
 		return do_daxchurn(argv[2], atol(argv[3]), argc >= 5 ? atol(argv[4]) : 30);
 	if (argc == 5 && !strcmp(argv[1], "daxmadv"))
@@ -1237,6 +1286,7 @@ int main(int argc, char **argv)
 		"usage: %s map <daxdev> <MB> <nid> | shared <daxdev> |\n"
 		"       anon <MB> [hold] | churn <MB> [secs] | daxmap <daxdev> <MB> <nid> [hold] |\n"
 		"       daxmaphold <daxdev> <MB> <nid> <hold_s> |\n"
+		"       daxmaprefault <daxdev> <MB> <nid> <hold_s> |\n"
 		"       daxchurn <daxdev> <MB> [secs] | daxmadv <daxdev> <MB> <pageout|cold|free> |\n"
 		"       daxswap <daxdev> <nid> <MB> [evict_MB] |\n"
 		"       mbind <nid> <MB> [hold] | mbindns <nid> <MB> [hold] |\n"
