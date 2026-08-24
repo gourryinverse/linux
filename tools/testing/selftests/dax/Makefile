@@ -37,6 +37,33 @@ TEST_PROGS += dax_microbench.sh
 TEST_PROGS += tier_latency.sh
 TEST_FILES += collect_stats.sh dcperf_taobench.sh
 
+TEST_GEN_FILES += cram_readable_tool
+TEST_GEN_FILES += cram_fork_tool
+TEST_GEN_FILES += cram_ops_tool
+TEST_GEN_FILES += cram_swap_tool
+TEST_GEN_FILES += cram_pressure_tool
+TEST_GEN_FILES += cram_leak_tool
+TEST_GEN_FILES += cram_perf_tool
+TEST_GEN_FILES += cram_gate_tool
+TEST_GEN_FILES += cram_converge_tool
+TEST_GEN_FILES += cram_noalloc_tool
+TEST_GEN_FILES += cram_hot_tool
 include ../lib.mk
 
 TEST_PROGS += private_node_fence.sh
+TEST_PROGS += cram_node_basic.sh
+TEST_PROGS += cram_readable.sh
+TEST_PROGS += cram_swap.sh
+TEST_PROGS += cram_fork.sh
+TEST_PROGS += cram_ops.sh
+TEST_PROGS += cram_pressure.sh
+TEST_PROGS += cram_leak.sh
+TEST_PROGS += cram_perf.sh
+TEST_PROGS += cram_ratio.sh
+TEST_PROGS += cram_converge.sh
+TEST_PROGS += cram_noalloc.sh
+TEST_PROGS += cram_gate.sh
+TEST_PROGS += cram_hot.sh
+TEST_PROGS += cram_trim.sh
+TEST_PROGS += cram_control.sh
+TEST_PROGS += cram_balloon_migrate.sh
