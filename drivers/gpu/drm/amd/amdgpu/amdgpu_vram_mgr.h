@@ -88,5 +88,8 @@ static inline void amdgpu_vram_mgr_set_cleared(struct ttm_resource *res)
 
 int amdgpu_vram_mgr_query_address_block_info(struct amdgpu_vram_mgr *mgr,
 		uint64_t address, struct amdgpu_vram_block_info *info);
+int amdgpu_vram_mgr_find_donatable_range(struct amdgpu_vram_mgr *mgr, u64 start,
+					 u64 end, u64 block_size,
+					 u64 *range_start, u64 *range_size);
 
 #endif

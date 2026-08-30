@@ -429,6 +429,92 @@ out:
 	return ret;
 }
 
+static bool amdgpu_vram_mgr_range_reserved(struct amdgpu_vram_mgr *mgr,
+					   u64 start, u64 end)
+{
+	struct amdgpu_vram_mgr_resource *vres;
+	struct amdgpu_vram_reservation *rsv;
+	struct gpu_buddy_block *block;
+
+	list_for_each_entry(rsv, &mgr->reservations_pending, blocks)
+		if (start < rsv->start + rsv->size && rsv->start < end)
+			return true;
+
+	list_for_each_entry(rsv, &mgr->reserved_pages, blocks)
+		if (start < rsv->start + rsv->size && rsv->start < end)
+			return true;
+
+	list_for_each_entry(vres, &mgr->allocated_vres_list, vres_node) {
+		struct ttm_buffer_object *bo = vres->base.bo;
+
+		/* Movable user BOs can be evicted when donation is requested. */
+		if (!bo || (!READ_ONCE(bo->pin_count) &&
+			    bo->type != ttm_bo_type_kernel))
+			continue;
+
+		list_for_each_entry(block, &vres->blocks, link) {
+			u64 block_start = amdgpu_vram_mgr_block_start(block);
+			u64 block_end = block_start +
+					amdgpu_vram_mgr_block_size(block);
+
+			if (start < block_end && block_start < end)
+				return true;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * amdgpu_vram_mgr_find_donatable_range - find an aligned movable VRAM range
+ * @mgr: VRAM manager
+ * @start: first permitted VRAM offset
+ * @end: end of permitted VRAM offsets, exclusive
+ * @block_size: system memory block size
+ * @range_start: returned start offset
+ * @range_size: returned size
+ *
+ * Find the largest block-aligned range which does not overlap a pinned or
+ * kernel BO or a VRAM-manager reservation.  Movable user BOs are deliberately
+ * ignored: the donation guard will evict them when a block is donated.
+ */
+int amdgpu_vram_mgr_find_donatable_range(struct amdgpu_vram_mgr *mgr, u64 start,
+					 u64 end, u64 block_size,
+					 u64 *range_start, u64 *range_size)
+{
+	u64 best_start = 0, best_size = 0, run_start = start;
+	u64 offset;
+
+	if (!block_size || start >= end ||
+	    !IS_ALIGNED(end - start, block_size))
+		return -EINVAL;
+
+	mutex_lock(&mgr->lock);
+	for (offset = start; offset < end; offset += block_size) {
+		if (amdgpu_vram_mgr_range_reserved(mgr, offset,
+						   offset + block_size)) {
+			u64 run_size = offset - run_start;
+
+			if (run_size > best_size) {
+				best_start = run_start;
+				best_size = run_size;
+			}
+			run_start = offset + block_size;
+		}
+	}
+	if (end - run_start > best_size) {
+		best_start = run_start;
+		best_size = end - run_start;
+	}
+	mutex_unlock(&mgr->lock);
+
+	if (!best_size)
+		return -ENOSPC;
+	*range_start = best_start;
+	*range_size = best_size;
+	return 0;
+}
+
 /**
  * amdgpu_vram_mgr_new - allocate new ranges
  *
