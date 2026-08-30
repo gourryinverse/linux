@@ -44,6 +44,7 @@
 #include <drm/drm_probe_helper.h>
 #include <drm/amdgpu_drm.h>
 #include <linux/device.h>
+#include <linux/device/devres.h>
 #include <linux/vgaarb.h>
 #include <linux/vga_switcheroo.h>
 #include <linux/efi.h>
@@ -78,6 +79,7 @@
 #include "amdgpu_reset.h"
 #include "amdgpu_virt.h"
 #include "amdgpu_dev_coredump.h"
+#include "amdgpu_mem_donation.h"
 
 #include <linux/suspend.h>
 #include <drm/task_barrier.h>
@@ -496,16 +498,160 @@ static ssize_t carveout_store(struct device *dev,
 }
 static DEVICE_ATTR_RW(carveout);
 
+/**
+ * DOC: uma/donated_memory_bytes
+ *
+ * This file controls how many bytes of the firmware UMA carveout are owned by
+ * Linux as System RAM.  The GPU owns the complete carveout after probe.  A
+ * write may increase or decrease the donated amount at runtime.  Values must
+ * be exact multiples of uma/donation_block_size_bytes and must not exceed
+ * uma/donatable_memory_bytes.
+ *
+ * Donated memory is onlined into ZONE_MOVABLE.  Multi-block requests commit
+ * one block at a time.  Returning memory can stop if Linux cannot migrate a
+ * block; the value reported after an error is the ownership actually reached.
+ * Direct online or offline transitions through the donated blocks'
+ * memoryX/state files are rejected; use this aggregate control instead.
+ */
+static ssize_t donated_memory_bytes_show(struct device *dev,
+					 struct device_attribute *attr, char *buf)
+{
+	struct amdgpu_device *adev = drm_to_adev(dev_get_drvdata(dev));
+
+	return sysfs_emit(buf, "%llu\n", amdgpu_mem_donation_get_size(adev));
+}
+
+static ssize_t donated_memory_bytes_store(struct device *dev,
+					  struct device_attribute *attr,
+					  const char *buf, size_t count)
+{
+	struct amdgpu_device *adev = drm_to_adev(dev_get_drvdata(dev));
+	u64 size;
+	int r;
+
+	r = kstrtou64(buf, 0, &size);
+	if (r)
+		return r;
+	r = amdgpu_mem_donation_set_size(adev, size);
+	return r ? r : count;
+}
+static DEVICE_ATTR_RW(donated_memory_bytes);
+
+/**
+ * DOC: uma/quarantined_memory_bytes
+ *
+ * This read-only file reports memory protected by an exact GPU guard but not
+ * currently exposed as System RAM.  Quarantine records an interrupted cache
+ * or ownership transition without releasing the exclusion guard.  Repeating a
+ * write to uma/donated_memory_bytes repairs the boundary block toward the
+ * requested ownership before processing more blocks.
+ */
+static ssize_t
+quarantined_memory_bytes_show(struct device *dev,
+			      struct device_attribute *attr, char *buf)
+{
+	struct amdgpu_device *adev = drm_to_adev(dev_get_drvdata(dev));
+
+	return sysfs_emit(buf, "%llu\n",
+			  amdgpu_mem_donation_get_quarantined_size(adev));
+}
+static DEVICE_ATTR_RO(quarantined_memory_bytes);
+
+/**
+ * DOC: uma/donation_block_size_bytes
+ *
+ * This read-only file reports the runtime system memory block size in bytes.
+ * All writes to uma/donated_memory_bytes must be multiples of this value.
+ * The value comes from the memory-hotplug core and is not assumed to be the
+ * same on every machine.
+ */
+static ssize_t
+donation_block_size_bytes_show(struct device *dev,
+			       struct device_attribute *attr, char *buf)
+{
+	struct amdgpu_device *adev = drm_to_adev(dev_get_drvdata(dev));
+
+	return sysfs_emit(buf, "%llu\n", adev->mem_donation.block_size);
+}
+static DEVICE_ATTR_RO(donation_block_size_bytes);
+
+/**
+ * DOC: uma/donatable_memory_bytes
+ *
+ * This read-only file reports the maximum number of bytes that can be donated
+ * on this device.  The driver chooses a system-memory-block-aligned range that
+ * avoids pinned and driver-reserved VRAM allocations during initialization.
+ */
+static ssize_t
+donatable_memory_bytes_show(struct device *dev,
+			    struct device_attribute *attr, char *buf)
+{
+	struct amdgpu_device *adev = drm_to_adev(dev_get_drvdata(dev));
+
+	return sysfs_emit(buf, "%llu\n", adev->mem_donation.range_size);
+}
+static DEVICE_ATTR_RO(donatable_memory_bytes);
+
+/**
+ * DOC: uma/donation_range_start
+ *
+ * This read-only file reports the CPU physical start address of the donatable
+ * range in hexadecimal.  Donation grows downwards from the high end of this
+ * range so that the donated portion remains contiguous.
+ */
+static ssize_t donation_range_start_show(struct device *dev,
+					 struct device_attribute *attr, char *buf)
+{
+	struct amdgpu_device *adev = drm_to_adev(dev_get_drvdata(dev));
+
+	return sysfs_emit(buf, "%#llx\n",
+			  adev->mem_donation.range_phys_start);
+}
+static DEVICE_ATTR_RO(donation_range_start);
+
 static struct attribute *amdgpu_uma_attrs[] = {
 	&dev_attr_carveout.attr,
 	&dev_attr_carveout_options.attr,
+	&dev_attr_donated_memory_bytes.attr,
+	&dev_attr_quarantined_memory_bytes.attr,
+	&dev_attr_donation_block_size_bytes.attr,
+	&dev_attr_donatable_memory_bytes.attr,
+	&dev_attr_donation_range_start.attr,
 	NULL
 };
 
+static umode_t amdgpu_uma_attrs_is_visible(struct kobject *kobj,
+					   struct attribute *attr, int n)
+{
+	struct amdgpu_device *adev = drm_to_adev(dev_get_drvdata(kobj_to_dev(kobj)));
+
+	if (attr == &dev_attr_carveout.attr ||
+	    attr == &dev_attr_carveout_options.attr)
+		return adev->uma_info.num_entries ? attr->mode : 0;
+
+	return adev->mem_donation.supported ? attr->mode : 0;
+}
+
 const struct attribute_group amdgpu_uma_attr_group = {
 	.name = "uma",
-	.attrs = amdgpu_uma_attrs
+	.attrs = amdgpu_uma_attrs,
+	.is_visible = amdgpu_uma_attrs_is_visible,
 };
+
+static void amdgpu_uma_sysfs_release(void *data)
+{
+	struct amdgpu_device *adev = data;
+	struct amdgpu_uma_carveout_info *uma_info = &adev->uma_info;
+
+	device_remove_group(adev->dev, &amdgpu_uma_attr_group);
+	uma_info->sysfs_registered = false;
+	amdgpu_mem_donation_fini(adev);
+
+	if (uma_info->num_entries) {
+		mutex_destroy(&uma_info->update_lock);
+		uma_info->num_entries = 0;
+	}
+}
 
 static void amdgpu_uma_sysfs_init(struct amdgpu_device *adev)
 {
@@ -514,41 +660,54 @@ static void amdgpu_uma_sysfs_init(struct amdgpu_device *adev)
 	if (!(adev->flags & AMD_IS_APU))
 		return;
 
-	if (!amdgpu_acpi_is_set_uma_allocation_size_supported())
+	rc = amdgpu_mem_donation_init(adev);
+	if (rc)
+		drm_dbg(adev_to_drm(adev),
+			"Failed to initialize UMA memory donation: %d\n", rc);
+
+	if (amdgpu_acpi_is_set_uma_allocation_size_supported()) {
+		rc = amdgpu_atomfirmware_get_uma_carveout_info(adev, &adev->uma_info);
+		if (rc) {
+			drm_dbg(adev_to_drm(adev),
+				"Failed to parse UMA carveout info from VBIOS: %d\n",
+				rc);
+		} else {
+			mutex_init(&adev->uma_info.update_lock);
+		}
+	}
+
+	if (!adev->uma_info.num_entries && !adev->mem_donation.supported)
 		return;
 
-	rc = amdgpu_atomfirmware_get_uma_carveout_info(adev, &adev->uma_info);
+	rc = device_add_group(adev->dev, &amdgpu_uma_attr_group);
+	if (!rc) {
+		adev->uma_info.sysfs_registered = true;
+		rc = devm_add_action_or_reset(adev->dev,
+					      amdgpu_uma_sysfs_release, adev);
+		if (rc) {
+			drm_dbg(adev_to_drm(adev),
+				"Failed to manage UMA sysfs interfaces %d\n", rc);
+			return;
+		}
+	}
 	if (rc) {
 		drm_dbg(adev_to_drm(adev),
-			"Failed to parse UMA carveout info from VBIOS: %d\n", rc);
-		goto out_info;
+			"Failed to add UMA sysfs interfaces %d\n", rc);
+		amdgpu_mem_donation_fini(adev);
+		if (adev->uma_info.num_entries) {
+			mutex_destroy(&adev->uma_info.update_lock);
+			adev->uma_info.num_entries = 0;
+		}
 	}
-
-	mutex_init(&adev->uma_info.update_lock);
-
-	rc = devm_device_add_group(adev->dev, &amdgpu_uma_attr_group);
-	if (rc) {
-		drm_dbg(adev_to_drm(adev), "Failed to add UMA carveout sysfs interfaces %d\n", rc);
-		goto out_attr;
-	}
-
-	return;
-
-out_attr:
-	mutex_destroy(&adev->uma_info.update_lock);
-out_info:
-	return;
 }
 
 static void amdgpu_uma_sysfs_fini(struct amdgpu_device *adev)
 {
 	struct amdgpu_uma_carveout_info *uma_info = &adev->uma_info;
 
-	if (!amdgpu_acpi_is_set_uma_allocation_size_supported())
-		return;
-
-	mutex_destroy(&uma_info->update_lock);
-	uma_info->num_entries = 0;
+	/* sysfs_remove_group() synchronously drains active attribute callbacks. */
+	if (uma_info->sysfs_registered)
+		devm_release_action(adev->dev, amdgpu_uma_sysfs_release, adev);
 }
 
 static void amdgpu_device_get_pcie_info(struct amdgpu_device *adev);
@@ -4083,6 +4242,9 @@ fence_driver_init:
 	if (adev->init_lvl->level == AMDGPU_INIT_LEVEL_MINIMAL_XGMI)
 		amdgpu_xgmi_reset_on_init(adev);
 
+	/* Detect runtime PM before creating interfaces whose visibility uses it. */
+	amdgpu_device_detect_runtime_pm_mode(adev);
+
 	/*
 	 * Place those sysfs registering after `late_init`. As some of those
 	 * operations performed in `late_init` might affect the sysfs
@@ -4164,7 +4326,8 @@ static void amdgpu_device_unmap_mmio(struct amdgpu_device *adev)
 	adev->mman.aper_base_kaddr = NULL;
 
 	/* Memory manager related */
-	if (!adev->gmc.xgmi.connected_to_cpu && !adev->gmc.is_app_apu) {
+	if (!adev->gmc.xgmi.connected_to_cpu && !adev->gmc.is_app_apu &&
+	    !adev->mem_donation.wc_released) {
 		arch_phys_wc_del(adev->gmc.vram_mtrr);
 		arch_io_free_memtype_wc(adev->gmc.aper_base, adev->gmc.aper_size);
 	}
@@ -4357,13 +4520,26 @@ static int amdgpu_device_pm_notifier(struct notifier_block *nb, unsigned long mo
 				     void *data)
 {
 	struct amdgpu_device *adev = container_of(nb, struct amdgpu_device, pm_nb);
+	int r;
 
 	switch (mode) {
 	case PM_HIBERNATION_PREPARE:
+		r = amdgpu_mem_donation_pm_prepare(adev);
+		if (r)
+			return notifier_from_errno(r);
 		adev->in_s4 = true;
+		break;
+	case PM_SUSPEND_PREPARE:
+		r = amdgpu_mem_donation_pm_prepare(adev);
+		if (r)
+			return notifier_from_errno(r);
 		break;
 	case PM_POST_HIBERNATION:
 		adev->in_s4 = false;
+		amdgpu_mem_donation_pm_restore(adev);
+		break;
+	case PM_POST_SUSPEND:
+		amdgpu_mem_donation_pm_restore(adev);
 		break;
 	}
 
@@ -5777,6 +5953,7 @@ int amdgpu_device_gpu_recover(struct amdgpu_device *adev,
 	struct amdgpu_hive_info *hive = NULL;
 	int r = 0;
 	bool need_emergency_restart = false;
+	u64 donation_restore_size = 0;
 	/* save the pasid here as the job may be freed before the end of the reset */
 	int pasid = job ? job->pasid : -EINVAL;
 
@@ -5808,6 +5985,14 @@ int amdgpu_device_gpu_recover(struct amdgpu_device *adev,
 
 		ksys_sync_helper();
 		emergency_restart();
+	}
+
+	r = amdgpu_mem_donation_transition_begin(adev,
+						 &donation_restore_size, false);
+	if (r) {
+		dev_err(adev->dev,
+			"GPU recovery blocked by donated System RAM: %d\n", r);
+		return r;
 	}
 
 	dev_info(adev->dev, "GPU %s begin!. Source:  %d\n",
@@ -5897,6 +6082,9 @@ end_reset:
 
 		amdgpu_vm_put_task_info(ti);
 	}
+
+	amdgpu_mem_donation_transition_end(adev, donation_restore_size,
+					   !r && !need_emergency_restart);
 
 	return r;
 }
@@ -6269,6 +6457,7 @@ pci_ers_result_t amdgpu_pci_error_detected(struct pci_dev *pdev, pci_channel_sta
 		amdgpu_get_xgmi_hive(adev);
 	struct amdgpu_reset_context reset_context;
 	struct list_head device_list;
+	int r;
 
 	dev_info(adev->dev, "PCI error: detected callback!!\n");
 
@@ -6281,6 +6470,13 @@ pci_ers_result_t amdgpu_pci_error_detected(struct pci_dev *pdev, pci_channel_sta
 	case pci_channel_io_frozen:
 		/* Fatal error, prepare for slot reset */
 		dev_info(adev->dev, "pci_channel_io_frozen: state(%d)!!\n", state);
+		r = amdgpu_mem_donation_pci_prepare(adev);
+		if (r) {
+			dev_crit(adev->dev,
+				 "PCI recovery blocked by donated System RAM: %d\n",
+				 r);
+			return PCI_ERS_RESULT_DISCONNECT;
+		}
 		if (hive) {
 			/* Hive devices should be able to support FW based
 			 * link reset on other devices, if not return.
@@ -6314,6 +6510,7 @@ pci_ers_result_t amdgpu_pci_error_detected(struct pci_dev *pdev, pci_channel_sta
 	case pci_channel_io_perm_failure:
 		/* Permanent error, prepare for device removal */
 		dev_info(adev->dev, "pci_channel_io_perm_failure: state(%d)!!\n", state);
+		amdgpu_mem_donation_pci_abort(adev);
 		return PCI_ERS_RESULT_DISCONNECT;
 	}
 
@@ -6489,6 +6686,8 @@ void amdgpu_pci_resume(struct pci_dev *pdev)
 		mutex_unlock(&hive->hive_lock);
 		amdgpu_put_xgmi_hive(hive);
 	}
+
+	amdgpu_mem_donation_pci_restore(adev);
 }
 
 static void amdgpu_device_cache_switch_state(struct amdgpu_device *adev)

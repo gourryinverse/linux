@@ -34,6 +34,7 @@
 
 #include <linux/cc_platform.h>
 #include <linux/console.h>
+#include <linux/delay.h>
 #include <linux/dynamic_debug.h>
 #include <linux/module.h>
 #include <linux/mmu_notifier.h>
@@ -47,6 +48,7 @@
 #include "amdgpu_drv.h"
 #include "amdgpu_fdinfo.h"
 #include "amdgpu_irq.h"
+#include "amdgpu_mem_donation.h"
 #include "amdgpu_psp.h"
 #include "amdgpu_ras.h"
 #include "amdgpu_reset.h"
@@ -2553,12 +2555,30 @@ amdgpu_pci_shutdown(struct pci_dev *pdev)
 {
 	struct drm_device *dev = pci_get_drvdata(pdev);
 	struct amdgpu_device *adev = drm_to_adev(dev);
+	u64 donation_restore_size;
+	int r;
 
-	if (amdgpu_ras_intr_triggered())
+	/* PM preparation already returned the donation before S4 poweroff. */
+	if (adev->in_s4 && adev->in_suspend)
 		return;
 
-	/* device maybe not resumed here, return immediately in this case */
-	if (adev->in_s4 && adev->in_suspend)
+	for (;;) {
+		r = amdgpu_mem_donation_shutdown_begin(adev,
+						       &donation_restore_size);
+		if (!r)
+			break;
+		if (amdgpu_mem_donation_shutdown_safe(adev)) {
+			dev_warn(adev->dev,
+				 "continuing shutdown with the VRAM guard held after cache tracking restoration failed: %d\n",
+				 r);
+			break;
+		}
+		dev_crit_ratelimited(adev->dev,
+				     "waiting to return donated System RAM during shutdown: %d\n",
+				     r);
+		msleep(1000);
+	}
+	if (amdgpu_ras_intr_triggered())
 		return;
 
 	/* if we are running in a VM, make sure the device
