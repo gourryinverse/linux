@@ -2343,6 +2343,7 @@ int set_memory_np(unsigned long addr, int numpages)
 {
 	return change_page_attr_clear(&addr, numpages, __pgprot(_PAGE_PRESENT), 0);
 }
+EXPORT_SYMBOL_GPL(set_memory_np);
 
 int set_memory_np_noalias(unsigned long addr, int numpages)
 {
@@ -2355,6 +2356,7 @@ int set_memory_p(unsigned long addr, int numpages)
 {
 	return change_page_attr_set(&addr, numpages, __pgprot(_PAGE_PRESENT), 0);
 }
+EXPORT_SYMBOL_GPL(set_memory_p);
 
 int set_memory_4k(unsigned long addr, int numpages)
 {
@@ -2362,6 +2364,7 @@ int set_memory_4k(unsigned long addr, int numpages)
 					__pgprot(_PAGE_KERNEL_4K),
 					__pgprot(0), 1, 0, NULL);
 }
+EXPORT_SYMBOL_GPL(set_memory_4k);
 
 int set_memory_nonglobal(unsigned long addr, int numpages)
 {
