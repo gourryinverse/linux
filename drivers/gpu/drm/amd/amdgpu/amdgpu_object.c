@@ -489,6 +489,72 @@ error:
 }
 
 /**
+ * amdgpu_bo_create_kernel_at_evict - pin a kernel BO at an exact VRAM range
+ * @adev: amdgpu device object
+ * @offset: VRAM offset
+ * @size: BO size
+ * @bo_ptr: returned BO
+ *
+ * Unlike amdgpu_bo_create_kernel_at(), this helper validates an exact
+ * placement and therefore evicts movable occupants of the requested range.
+ * Pinned occupants make the operation fail.  The returned BO remains pinned
+ * and acts as an ownership guard for the range.
+ */
+int
+amdgpu_bo_create_kernel_at_evict(struct amdgpu_device *adev, u64 offset,
+				 u64 size, struct amdgpu_bo **bo_ptr)
+{
+	struct ttm_operation_ctx ctx = { false, false };
+	unsigned int i;
+	long wait;
+	int r;
+
+	offset &= PAGE_MASK;
+	size = ALIGN(size, PAGE_SIZE);
+
+	r = amdgpu_bo_create_reserved(adev, size, PAGE_SIZE,
+				      AMDGPU_GEM_DOMAIN_VRAM, bo_ptr, NULL, NULL);
+	if (r)
+		return r;
+	if (!*bo_ptr)
+		return 0;
+
+	/* create_reserved() returns a reserved and pinned BO. */
+	amdgpu_bo_unpin(*bo_ptr);
+	for (i = 0; i < (*bo_ptr)->placement.num_placement; ++i) {
+		(*bo_ptr)->placements[i].fpfn = offset >> PAGE_SHIFT;
+		(*bo_ptr)->placements[i].lpfn = (offset + size) >> PAGE_SHIFT;
+	}
+
+	r = ttm_bo_validate(&(*bo_ptr)->tbo, &(*bo_ptr)->placement, &ctx);
+	if (r)
+		goto error;
+
+	r = amdgpu_bo_pin(*bo_ptr, AMDGPU_GEM_DOMAIN_VRAM);
+	if (r)
+		goto error;
+
+	/* The VRAM-to-VRAM placement move may complete asynchronously. */
+	wait = dma_resv_wait_timeout((*bo_ptr)->tbo.base.resv,
+				     DMA_RESV_USAGE_KERNEL, false,
+				     MAX_SCHEDULE_TIMEOUT);
+	if (wait <= 0) {
+		r = wait ?: -ETIMEDOUT;
+		goto error_unpin;
+	}
+
+	amdgpu_bo_unreserve(*bo_ptr);
+	return 0;
+
+error_unpin:
+	amdgpu_bo_unpin(*bo_ptr);
+error:
+	amdgpu_bo_unreserve(*bo_ptr);
+	amdgpu_bo_unref(bo_ptr);
+	return r;
+}
+
+/**
  * amdgpu_bo_free_kernel - free BO for kernel use
  *
  * @bo: amdgpu BO to free

@@ -269,6 +269,9 @@ int amdgpu_bo_create_isp_user(struct amdgpu_device *adev,
 int amdgpu_bo_create_kernel_at(struct amdgpu_device *adev,
 			       uint64_t offset, uint64_t size,
 			       struct amdgpu_bo **bo_ptr, void **cpu_addr);
+int
+amdgpu_bo_create_kernel_at_evict(struct amdgpu_device *adev, u64 offset,
+				 u64 size, struct amdgpu_bo **bo_ptr);
 int amdgpu_bo_create_user(struct amdgpu_device *adev,
 			  struct amdgpu_bo_param *bp,
 			  struct amdgpu_bo_user **ubo_ptr);
