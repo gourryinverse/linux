@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0
+amd_mem_donation_cpu
+amd_mem_donation_drm_hip
+amd_mem_donation_hip
+amd_mem_donation_userptr_hip
+__pycache__/
