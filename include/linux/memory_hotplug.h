@@ -60,6 +60,13 @@ typedef int __bitwise mhp_t;
 #define MHP_NID_IS_MGID		((__force mhp_t)BIT(2))
 
 /*
+ * Fail the memory-add operation if the requested online type cannot be
+ * applied. Callers must add one memory block at a time so the core can roll
+ * back the addition without exposing a partially onlined range.
+ */
+#define MHP_ONLINE_REQUIRED	((__force mhp_t)BIT(3))
+
+/*
  * Extended parameters for memory hotplug:
  * altmap: alternative allocator for memmap array (optional)
  * pgprot: page protection flags to apply to newly created page tables

@@ -1343,6 +1343,16 @@ static int online_memory_block(struct memory_block *mem, void *arg)
 	return device_online(&mem->dev);
 }
 
+#ifdef CONFIG_MEMORY_HOTREMOVE
+static int try_remove_memory(u64 start, u64 size);
+static int try_remove_memory_keep_resource(u64 start, u64 size);
+#else
+static int try_remove_memory_keep_resource(u64 start, u64 size)
+{
+	return -EOPNOTSUPP;
+}
+#endif
+
 #ifndef arch_supports_memmap_on_memory
 static inline bool arch_supports_memmap_on_memory(unsigned long vmemmap_size)
 {
@@ -1508,6 +1518,13 @@ static int __add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags,
 	ret = check_hotplug_memory_range(start, size);
 	if (ret)
 		return ret;
+	if (mhp_flags & MHP_ONLINE_REQUIRED) {
+		if (!IS_ENABLED(CONFIG_MEMORY_HOTREMOVE))
+			return -EOPNOTSUPP;
+		if (size != memory_block_size_bytes() ||
+		    online_type == MMOP_OFFLINE)
+			return -EINVAL;
+	}
 
 	if (mhp_flags & MHP_NID_IS_MGID) {
 		group = memory_group_find_by_id(nid);
@@ -1575,15 +1592,34 @@ static int __add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags,
 	/* device_online() will take the lock when calling online_pages() */
 	mem_hotplug_done();
 
+	/* A required online operation must succeed before resources are merged. */
+	if (online_type != MMOP_OFFLINE &&
+	    (mhp_flags & MHP_ONLINE_REQUIRED)) {
+		int online_ret;
+
+		online_ret = walk_memory_blocks(start, size, &online_type,
+						online_memory_block);
+		if (online_ret) {
+			/*
+			 * MHP_ONLINE_REQUIRED is restricted to one block, so a
+			 * failed device_online() leaves the complete range offline.
+			 */
+			if (WARN_ON_ONCE(try_remove_memory_keep_resource(start, size)))
+				return 0;
+			return online_ret;
+		}
+	}
+
 	/*
 	 * In case we're allowed to merge the resource, flag it and trigger
-	 * merging now that adding succeeded.
+	 * merging now that adding and any required onlining succeeded.
 	 */
 	if (mhp_flags & MHP_MERGE_RESOURCE)
 		merge_system_ram_resource(res);
 
-	/* online pages if requested */
-	if (online_type != MMOP_OFFLINE)
+	/* Preserve best-effort auto-online semantics for existing callers. */
+	if (online_type != MMOP_OFFLINE &&
+	    !(mhp_flags & MHP_ONLINE_REQUIRED))
 		walk_memory_blocks(start, size, &online_type,
 				   online_memory_block);
 
@@ -1678,7 +1714,6 @@ int __add_memory_driver_managed(int nid, u64 start, u64 size,
 	    strstr(resource_name, "System RAM (") != resource_name ||
 	    resource_name[strlen(resource_name) - 1] != ')')
 		return -EINVAL;
-
 	if (online_type < MMOP_OFFLINE || online_type > MMOP_ONLINE_MOVABLE)
 		return -EINVAL;
 
@@ -1698,7 +1733,7 @@ out_unlock:
 	unlock_device_hotplug();
 	return rc;
 }
-EXPORT_SYMBOL_FOR_MODULES(__add_memory_driver_managed, "kmem");
+EXPORT_SYMBOL_FOR_MODULES(__add_memory_driver_managed, "amdgpu,kmem");
 
 /**
  * add_memory_driver_managed - add driver-managed memory
@@ -2283,7 +2318,7 @@ static int memory_blocks_have_altmaps(u64 start, u64 size)
 	return 1;
 }
 
-static int try_remove_memory(u64 start, u64 size)
+static int __try_remove_memory(u64 start, u64 size, bool release_resource)
 {
 	int rc, nid = NUMA_NO_NODE;
 
@@ -2327,13 +2362,24 @@ static int try_remove_memory(u64 start, u64 size)
 	if (IS_ENABLED(CONFIG_ARCH_KEEP_MEMBLOCK))
 		memblock_remove(start, size);
 
-	release_mem_region_adjustable(start, size);
+	if (release_resource)
+		release_mem_region_adjustable(start, size);
 
 	if (nid != NUMA_NO_NODE)
 		try_offline_node(nid);
 
 	mem_hotplug_done();
 	return 0;
+}
+
+static int try_remove_memory(u64 start, u64 size)
+{
+	return __try_remove_memory(start, size, true);
+}
+
+static int try_remove_memory_keep_resource(u64 start, u64 size)
+{
+	return __try_remove_memory(start, size, false);
 }
 
 /**
