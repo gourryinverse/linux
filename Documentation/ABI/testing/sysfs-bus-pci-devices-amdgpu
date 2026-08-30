@@ -1,0 +1,62 @@
+What:		/sys/bus/pci/devices/.../uma/donated_memory_bytes
+Date:		August 2026
+Contact:	Gregory Price <gourry@gourry.net>
+Contact:	AMD GPU maintainers <amd-gfx@lists.freedesktop.org>
+Description:
+		The amount of the device's firmware-reserved UMA carveout, in
+		bytes, that is currently owned by Linux as System RAM.
+
+		Writing a larger or smaller value transfers memory from the GPU
+		to Linux or from Linux back to the GPU.  Values must be multiples
+		of donation_block_size_bytes and must not exceed
+		donatable_memory_bytes.  A multi-block request commits one block
+		at a time.  If a later block cannot be transferred, the write
+		returns an error and a subsequent read reports the amount actually
+		transferred.  Donated blocks are onlined into ZONE_MOVABLE.
+
+		Direct state changes through the donated blocks' memoryX/state
+		attributes are rejected.  Ownership must be changed through this
+		attribute so the GPU exclusion guard, CPU mappings, and memory
+		hotplug state remain synchronized.
+
+		The attribute is present only when the amdgpu device supports the
+		experimental reversible UMA donation mechanism.
+
+What:		/sys/bus/pci/devices/.../uma/quarantined_memory_bytes
+Date:		August 2026
+Contact:	Gregory Price <gourry@gourry.net>
+Contact:	AMD GPU maintainers <amd-gfx@lists.freedesktop.org>
+Description:
+		The amount, in bytes, protected by an exact GPU allocation guard
+		but not currently exposed as System RAM.  A nonzero value records
+		an incomplete cache-attribute or ownership transition.  Repeating
+		a write to donated_memory_bytes first repairs the boundary block
+		toward the requested owner.
+
+What:		/sys/bus/pci/devices/.../uma/donation_block_size_bytes
+Date:		August 2026
+Contact:	Gregory Price <gourry@gourry.net>
+Contact:	AMD GPU maintainers <amd-gfx@lists.freedesktop.org>
+Description:
+		The memory-hotplug block size, in bytes, used as the transfer
+		granularity for donated_memory_bytes.  The value is determined at
+		runtime and is not assumed to be identical across systems.
+
+What:		/sys/bus/pci/devices/.../uma/donatable_memory_bytes
+Date:		August 2026
+Contact:	Gregory Price <gourry@gourry.net>
+Contact:	AMD GPU maintainers <amd-gfx@lists.freedesktop.org>
+Description:
+		The maximum amount, in bytes, of the device's firmware-reserved UMA
+		carveout which can be donated.  The driver selects a
+		memory-block-aligned physical interval that does not overlap pinned,
+		kernel, or VRAM-manager-reserved allocations during initialization.
+
+What:		/sys/bus/pci/devices/.../uma/donation_range_start
+Date:		August 2026
+Contact:	Gregory Price <gourry@gourry.net>
+Contact:	AMD GPU maintainers <amd-gfx@lists.freedesktop.org>
+Description:
+		The CPU physical start address of the donatable interval, reported
+		in hexadecimal.  Donation grows down from the interval's high end,
+		keeping the Linux-owned portion contiguous.

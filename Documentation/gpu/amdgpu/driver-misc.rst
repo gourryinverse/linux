@@ -154,3 +154,85 @@ uma/carveout
 
 .. kernel-doc:: drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
    :doc: uma/carveout
+
+Reversible UMA memory donation
+==============================
+
+On supported APUs, part of the firmware-reserved UMA carveout can be moved
+between GPU ownership and Linux System RAM at runtime.  The complete carveout
+starts under GPU ownership, and no ownership transfer occurs until a nonzero
+target is written to the donated-size sysfs file.  Donated memory is added as
+driver-managed System RAM on the physical-address-selected NUMA node and is
+explicitly onlined into ``ZONE_MOVABLE``; a private NUMA node is not required.
+
+The initial implementation is limited to x86-64 kernels with memory hotplug
+and hot-remove.  It excludes application APUs, passthrough devices,
+CPU-connected XGMI devices, systems with host memory encryption, devices using
+AMDGPU runtime power management, and devices without a CPU-visible aperture.
+These are conservative implementation filters, not a firmware capability
+contract for reclaimable UMA.  The raw-offset ``debugfs/amdgpu_vram`` file is
+also omitted because it is not constrained by TTM ownership and could address
+donated blocks directly.
+
+The unit of every transaction is the memory-hotplug block size reported by the
+running kernel.  The driver does not assume a fixed block size.  It advertises
+the largest eligible block-aligned VRAM interval found at initialization, and
+donation grows from the high end of that interval.  Movable GPU buffer objects
+are evicted as needed, while pinned or driver-reserved occupants make a
+transaction fail safely.
+
+Returning memory first migrates one block's pages, takes that block offline,
+and removes it from Linux.  Multi-block writes commit one block at a time.  If
+a later block cannot transition, the write returns an error and the reported
+donated size reflects the completed prefix.  A failed cache-attribute change
+keeps the exact GPU guard and reports the block as quarantined until a later
+write repairs it toward the requested ownership.
+
+AMDGPU retains authority over the online state of its donated memory blocks.
+Their generic ``memoryX/state`` files remain readable for observation, but a
+direct attempt to take an online donated block offline is rejected with
+``EBUSY``.  No ownership-changing state transition is permitted through the
+generic interface; it must be requested through ``uma/donated_memory_bytes``
+so GPU exclusion, CPU mapping attributes, and memory hotplug remain one
+transaction.
+
+System suspend and hibernation preparation return all donated blocks before
+device power transitions begin.  The sleep transition is vetoed if return is
+blocked, and the prior target is requested again after resume.  Runtime GPU
+recovery uses the same exclusion: it returns donated memory before reset and
+redonates only after successful recovery.  PCI error recovery also returns the
+memory before a slot reset and restores the prior target after resume.  Device
+removal likewise needs all donated memory to be returnable.  Teardown waits
+rather than dismantling the GPU memory manager while System RAM remains live,
+so unbind or shutdown can block until a pin is released.  Users should write
+``0`` before unbinding or physically removing a device.
+
+uma/donated_memory_bytes
+------------------------
+
+.. kernel-doc:: drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+   :doc: uma/donated_memory_bytes
+
+uma/quarantined_memory_bytes
+----------------------------
+
+.. kernel-doc:: drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+   :doc: uma/quarantined_memory_bytes
+
+uma/donation_block_size_bytes
+-----------------------------
+
+.. kernel-doc:: drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+   :doc: uma/donation_block_size_bytes
+
+uma/donatable_memory_bytes
+--------------------------
+
+.. kernel-doc:: drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+   :doc: uma/donatable_memory_bytes
+
+uma/donation_range_start
+------------------------
+
+.. kernel-doc:: drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+   :doc: uma/donation_range_start

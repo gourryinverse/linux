@@ -22159,6 +22159,7 @@ S:	Supported
 B:	https://gitlab.freedesktop.org/drm/amd/-/issues
 C:	irc://irc.oftc.net/radeon
 T:	git https://gitlab.freedesktop.org/agd5f/linux.git
+F:	Documentation/ABI/testing/sysfs-bus-pci-devices-amdgpu
 F:	Documentation/gpu/amdgpu/
 F:	drivers/gpu/drm/amd/
 F:	drivers/gpu/drm/ci/xfails/amd*
