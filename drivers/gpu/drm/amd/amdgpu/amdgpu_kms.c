@@ -151,8 +151,6 @@ int amdgpu_driver_load_kms(struct amdgpu_device *adev, unsigned long flags)
 		goto out;
 	}
 
-	amdgpu_device_detect_runtime_pm_mode(adev);
-
 	/* Call ACPI methods: require modeset init
 	 * but failure is not fatal
 	 */

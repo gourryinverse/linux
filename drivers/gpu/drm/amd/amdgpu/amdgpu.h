@@ -43,6 +43,7 @@
 #include <linux/rbtree.h>
 #include <linux/hashtable.h>
 #include <linux/dma-fence.h>
+#include <linux/notifier.h>
 #include <linux/pci.h>
 
 #include <drm/ttm/ttm_bo.h>
@@ -724,13 +725,70 @@ struct amdgpu_uma_carveout_option {
  * @num_entries: Number of available options
  * @uma_option_index: The index of the option currently applied
  * @update_lock: Lock to serialize changes to the option
+ * @sysfs_registered: the UMA attribute group is installed
  * @entries: The array of carveout options
  */
 struct amdgpu_uma_carveout_info {
 	uint8_t num_entries;
 	uint8_t uma_option_index;
 	struct mutex update_lock;
+	bool sysfs_registered;
 	struct amdgpu_uma_carveout_option entries[MAX_UMA_OPTION_ENTRIES];
+};
+
+enum amdgpu_mem_donation_boundary_state {
+	AMDGPU_MEM_DONATION_BOUNDARY_NONE,
+	AMDGPU_MEM_DONATION_BOUNDARY_PRESENT,
+	AMDGPU_MEM_DONATION_BOUNDARY_NONPRESENT,
+	AMDGPU_MEM_DONATION_BOUNDARY_UNKNOWN,
+};
+
+enum amdgpu_mem_donation_lifecycle {
+	AMDGPU_MEM_DONATION_LIFECYCLE_NONE,
+	AMDGPU_MEM_DONATION_LIFECYCLE_RESET,
+	AMDGPU_MEM_DONATION_LIFECYCLE_PM,
+	AMDGPU_MEM_DONATION_LIFECYCLE_PCI,
+	AMDGPU_MEM_DONATION_LIFECYCLE_SHUTDOWN,
+};
+
+/**
+ * struct amdgpu_mem_donation - reversible ownership of an APU VRAM range
+ * @lock: serializes sysfs transactions
+ * @guards: exact-placement guard for every active block
+ * @block_size: runtime Linux memory block size
+ * @range_phys_start: CPU physical start of the donatable range
+ * @range_vram_start: VRAM-manager offset of the donatable range
+ * @range_size: maximum number of bytes which can be donated
+ * @donated_size: number of bytes currently owned by Linux
+ * @restore_size: donation target to restore after the active lifecycle event
+ * @memory_nb: blocks non-AMDGPU memory online/offline operations
+ * @hotplug_task: task temporarily authorized to change donated memory state
+ * @hotplug_events: memory-hotplug events authorized for @hotplug_task
+ * @nr_blocks: number of entries in @guards
+ * @active_blocks: guarded suffix containing System RAM or quarantine blocks
+ * @boundary_state: aperture state of the optional quarantined boundary block
+ * @lifecycle: device transition which currently excludes sysfs writes
+ * @supported: donation sysfs attributes are usable
+ * @wc_released: full-aperture PAT/MTRR reservation has been released
+ */
+struct amdgpu_mem_donation {
+	struct mutex lock; /* Serializes sysfs ownership transactions. */
+	struct amdgpu_bo **guards;
+	u64 block_size;
+	u64 range_phys_start;
+	u64 range_vram_start;
+	u64 range_size;
+	u64 donated_size;
+	u64 restore_size;
+	struct notifier_block memory_nb;
+	struct task_struct *hotplug_task;
+	unsigned long hotplug_events;
+	unsigned int nr_blocks;
+	unsigned int active_blocks;
+	enum amdgpu_mem_donation_boundary_state boundary_state;
+	enum amdgpu_mem_donation_lifecycle lifecycle;
+	bool supported;
+	bool wc_released;
 };
 
 struct amd_powerplay {
@@ -1193,6 +1251,7 @@ struct amdgpu_device {
 	struct amdgpu_uid *uid_info;
 
 	struct amdgpu_uma_carveout_info uma_info;
+	struct amdgpu_mem_donation mem_donation;
 
 	/* KFD
 	 * Must be last --ends in a flexible-array member.

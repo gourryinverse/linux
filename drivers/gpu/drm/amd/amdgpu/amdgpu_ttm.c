@@ -2896,8 +2896,11 @@ void amdgpu_ttm_debugfs_init(struct amdgpu_device *adev)
 	struct drm_minor *minor = adev_to_drm(adev)->primary;
 	struct dentry *root = minor->debugfs_root;
 
-	debugfs_create_file_size("amdgpu_vram", 0444, root, adev,
-				 &amdgpu_ttm_vram_fops, adev->gmc.mc_vram_size);
+	/* Raw offsets could address a block whose aperture PTEs are absent. */
+	if (!adev->mem_donation.supported)
+		debugfs_create_file_size("amdgpu_vram", 0444, root, adev,
+					 &amdgpu_ttm_vram_fops,
+					 adev->gmc.mc_vram_size);
 	debugfs_create_file("amdgpu_iomem", 0444, root, adev,
 			    &amdgpu_ttm_iomem_fops);
 	debugfs_create_file("ttm_page_pool", 0444, root, adev,
