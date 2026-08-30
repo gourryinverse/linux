@@ -1668,12 +1668,12 @@ static void *kfd_svm_page_owner(struct kfd_process *p, int32_t gpuidx)
  *
  * 1. Reserve page table (and SVM BO if range is in VRAM)
  * 2. hmm_range_fault to get page addresses (if system memory)
- * 3. DMA-map pages (if system memory)
- * 4-a. Take notifier lock
- * 4-b. Check that pages still valid (mmu_interval_read_retry)
- * 4-c. Check that the range was not split or otherwise invalidated
- * 4-d. Update GPU page table
- * 4.e. Release notifier lock
+ * 3-a. Take notifier lock
+ * 3-b. Check that pages are still valid (mmu_interval_read_retry)
+ * 3-c. DMA-map pages (if system memory)
+ * 3-d. Check that the range was not split or otherwise invalidated
+ * 3-e. Update GPU page table
+ * 3-f. Release notifier lock
  * 5. Release page table (and SVM BO) reservation
  */
 static int svm_range_validate_and_map(struct mm_struct *mm,
@@ -1815,23 +1815,24 @@ static int svm_range_validate_and_map(struct mm_struct *mm,
 			r = -EFAULT;
 		}
 
+		svm_range_lock(prange);
+
+		/*
+		 * The range lock is also held by the interval-notifier callback.
+		 * Validate the sequence under that lock before dereferencing PFNs:
+		 * hot-remove may otherwise tear down their vmemmap concurrently.
+		 */
+		if (range && !amdgpu_hmm_range_valid(range) && !r) {
+			pr_debug("hmm update the range, need validate again\n");
+			r = -EAGAIN;
+		}
+
 		if (!r) {
 			offset = (addr >> PAGE_SHIFT) - prange->start;
 			r = svm_range_dma_map(prange, ctx->bitmap, offset, npages,
 					      range->hmm_range.hmm_pfns);
 			if (r)
 				pr_debug("failed %d to dma map range\n", r);
-		}
-
-		svm_range_lock(prange);
-
-		/* Free backing memory of hmm_range if it was initialized
-		 * Override return value to TRY AGAIN only if prior returns
-		 * were successful
-		 */
-		if (range && !amdgpu_hmm_range_valid(range) && !r) {
-			pr_debug("hmm update the range, need validate again\n");
-			r = -EAGAIN;
 		}
 
 		/* Free the hmm range */
