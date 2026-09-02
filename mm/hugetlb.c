@@ -1291,6 +1291,7 @@ static struct folio *dequeue_hugetlb_folio_nodemask(struct hstate *h, gfp_t gfp_
 							int nid, nodemask_t *nmask)
 {
 	unsigned int cpuset_mems_cookie;
+	unsigned int zlflags;
 	struct zonelist *zonelist;
 	struct zone *zone;
 	struct zoneref *z;
@@ -1300,7 +1301,28 @@ static struct folio *dequeue_hugetlb_folio_nodemask(struct hstate *h, gfp_t gfp_
 	if (nid == NUMA_NO_NODE)
 		nid = numa_node_id();
 
-	zonelist = node_zonelist(nid, gfp_mask);
+	zlflags = select_zonelist_flags(nid);
+	/*
+	 * The nodemask decides this, not the preferred nid alone.  An mbind to a
+	 * private node leaves @nid pointing at the local (public) node, and a
+	 * private node is absent from every public fallback zonelist -- so the
+	 * walk below would visit no zone the mask allows and the fault would
+	 * SIGBUS with the pool sitting free on the node the mask named.  The
+	 * page allocator does not hit this because policy_nodemask() derives the
+	 * private zonelist from the policy rather than from a preferred node.
+	 */
+	if (zlflags == ALLOC_DEFAULT && nmask) {
+		int n;
+
+		for_each_node_mask(n, *nmask) {
+			if (select_zonelist_flags(n) == ALLOC_ZONELIST_PRIVATE) {
+				nid = n;
+				zlflags = ALLOC_ZONELIST_PRIVATE;
+				break;
+			}
+		}
+	}
+	zonelist = select_zonelist(nid, gfp_mask, zlflags);
 
 retry_cpuset:
 	cpuset_mems_cookie = read_mems_allowed_begin();
