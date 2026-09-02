@@ -5880,9 +5880,21 @@ int find_next_best_node_in(int node, nodemask_t *used_node_mask,
 static void build_thisnode_zonelists(pg_data_t *pgdat)
 {
 	struct zoneref *zonerefs;
-	int nr_zones;
+	int nr_zones = 0;
 
+	/*
+	 * NOFALLBACK: the node's own zones.  EMPTY for private nodes so a stray
+	 * __GFP_THISNODE allocation can't violate isolation.
+	 */
 	zonerefs = pgdat->node_zonelists[ZONELIST_NOFALLBACK]._zonerefs;
+	if (node_state(pgdat->node_id, N_MEMORY_PUBLIC))
+		nr_zones = build_zonerefs_node(pgdat, zonerefs);
+	zonerefs += nr_zones;
+	zonerefs->zone = NULL;
+	zonerefs->zone_idx = 0;
+
+	/* PRIVATE_NOFALLBACK: the node's own zones, private nodes included. */
+	zonerefs = pgdat->node_zonelists[ZONELIST_PRIVATE_NOFALLBACK]._zonerefs;
 	nr_zones = build_zonerefs_node(pgdat, zonerefs);
 	zonerefs += nr_zones;
 	zonerefs->zone = NULL;
@@ -5932,11 +5944,16 @@ static void build_zonelists(pg_data_t *pgdat)
 	 * FALLBACK:   allocation order over public memory only; private nodes
 	 *             are excluded so no general allocation reaches them (a
 	 *             private node's own FALLBACK also lands on public memory).
-	 * NOFALLBACK: each node's own zones.
+	 * NOFALLBACK: each node's own zones (empty for private, see above).
+	 * PRIVATE:    reached only via ALLOC_ZONELIST_PRIVATE, which grants
+	 *             access to private nodes. Otherwise falls back normally.
 	 */
 	build_node_zonelist(pgdat, &node_states[N_MEMORY_PUBLIC],
 			    ZONELIST_FALLBACK);
 	build_thisnode_zonelists(pgdat);
+
+	build_node_zonelist(pgdat, &node_states[N_MEMORY],
+			    ZONELIST_PRIVATE);
 }
 
 #ifdef CONFIG_HAVE_MEMORYLESS_NODES
