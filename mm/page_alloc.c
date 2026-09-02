@@ -5930,13 +5930,14 @@ int find_next_best_node_in(int node, nodemask_t *used_node_mask,
 }
 
 
-/* Build a local-only zonelist. */
-static void build_local_zonelist(pg_data_t *pgdat, int zlidx)
+/* Build a local-only zonelist when this node is eligible. */
+static void build_local_zonelist(pg_data_t *pgdat, int zlidx, bool eligible)
 {
 	struct zoneref *zonerefs =
 		pgdat->node_zonelists[zlidx]._zonerefs;
 
-	zonerefs += build_zonerefs_node(pgdat, zonerefs);
+	if (eligible)
+		zonerefs += build_zonerefs_node(pgdat, zonerefs);
 	zoneref_set_zone(NULL, zonerefs);
 }
 
@@ -5978,9 +5979,14 @@ static void build_node_zonelist(pg_data_t *pgdat, const nodemask_t *candidates,
 
 static void build_zonelists(pg_data_t *pgdat)
 {
+	int nid = pgdat->node_id;
+
 	build_node_zonelist(pgdat, &node_states[N_MEMORY_COMMON],
 			    ZONELIST_FALLBACK);
-	build_local_zonelist(pgdat, ZONELIST_NOFALLBACK);
+	build_local_zonelist(pgdat, ZONELIST_NOFALLBACK,
+			     node_state(nid, N_MEMORY_COMMON));
+	build_local_zonelist(pgdat, ZONELIST_PRIVATE,
+			     node_state(nid, N_MEMORY_PRIVATE));
 }
 
 #ifdef CONFIG_HAVE_MEMORYLESS_NODES
