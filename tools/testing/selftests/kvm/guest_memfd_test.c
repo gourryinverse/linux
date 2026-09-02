@@ -200,6 +200,90 @@ static void test_numa_allocation(int fd, size_t total_size)
 	kvm_munmap(mem, total_size);
 }
 
+static bool has_bind_node(struct kvm_vm *vm)
+{
+	return vm_check_cap(vm, KVM_CAP_GUEST_MEMFD_FLAGS) &
+	       GUEST_MEMFD_FLAG_BIND_NODE;
+}
+
+static void test_bind_node_invalid(struct kvm_vm *vm, u64 flags)
+{
+	int fd;
+
+	if (!has_bind_node(vm))
+		return;
+
+	fd = __create_guest_memfd_node(vm, page_size,
+				       flags | GUEST_MEMFD_FLAG_BIND_NODE, 0, 1);
+	TEST_ASSERT(fd < 0 && errno == EINVAL,
+		    "guest_memfd() with non-zero pad should fail with EINVAL");
+
+	fd = __create_guest_memfd_node(vm, page_size,
+				       flags | GUEST_MEMFD_FLAG_BIND_NODE,
+				       1 << 20, 0);
+	TEST_ASSERT(fd < 0 && errno == EINVAL,
+		    "guest_memfd() with out-of-range node should fail with EINVAL");
+
+	fd = __create_guest_memfd_node(vm, page_size, flags, 1, 0);
+	TEST_ASSERT(fd < 0 && errno == EINVAL,
+		    "guest_memfd() with a node but no BIND_NODE flag should fail with EINVAL");
+}
+
+static void test_bind_node(int fd, size_t total_size, int node)
+{
+	const unsigned long other_mask = 1UL << (node ? 0 : 1);
+	const unsigned long maxnode = BITS_PER_TYPE(other_mask);
+	bool steer_away = is_multi_numa_node_system();
+	void *pages[4];
+	int status[4];
+	char *mem;
+	int i;
+
+	mem = kvm_mmap(total_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd);
+	for (i = 0; i < 4; i++)
+		pages[i] = mem + page_size * i;
+
+	/*
+	 * Aim the task policy at a different node.  With no policy on the
+	 * inode, guest_memfd's allocation defers to alloc_pages(), which
+	 * honours the task policy, so landing on @node cannot be explained by
+	 * the fault merely being local to whichever CPU the test runs on.
+	 *
+	 * Without a second node there is nowhere to steer, and what remains is
+	 * coverage of the create/mmap/fault path itself.
+	 */
+	if (steer_away)
+		kvm_set_mempolicy(MPOL_BIND, &other_mask, maxnode);
+
+	/* Deliberately no mbind() on this mapping. */
+	memset(mem, 0xaa, total_size);
+
+	kvm_move_pages(0, 4, pages, NULL, status, 0);
+	for (i = 0; i < 4; i++)
+		TEST_ASSERT(status[i] == node,
+			    "Expected page %d on node %d, got it on node %d",
+			    i, node, status[i]);
+
+	/*
+	 * The policy belongs to the inode, not to the folios: dropping every
+	 * folio and faulting again must land on the same node.
+	 */
+	kvm_fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, 0,
+		      total_size);
+	memset(mem, 0xaa, total_size);
+
+	kvm_move_pages(0, 4, pages, NULL, status, 0);
+	for (i = 0; i < 4; i++)
+		TEST_ASSERT(status[i] == node,
+			    "Expected page %d back on node %d, got it on node %d",
+			    i, node, status[i]);
+
+	if (steer_away)
+		kvm_set_mempolicy(MPOL_DEFAULT, NULL, 0);
+
+	kvm_munmap(mem, total_size);
+}
+
 static void test_collapse(int fd, u64 flags)
 {
 	const size_t pmd_size = get_trans_hugepagesz();
@@ -433,6 +517,14 @@ static void test_guest_memfd_flags(struct kvm_vm *vm)
 	int fd;
 
 	for (flag = BIT(0); flag; flag <<= 1) {
+		/*
+		 * BIND_NODE is the one flag whose validity also depends on the
+		 * node field, which this probe leaves zero; node 0 need not be
+		 * bindable.  Covered by test_bind_node{,_invalid}() instead.
+		 */
+		if (flag == GUEST_MEMFD_FLAG_BIND_NODE)
+			continue;
+
 		fd = __vm_create_guest_memfd(vm, page_size, flag);
 		if (flag & valid_flags) {
 			TEST_ASSERT(fd >= 0,
@@ -480,6 +572,7 @@ static void __test_guest_memfd(struct kvm_vm *vm, u64 flags)
 {
 	test_create_guest_memfd_multiple(vm);
 	test_create_guest_memfd_invalid_sizes(vm, flags);
+	test_bind_node_invalid(vm, flags);
 
 	gmem_test(file_read_write, vm, flags);
 
@@ -490,6 +583,8 @@ static void __test_guest_memfd(struct kvm_vm *vm, u64 flags)
 			gmem_test(mmap_supported, vm, flags);
 			gmem_test(fault_overflow, vm, flags);
 			gmem_test(numa_allocation, vm, flags);
+			if (has_bind_node(vm))
+				gmem_test_node(bind_node, vm, flags, 0);
 			__gmem_test(collapse, vm, flags, pmd_size);
 		} else {
 			gmem_test(fault_private, vm, flags);
