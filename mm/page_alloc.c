@@ -5089,9 +5089,26 @@ static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
 		unsigned int *alloc_flags)
 {
 	ac->highest_zoneidx = gfp_zone(gfp_mask);
-	ac->zonelist = node_zonelist(preferred_nid, gfp_mask);
+	ac->zonelist = select_zonelist(preferred_nid, gfp_mask, *alloc_flags);
 	ac->nodemask = nodemask;
 	ac->migratetype = gfp_migratetype(gfp_mask);
+
+	/*
+	 * The private *fallback* zonelist lists every private node and public
+	 * memory, so it grants access without confining -- the nodemask is the
+	 * confinement.  Refuse it without a nodemask rather than fall through to
+	 * the cpuset_current_mems_allowed default below, which spans every granted
+	 * private node and would let the allocation spill onto one the caller
+	 * never named (an isolation break); fail safe to the public zonelist.
+	 * __GFP_THISNODE selects ZONELIST_PRIVATE_NOFALLBACK (the target node's own
+	 * zones only), which is self-confining, so no nodemask is required there.
+	 */
+	if ((*alloc_flags & ALLOC_ZONELIST_PRIVATE) && !nodemask &&
+	    !(gfp_mask & __GFP_THISNODE)) {
+		WARN_ON_ONCE(1);
+		*alloc_flags &= ~ALLOC_ZONELIST_PRIVATE;
+		ac->zonelist = select_zonelist(preferred_nid, gfp_mask, *alloc_flags);
+	}
 
 	if (cpusets_enabled()) {
 		*alloc_gfp |= __GFP_HARDWALL;
@@ -5397,7 +5414,8 @@ struct page *__alloc_frozen_pages_noprof(gfp_t gfp, unsigned int order,
 	unsigned int fastpath_alloc_flags = alloc_flags;
 
 	/* Other flags could be supported later if needed. */
-	if (WARN_ON(alloc_flags & ~(ALLOC_NOLOCK | ALLOC_NO_CODETAG)))
+	if (WARN_ON(alloc_flags & ~(ALLOC_NOLOCK | ALLOC_NO_CODETAG |
+				    ALLOC_ZONELIST_PRIVATE)))
 		return NULL;
 
 	if (!alloc_order_allowed(gfp, order, alloc_flags))

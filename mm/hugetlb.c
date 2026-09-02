@@ -1809,7 +1809,7 @@ static struct folio *alloc_buddy_frozen_folio(int order, gfp_t gfp_mask,
 		gfp_mask |= __GFP_RETRY_MAYFAIL;
 
 	folio = (struct folio *)__alloc_frozen_pages(gfp_mask, order, nid, nmask,
-						     ALLOC_DEFAULT);
+						     select_zonelist_flags(nid));
 
 	/*
 	 * If we did not specify __GFP_RETRY_MAYFAIL, but still got a
