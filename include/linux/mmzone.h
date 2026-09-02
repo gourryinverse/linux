@@ -1400,6 +1400,8 @@ enum {
 	 * restrict the allocations to a single node for __GFP_THISNODE.
 	 */
 	ZONELIST_NOFALLBACK,	/* zonelist without fallback (__GFP_THISNODE) */
+	ZONELIST_PRIVATE,	/* private-node access, falls back to DRAM */
+	ZONELIST_PRIVATE_NOFALLBACK, /* private-node access, __GFP_THISNODE */
 #endif
 	MAX_ZONELISTS
 };
@@ -1407,6 +1409,7 @@ enum {
 #ifdef CONFIG_NUMA
 /* Every fallback zonelist is followed by its nofallback counterpart. */
 static_assert(ZONELIST_FALLBACK + 1 == ZONELIST_NOFALLBACK);
+static_assert(ZONELIST_PRIVATE + 1 == ZONELIST_PRIVATE_NOFALLBACK);
 #endif
 
 /*

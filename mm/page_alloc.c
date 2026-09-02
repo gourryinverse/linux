@@ -5912,7 +5912,8 @@ static void build_node_zonelists(pg_data_t *pgdat, const nodemask_t *candidates,
 	pr_cont("\n");
 
 	zonerefs = pgdat->node_zonelists[zlidx + 1]._zonerefs;
-	zonerefs += build_zonerefs_node(pgdat, zonerefs);
+	if (node_isset(local_node, *candidates))
+		zonerefs += build_zonerefs_node(pgdat, zonerefs);
 	zonerefs->zone = NULL;
 	zonerefs->zone_idx = 0;
 }
@@ -5921,6 +5922,9 @@ static void build_zonelists(pg_data_t *pgdat)
 {
 	build_node_zonelists(pgdat, &node_states[N_MEMORY_COMMON],
 			     ZONELIST_FALLBACK);
+
+	build_node_zonelists(pgdat, &node_states[N_MEMORY],
+			     ZONELIST_PRIVATE);
 }
 
 #ifdef CONFIG_HAVE_MEMORYLESS_NODES
