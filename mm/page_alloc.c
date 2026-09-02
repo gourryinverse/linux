@@ -5868,17 +5868,17 @@ int find_next_best_node_in(int node, nodemask_t *used_node_mask,
 }
 
 
-/*
- * Build __GFP_THISNODE zonelists
- */
+/* Build the common-memory zonelist used by __GFP_THISNODE. */
 static void build_thisnode_zonelists(pg_data_t *pgdat)
 {
 	struct zoneref *zonerefs;
 	int nr_zones;
 
 	zonerefs = pgdat->node_zonelists[ZONELIST_NOFALLBACK]._zonerefs;
-	nr_zones = build_zonerefs_node(pgdat, zonerefs);
-	zonerefs += nr_zones;
+	if (node_state(pgdat->node_id, N_MEMORY_COMMON)) {
+		nr_zones = build_zonerefs_node(pgdat, zonerefs);
+		zonerefs += nr_zones;
+	}
 	zonerefs->zone = NULL;
 	zonerefs->zone_idx = 0;
 }
@@ -5920,11 +5920,25 @@ static void build_node_zonelist(pg_data_t *pgdat, const nodemask_t *candidates,
 	pr_cont("\n");
 }
 
+static void build_private_zonelist(pg_data_t *pgdat)
+{
+	struct zoneref *zonerefs;
+	int nid = pgdat->node_id;
+
+	zonerefs = pgdat->node_zonelists[ZONELIST_PRIVATE]._zonerefs;
+	if (node_state(nid, N_MEMORY) &&
+	    !node_state(nid, N_MEMORY_COMMON))
+		zonerefs += build_zonerefs_node(pgdat, zonerefs);
+	zonerefs->zone = NULL;
+	zonerefs->zone_idx = 0;
+}
+
 static void build_zonelists(pg_data_t *pgdat)
 {
 	build_node_zonelist(pgdat, &node_states[N_MEMORY_COMMON],
 			    ZONELIST_FALLBACK);
 	build_thisnode_zonelists(pgdat);
+	build_private_zonelist(pgdat);
 }
 
 #ifdef CONFIG_HAVE_MEMORYLESS_NODES

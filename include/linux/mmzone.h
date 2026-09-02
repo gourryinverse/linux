@@ -1400,9 +1400,15 @@ enum {
 	 * restrict the allocations to a single node for __GFP_THISNODE.
 	 */
 	ZONELIST_NOFALLBACK,	/* zonelist without fallback (__GFP_THISNODE) */
+	ZONELIST_PRIVATE,	/* private-node access, no fallback */
 #endif
 	MAX_ZONELISTS
 };
+
+#ifdef CONFIG_NUMA
+/* The ordinary fallback and nofallback zonelists must stay paired. */
+static_assert(ZONELIST_FALLBACK + 1 == ZONELIST_NOFALLBACK);
+#endif
 
 /*
  * This struct contains information about a zone in a zonelist. It is stored
