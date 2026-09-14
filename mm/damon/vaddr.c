@@ -368,6 +368,8 @@ static int damon_young_pmd_entry(pmd_t *pmd, unsigned long addr,
 		folio = vm_normal_folio_pmd(walk->vma, addr, pmde);
 		if (!folio)
 			goto huge_out;
+		if (!folio_is_common_memory(folio))
+			goto huge_out;
 		if (pmd_young(pmde) || !folio_test_idle(folio) ||
 					mmu_notifier_test_young(walk->mm,
 						addr))
@@ -386,6 +388,8 @@ huge_out:
 		goto out;
 	folio = vm_normal_folio(walk->vma, addr, ptent);
 	if (!folio)
+		goto out;
+	if (!folio_is_common_memory(folio))
 		goto out;
 	if (pte_young(ptent) || !folio_test_idle(folio) ||
 			mmu_notifier_test_young(walk->mm, addr))
@@ -592,6 +596,9 @@ static void damon_va_probe_folio(struct damon_ctx *ctx,
 	struct damon_probe *probe;
 	int i = 0;
 
+	if (!folio_is_common_memory(folio))
+		return;
+
 	damon_for_each_probe(probe, ctx) {
 		if (damon_va_filter_pass(folio, probe, pte, pmd, mm,
 					r->sampling_addr))
@@ -748,6 +755,9 @@ static bool damos_va_filter_out(struct damos *scheme, struct folio *folio,
 {
 	struct damos_filter *filter;
 	bool matched;
+
+	if (!folio_is_common_memory(folio))
+		return true;
 
 	if (scheme->core_filters_allowed)
 		return false;
