@@ -4171,6 +4171,11 @@ struct damon_system_ram_range_walk_arg {
 static int damon_system_ram_walk_fn(struct resource *res, void *arg)
 {
 	struct damon_system_ram_range_walk_arg *a = arg;
+	struct page *page = pfn_to_online_page(PHYS_PFN(res->start));
+
+	/* Private memory is not monitored by default. */
+	if (page && !node_state(page_to_nid(page), N_MEMORY_COMMON))
+		return 0;
 
 	if (!a->walked) {
 		a->walked = true;
