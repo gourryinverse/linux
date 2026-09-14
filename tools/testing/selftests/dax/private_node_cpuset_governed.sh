@@ -138,8 +138,12 @@ else
 fi
 
 # --- G8: an opted-out (no USER_NUMA) private node in cpuset.mems is unbindable-
-pn_hotplug unplugged; pn_set user_numa 0; pn_hotplug online_movable; sleep 1
-if [ "$(pn_state)" = online_movable ] && pn_is_private; then
+pn_require_dax
+pn_reset
+if pn_node_has_feature "$PN" "$(pn__feat_mask user_numa)"; then
+	ktap_test_skip "G8 needs a dax-backed private node without USER_NUMA"
+elif pn_online_as online_movable; then
+	sleep 1
 	g="$CG/g8"; mkchild "$g" "$D0,$PN"	# grant P by membership, but no USER_NUMA
 	out=$(run_in "$g" mbind "$PN" 8); rmdir "$g" 2>/dev/null
 	echo "$out" | sed 's/^/# /'
@@ -153,12 +157,13 @@ else
 fi
 
 # --- G9: offlining a driver-owned anon-bound node scrubs the bind ---------
-pn_reset; pn_set user_numa 0; pn_online_as online; onl=$?; sleep 1
-if [ -z "$D" ]; then
-	ktap_test_skip "G9 needs a device to offline (node $PN is boot-provisioned)"
-elif [ "$onl" != 0 ]; then
+pn_reset
+if pn_node_has_feature "$PN" "$(pn__feat_mask user_numa)"; then
+	ktap_test_skip "G9 needs a dax-backed private node without USER_NUMA"
+elif ! pn_online_as online; then
 	ktap_test_skip "G9 could not online $PN as opted-out private"
 else
+	sleep 1
 	: > "$HF"
 	( echo $BASHPID > "$CG/cgroup.procs"; exec "$TOOL" daxmaphold "$PN_ANON" 16 "$PN" 20 ) >"$HF" 2>&1 &
 	J=$!

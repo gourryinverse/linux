@@ -107,17 +107,23 @@ pn_reset; pn_set reclaim 1; pn_set demotion 0
 if ! pn_online_as online; then
 	ktap_test_skip "node $P1 did not re-online private for the demotion=0 check"
 else
-	a0=$(nanon "$P1")
+	PNEG=$PN
+	a0=$(nanon "$PNEG")
 	"$TOOL" anon "$coldmb" 999 >/dev/null 2>&1 & cold=$!
 	sleep 8
 	"$TOOL" churn $(( pubmb + 256 )) 40 >/dev/null 2>&1 & cp=$!
 	grew=0
-	for _ in $(seq 1 9); do sleep 4; [ "$(nanon "$P1")" -gt $(( a0 + 16384 )) ] 2>/dev/null && { grew=1; break; }; done
+	for _ in $(seq 1 9); do
+		sleep 4
+		[ "$(nanon "$PNEG")" -gt $(( a0 + 16384 )) ] 2>/dev/null &&
+			{ grew=1; break; }
+	done
 	kill "$cp" "$cold" 2>/dev/null; wait "$cp" "$cold" 2>/dev/null
 	if [ "$grew" = 0 ]; then
-		ktap_test_pass "demotion cleared: no demotion onto private node $P1 (nr_anon flat)"
+		ktap_test_pass \
+			"demotion cleared: no demotion onto private node $PNEG (nr_anon flat)"
 	else
-		ktap_test_fail "demotion landed on non-opted private node $P1 (nr_anon grew)"
+		ktap_test_fail "demotion landed on non-opted private node $PNEG (nr_anon grew)"
 	fi
 fi
 

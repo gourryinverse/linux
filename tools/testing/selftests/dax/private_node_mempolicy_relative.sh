@@ -91,8 +91,8 @@ online_pn() {	# online_pn <user_numa 0|1> -- bring PN up private, opting user_nu
 	pn_reset
 	pn_set private 1
 	pn_set user_numa "$1"
-	pn_hotplug online_movable
-	{ [ "$(pn_state)" = online_movable ] && pn_is_private; }
+	pn_node_online && pn_is_private && return 0
+	pn_online_as online_movable
 }
 
 # ========================================================================

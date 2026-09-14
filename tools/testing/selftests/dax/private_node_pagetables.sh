@@ -39,6 +39,7 @@ nt_mb() { awk '/MemTotal:/{print int($4/1024)}' "$NODE_BASE/node$PN/meminfo" 2>/
 pn_begin
 pn_require_tool
 pn_provision
+pn_require_dax
 pn_reset
 ktap_set_plan 3
 
@@ -57,9 +58,8 @@ pt_settle() { sleep 1; pn_reset; sleep 1; }
 # ---------------------------------------------------------------------------
 pn_set user_numa 1
 if ! pn_online_as online_movable; then
-mb=$(fault_mb)
 	ktap_test_skip "could not online node $PN as a movable private node (state=$(pn_state))"
-elif [ "${mb:-0}" -lt 64 ]; then
+elif mb=$(fault_mb); [ "${mb:-0}" -lt 64 ]; then
 	ktap_test_skip "node $PN too small (${mb}MB) for the spill check"
 else
 	pt0=$(pt_kb)
@@ -82,9 +82,8 @@ pt_settle
 # ---------------------------------------------------------------------------
 pn_set user_numa 1
 if ! pn_online_as online_kernel; then
-mb=$(fault_mb)
 	ktap_test_skip "could not online node $PN as a kernel-zoned private node (state=$(pn_state))"
-elif [ "${mb:-0}" -lt 64 ]; then
+elif mb=$(fault_mb); [ "${mb:-0}" -lt 64 ]; then
 	ktap_test_skip "node $PN too small (${mb}MB) for a page-table delta"
 else
 	pt0=$(pt_kb)
@@ -107,9 +106,8 @@ pt_settle
 # ---------------------------------------------------------------------------
 pn_set user_numa 1
 if ! pn_online_as online_kernel; then
-mb=$(fault_mb)
 	ktap_test_skip "could not online node $PN as a kernel-zoned private node for the unplug check"
-elif [ "${mb:-0}" -lt 64 ]; then
+elif mb=$(fault_mb); [ "${mb:-0}" -lt 64 ]; then
 	ktap_test_skip "node $PN too small (${mb}MB) for the unplug check"
 else
 	"$TOOL" bindfault "$PN" "$mb" 90 >/dev/null 2>&1 & bf=$!

@@ -71,7 +71,7 @@ pn_node_is_private() {
 # in sysfs, so its provider is what tells us it can bring a node up private.
 pn__dev_is_provider() {
 	case "$(readlink -f "$DAX_BASE/$1" 2>/dev/null)" in
-	*/dax_test.*)	return 0 ;;
+	*/dax_test.*/*)	return 0 ;;
 	esac
 	return 1
 }
@@ -256,19 +256,6 @@ pn__make_private() {
 	echo unplugged > "$1/state" 2>/dev/null
 }
 
-pn__find_bound() {	# echo a dax device already in kmem private mode, if any
-	local d drv
-	for d in "$DAX_BASE"/dax*; do
-		[ -e "$d/adistance" ] || continue	# kmem-bound marker
-		drv=$(readlink "$d/driver" 2>/dev/null)
-		[ "$(basename "${drv:-}")" = kmem ] || continue
-		{ pn_dev_is_private "$(basename "$d")" ||
-		  pn__dev_is_provider "$(basename "$d")"; } &&
-			{ basename "$d"; return 0; }
-	done
-	return 1
-}
-
 pn__bind_one() {	# bind every device_dax dax device on a memoryless node
 	local d nid drv bound=1 pass
 	for pass in provider other; do
@@ -331,7 +318,7 @@ pn_provision() {
 	pn_select "$nid"
 
 	# A backing dax device is optional; device-lifecycle tests need one.
-	DAX=$(pn__find_bound 2>/dev/null)
+	DAX=$(pn__dax_for_node "$nid" 2>/dev/null)
 	[ -n "$DAX" ] && D=$DAX_BASE/$DAX || { DAX=; D=; }
 }
 
@@ -590,8 +577,15 @@ pn_provision_all() {
 	for d in "$DAX_BASE"/dax*; do
 		[ -e "$d/target_node" ] || continue
 		nid=$(cat "$d/target_node"); [ "$nid" -ge 0 ] 2>/dev/null || continue
-		node_in_mask "$nid" has_memory && continue	# memoryless only
 		drv=$(basename "$(readlink "$d/driver" 2>/dev/null)" 2>/dev/null)
+		if node_in_mask "$nid" has_memory; then
+			if [ "$drv" = kmem ] && pn_dev_is_private "$(basename "$d")"; then
+				PN_DAXES="$PN_DAXES $(basename "$d")"
+				PN_NODES="$PN_NODES $nid"
+			fi
+			continue
+		fi
+		pn__dev_is_provider "$(basename "$d")" || continue
 		[ "$drv" = device_dax ] &&
 			basename "$d" > /sys/bus/dax/drivers/device_dax/unbind 2>/dev/null
 		[ "$drv" = kmem ] ||
