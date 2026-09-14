@@ -40,7 +40,8 @@ static struct folio *__damon_get_folio(unsigned long pfn, bool monitor)
 	if (!folio_try_get(folio))
 		return NULL;
 	if (unlikely(page_folio(page) != folio) ||
-			!damon_folio_acceptable(folio, monitor)) {
+	    !damon_folio_acceptable(folio, monitor) ||
+	    !folio_allows_mm_op(folio, N_MEMORY_PUBLIC)) {
 		folio_put(folio);
 		folio = NULL;
 	}
@@ -492,7 +493,7 @@ unsigned long damon_migrate_pages(struct list_head *folio_list, int target_nid)
 		return nr_migrated;
 
 	if (target_nid < 0 || target_nid >= MAX_NUMNODES ||
-			!node_state(target_nid, N_MEMORY)) {
+	    !node_state(target_nid, N_MEMORY_PUBLIC)) {
 		damon_putback_folio_list(folio_list);
 		return nr_migrated;
 	}
