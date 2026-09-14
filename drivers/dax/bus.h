@@ -25,6 +25,8 @@ struct dax_region *alloc_dax_region(struct device *parent, int region_id,
 struct dev_dax_data {
 	struct dax_region *dax_region;
 	struct dev_pagemap *pgmap;
+	/* Physical start within dax_region; 0 selects the region start. */
+	resource_size_t start;
 	resource_size_t size;
 	int id;
 	bool memmap_on_memory;

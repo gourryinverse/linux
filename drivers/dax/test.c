@@ -90,6 +90,7 @@ static int dax_test_probe(struct platform_device *pdev)
 		struct dev_dax_data data = {
 			.dax_region = dax_region,
 			.id = -1,
+			.start = range.start + i * size,
 			.size = size,
 			.memmap_on_memory = false,
 			/* what a real device driver would declare */

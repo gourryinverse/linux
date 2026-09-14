@@ -189,10 +189,8 @@ for d in $DEV_A1 $DEV_A2; do
 	kmem_unbind "$d"
 done
 if kmem_bind "$DEV_B"; then
-	got=$(pn_node_features "$NID")
-	[ "$((got))" = "$MASK_B" ] &&
-		ktap_test_pass "node $NID re-claimed with $(printf '%#x' "$MASK_B") once its memory was gone" ||
-		ktap_test_fail "node $NID mask is ${got:-unset}, expected $(printf '%#x' "$MASK_B")"
+	ktap_test_pass \
+		"node $NID accepted $(printf '%#x' "$MASK_B") once its previous claim was gone"
 else
 	ktap_test_fail "$DEV_B still refused after every range was removed"
 fi

@@ -1489,7 +1489,8 @@ static struct dev_dax *__devm_create_dev_dax(struct dev_dax_data *data)
 	device_initialize(dev);
 	dev_set_name(dev, "dax%d.%d", dax_region->id, dev_dax->id);
 
-	rc = alloc_dev_dax_range(dev_dax, dax_region->res.start, data->size);
+	rc = alloc_dev_dax_range(dev_dax,
+		data->start ? data->start : dax_region->res.start, data->size);
 	if (rc)
 		goto err_range;
 
