@@ -635,7 +635,7 @@ static enum scan_result __collapse_huge_page_isolate(struct vm_area_struct *vma,
 			goto out;
 		}
 		page = vm_normal_page(vma, addr, pteval);
-		if (unlikely(!page) || unlikely(is_zone_device_page(page))) {
+		if (unlikely(!page) || unlikely(!page_is_common_memory(page))) {
 			result = SCAN_PAGE_NULL;
 			goto out;
 		}
@@ -1669,7 +1669,7 @@ static enum scan_result collapse_scan_anon_pmd(struct vm_area_struct *vma,
 		}
 
 		page = vm_normal_page(vma, addr, pteval);
-		if (unlikely(!page) || unlikely(is_zone_device_page(page))) {
+		if (unlikely(!page) || unlikely(!page_is_common_memory(page))) {
 			result = SCAN_PAGE_NULL;
 			goto out_unmap;
 		}
@@ -2711,6 +2711,11 @@ static enum scan_result collapse_scan_file(struct mm_struct *mm,
 		}
 
 		node = folio_nid(folio);
+		if (unlikely(!folio_is_common_memory(folio))) {
+			result = SCAN_PAGE_NULL;
+			folio_put(folio);
+			break;
+		}
 		if (collapse_scan_abort(node, cc)) {
 			result = SCAN_SCAN_ABORT;
 			failed_pfn = folio_pfn(folio);
