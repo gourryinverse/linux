@@ -57,6 +57,8 @@ separated by spaces:
 	test memfd_secret(2)
 - process_mrelease
 	test process_mrelease(2)
+- private_node
+	test exclusion of common MM services from boot-provisioned private memory nodes
 - ksm
 	ksm tests that do not require >=2 NUMA nodes
 - ksm_numa
@@ -298,6 +300,8 @@ CATEGORY="mlock" run_test ./mlock-random-test
 CATEGORY="mlock" run_test ./mlock2-tests
 
 CATEGORY="process_mrelease" run_test ./mrelease_test
+
+CATEGORY="private_node" run_test ./private_node_folio_walkers
 
 CATEGORY="mremap" run_test ./mremap_test
 
