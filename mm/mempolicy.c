@@ -211,11 +211,11 @@ static void reduce_interleave_weights(unsigned int *bw, u8 *new_iw)
 	unsigned int cast_sum_bw, scaling_factor = 1, iw_gcd = 0;
 	int nid;
 
-	for_each_node_state(nid, N_MEMORY)
+	for_each_node_state(nid, N_MEMORY_COMMON)
 		sum_bw += bw[nid];
 
 	/* Scale bandwidths to whole numbers in the range [1, weightiness] */
-	for_each_node_state(nid, N_MEMORY) {
+	for_each_node_state(nid, N_MEMORY_COMMON) {
 		/*
 		 * Try not to perform 64-bit division.
 		 * If sum_bw < scaling_factor, then sum_bw < U32_MAX.
@@ -234,7 +234,7 @@ static void reduce_interleave_weights(unsigned int *bw, u8 *new_iw)
 	}
 
 	/* 1:2 is strictly better than 16:32. Reduce by the weights' GCD. */
-	for_each_node_state(nid, N_MEMORY)
+	for_each_node_state(nid, N_MEMORY_COMMON)
 		new_iw[nid] /= iw_gcd;
 }
 
@@ -432,9 +432,9 @@ static int mpol_set_nodemask(struct mempolicy *pol,
 	if (!pol || pol->mode == MPOL_LOCAL)
 		return 0;
 
-	/* Check N_MEMORY */
-	nodes_and(nsc->mask1,
-		  cpuset_current_mems_allowed, node_states[N_MEMORY]);
+	/* Userspace NUMA policies operate on common memory. */
+	nodes_and(nsc->mask1, node_states[N_MEMORY_COMMON],
+		  cpuset_current_mems_allowed);
 
 	VM_BUG_ON(!nodes);
 
@@ -685,7 +685,7 @@ static void queue_folios_pmd(pmd_t *pmd, unsigned long addr,
 			walk->action = ACTION_CONTINUE;
 		return;
 	}
-	if (folio_is_zone_device(folio))
+	if (!folio_is_common_memory(folio))
 		return;
 	if (!queue_folio_required(folio, qp))
 		return;
@@ -743,7 +743,7 @@ static int queue_folios_pte_range(pmd_t *pmd, unsigned long addr,
 			continue;
 		}
 		folio = vm_normal_folio(vma, addr, ptent);
-		if (!folio || folio_is_zone_device(folio))
+		if (!folio || !folio_is_common_memory(folio))
 			continue;
 		if (folio_test_large(folio) && max_nr != 1)
 			nr = folio_pte_batch(folio, pte, ptent, max_nr);
@@ -816,6 +816,8 @@ static int queue_folios_hugetlb(pte_t *pte, unsigned long hmask,
 		goto unlock;
 	}
 	folio = pfn_folio(pte_pfn(ptep));
+	if (!folio_is_common_memory(folio))
+		goto unlock;
 	if (!queue_folio_required(folio, qp))
 		goto unlock;
 	if (!(flags & (MPOL_MF_MOVE | MPOL_MF_MOVE_ALL)) ||
@@ -1362,7 +1364,12 @@ int do_migrate_pages(struct mm_struct *mm, const nodemask_t *from,
 {
 	long nr_failed = 0;
 	long err = 0;
-	nodemask_t tmp;
+	nodemask_t tmp, from_common, to_common;
+
+	nodes_and(from_common, *from, node_states[N_MEMORY_COMMON]);
+	nodes_and(to_common, *to, node_states[N_MEMORY_COMMON]);
+	from = &from_common;
+	to = &to_common;
 
 	lru_cache_disable();
 
@@ -1930,6 +1937,11 @@ static int kernel_migrate_pages(pid_t pid, unsigned long maxnode,
 	}
 	rcu_read_unlock();
 
+	if (!nodes_subset(*new, node_states[N_MEMORY_COMMON])) {
+		err = -EINVAL;
+		goto out_put;
+	}
+
 	task_nodes = cpuset_mems_allowed(task);
 	/* Is the user allowed to access the target nodes? */
 	if (!nodes_subset(*new, task_nodes) && !capable(CAP_SYS_NICE)) {
@@ -2103,7 +2115,7 @@ bool apply_policy_zone(struct mempolicy *policy, enum zone_type zone)
 	 * if policy->nodes has movable memory only,
 	 * we apply policy when gfp_zone(gfp) = ZONE_MOVABLE only.
 	 *
-	 * policy->nodes is intersect with node_states[N_MEMORY].
+	 * policy->nodes is intersected with node_states[N_MEMORY_COMMON].
 	 * so if the following test fails, it implies
 	 * policy->nodes has movable memory only.
 	 */
@@ -3395,11 +3407,11 @@ void __init numa_policy_init(void)
 
 	/*
 	 * Set interleaving policy for system init. Interleaving is only
-	 * enabled across suitably sized nodes (default is >= 16MB), or
-	 * fall back to the largest node if they're all smaller.
+	 * enabled across suitably sized common memory nodes (default is
+	 * >= 16MB), or fall back to the largest node if they're all smaller.
 	 */
 	nodes_clear(interleave_nodes);
-	for_each_node_state(nid, N_MEMORY) {
+	for_each_node_state(nid, N_MEMORY_COMMON) {
 		unsigned long total_pages = node_present_pages(nid);
 
 		/* Preserve the largest node */
@@ -3471,7 +3483,7 @@ int mpol_parse_str(char *str, struct mempolicy **mpol)
 		*nodelist++ = '\0';
 		if (nodelist_parse(nodelist, nodes))
 			goto out;
-		if (!nodes_subset(nodes, node_states[N_MEMORY]))
+		if (!nodes_subset(nodes, node_states[N_MEMORY_COMMON]))
 			goto out;
 	} else
 		nodes_clear(nodes);
@@ -3503,7 +3515,7 @@ int mpol_parse_str(char *str, struct mempolicy **mpol)
 		 * Default to online nodes with memory if no nodelist
 		 */
 		if (!nodelist)
-			nodes = node_states[N_MEMORY];
+			nodes = node_states[N_MEMORY_COMMON];
 		break;
 	case MPOL_LOCAL:
 		/*
@@ -3898,6 +3910,8 @@ static int wi_node_notifier(struct notifier_block *nb,
 
 	switch (action) {
 	case NODE_ADDED_FIRST_MEMORY:
+		if (!node_state(nid, N_MEMORY_COMMON))
+			break;
 		err = sysfs_wi_node_add(nid);
 		if (err)
 			pr_err("failed to add sysfs for node%d during hotplug: %d\n",
@@ -3929,10 +3943,7 @@ static int __init add_weighted_interleave_group(struct kobject *mempolicy_kobj)
 	if (err)
 		goto err_put_kobj;
 
-	for_each_online_node(nid) {
-		if (!node_state(nid, N_MEMORY))
-			continue;
-
+	for_each_node_state(nid, N_MEMORY_COMMON) {
 		err = sysfs_wi_node_add(nid);
 		if (err) {
 			pr_err("failed to add sysfs for node%d during init: %d\n",
