@@ -245,8 +245,9 @@ static bool try_release_thread_stack_to_cache(struct vm_struct *vm_area)
 	int nid;
 
 	/*
-	 * Don't cache stacks if any of the pages don't match the local domain, unless
-	 * there is no local memory to begin with.
+	 * Don't cache stacks if any of the pages don't match the local domain,
+	 * unless there is no local common memory to begin with. Stack allocation
+	 * uses common memory.
 	 *
 	 * Note that lack of local memory does not automatically mean it makes no difference
 	 * performance-wise which other domain backs the stack. In this case we are merely
@@ -254,7 +255,7 @@ static bool try_release_thread_stack_to_cache(struct vm_struct *vm_area)
 	 */
 	scoped_guard(preempt) {
 		nid = numa_node_id();
-		if (node_state(nid, N_MEMORY)) {
+		if (node_state(nid, N_MEMORY_COMMON)) {
 			for (i = 0; i < vm_area->nr_pages; i++) {
 				struct page *page = vm_area->pages[i];
 				if (page_to_nid(page) != nid)
