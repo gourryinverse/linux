@@ -5098,9 +5098,28 @@ static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
 		unsigned int *alloc_flags)
 {
 	ac->highest_zoneidx = gfp_zone(gfp_mask);
-	ac->zonelist = node_zonelist(preferred_nid, gfp_mask);
+	ac->zonelist = select_zonelist(preferred_nid, gfp_mask, *alloc_flags);
 	ac->nodemask = nodemask;
 	ac->migratetype = gfp_migratetype(gfp_mask);
+
+	/*
+	 * If a private zonelist allocation nodemask must be forcibly relaxed,
+	 * we must re-select the zonelist to ensure spillage does not occur to
+	 * other private nodes that may not have been part of the request (and
+	 * may not be valid targets for the allocation).
+	 *
+	 * Using cpuset_current_mems_allowed would simply allow the allocation
+	 * to land on any private no in mems_allowed - which is incorrect.
+	 *
+	 * __GFP_THISNODE restricts the allocation to the node itself, so there
+	 * is no correctness issue - the allocation will fail (correctly).
+	 */
+	if ((*alloc_flags & ALLOC_ZONELIST_PRIVATE) && !nodemask &&
+	    !(gfp_mask & __GFP_THISNODE)) {
+		WARN_ON_ONCE(1);
+		*alloc_flags &= ~ALLOC_ZONELIST_PRIVATE;
+		ac->zonelist = select_zonelist(preferred_nid, gfp_mask, *alloc_flags);
+	}
 
 	if (cpusets_enabled()) {
 		*alloc_gfp |= __GFP_HARDWALL;
@@ -5409,7 +5428,8 @@ struct page *__alloc_frozen_pages_noprof(gfp_t gfp, unsigned int order,
 	unsigned int fastpath_alloc_flags = alloc_flags;
 
 	/* Other flags could be supported later if needed. */
-	if (WARN_ON(alloc_flags & ~(ALLOC_NOLOCK | ALLOC_NO_CODETAG)))
+	if (WARN_ON(alloc_flags & ~(ALLOC_NOLOCK | ALLOC_NO_CODETAG |
+				    ALLOC_ZONELIST_PRIVATE)))
 		return NULL;
 
 	if (!alloc_order_allowed(gfp, order, alloc_flags))
