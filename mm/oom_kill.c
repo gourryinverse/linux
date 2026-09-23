@@ -248,6 +248,8 @@ static const char * const oom_constraint_text[] = {
  */
 static enum oom_constraint constrained_alloc(struct oom_control *oc)
 {
+	const nodemask_t *constraint_nodes = oc->constraint_nodes ?:
+						&node_states[N_MEMORY];
 	struct zone *zone;
 	struct zoneref *z;
 	enum zone_type highest_zoneidx = gfp_zone(oc->gfp_mask);
@@ -274,7 +276,7 @@ static enum oom_constraint constrained_alloc(struct oom_control *oc)
 	 * get_page_from_freelist().
 	 */
 	if (oc->nodemask &&
-	    !nodes_subset(node_states[N_MEMORY], *oc->nodemask)) {
+	    !nodes_subset(*constraint_nodes, *oc->nodemask)) {
 		oc->totalpages = total_swap_pages;
 		for_each_node_mask(nid, *oc->nodemask)
 			oc->totalpages += node_present_pages(nid);

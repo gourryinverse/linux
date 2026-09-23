@@ -29,6 +29,9 @@ struct oom_control {
 	/* Used to determine cpuset */
 	struct zonelist *zonelist;
 
+	/* Nodes reachable through the zonelist before policy filtering */
+	const nodemask_t *constraint_nodes;
+
 	/* Used to determine mempolicy */
 	const nodemask_t *nodemask;
 

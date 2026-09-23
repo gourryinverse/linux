@@ -4043,6 +4043,8 @@ __alloc_pages_may_oom(gfp_t gfp_mask, unsigned int order,
 {
 	struct oom_control oc = {
 		.zonelist = ac->zonelist,
+		.constraint_nodes = ac->alloc_flags & ALLOC_ZONELIST_PRIVATE ?
+			&node_states[N_MEMORY] : &node_states[N_MEMORY_COMMON],
 		.nodemask = ac->nodemask,
 		.memcg = NULL,
 		.gfp_mask = gfp_mask,
