@@ -169,15 +169,27 @@ nodes with particular properties as defined by ``enum node_states``:
   aliased to ``N_NORMAL_MEMORY``.
 ``N_MEMORY``
   The node has online memory (regular, high, movable).  This is a topology and
-  accounting state. Presence in this mask does not indicate userland common
-  memory management support. Use ``N_MEMORY_COMMON`` for common memory nodes.
+  accounting state. Presence in this mask does not indicate common memory
+  management support. Use ``N_MEMORY_COMMON`` for common memory nodes or the
+  appropriate ``N_MEMORY_*`` feature state for eligibility decisions.
 ``N_MEMORY_COMMON``
   The node is on the page allocator's fallback zonelists, so an allocation
   that named no node can be satisfied from it.
+``N_MEMORY_CONTIG_ALLOC``
+  Contiguous allocation may isolate and allocate ranges on the node.
+``N_MEMORY_COMPACTION``
+  Memory compaction may operate on the node.
+``N_MEMORY_USER_NUMA``
+  Userspace NUMA placement may target the node.
 ``N_CPU``
   The node has one or more CPUs
 ``N_GENERIC_INITIATOR``
   The node has one or more Generic Initiators
+
+``N_MEMORY_*`` states describe the operations a private node supports. All
+are subsets of ``N_MEMORY``, and ``N_MEMORY_COMMON`` implies presence in all
+feature masks. A node with memory but without ``N_MEMORY_COMMON`` is a
+private node, described in Documentation/mm/numa_private_nodes.rst.
 
 For each node that has a property described above, the bit corresponding to the
 node ID in the ``node_states[<property>]`` bitmask is set.
