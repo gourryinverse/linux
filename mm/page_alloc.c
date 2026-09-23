@@ -203,6 +203,7 @@ nodemask_t node_states[NR_NODE_STATES] __read_mostly = {
 #endif
 	[N_MEMORY] = { { [0] = 1UL } },
 	[N_MEMORY_COMMON] = { { [0] = 1UL } },
+	[N_MEMORY_CONTIG_ALLOC] = { { [0] = 1UL } },
 	[N_CPU] = { { [0] = 1UL } },
 #endif	/* NUMA */
 };
@@ -7165,19 +7166,34 @@ static void alloc_contig_dump_pages(struct list_head *page_list)
 }
 
 /* [start, end) must belong to a single zone. */
+/* Displaced folios must not spill into another private node. */
+static void contig_alloc_targets(int nid, nodemask_t *mask)
+{
+	*mask = node_states[N_MEMORY_COMMON];
+	node_set(nid, *mask);
+}
+
 static int __alloc_contig_migrate_range(struct compact_control *cc,
 					unsigned long start, unsigned long end)
 {
 	/* This function is based on compact_zone() from compaction.c. */
+	const int nid = zone_to_nid(cc->zone);
 	unsigned int nr_reclaimed;
 	unsigned long pfn = start;
 	unsigned int tries = 0;
 	int ret = 0;
+	nodemask_t dst_nodes;
 	struct migration_target_control mtc = {
-		.nid = zone_to_nid(cc->zone),
+		.nid = nid,
 		.gfp_mask = cc->gfp_mask,
 		.reason = MR_CONTIG_RANGE,
 	};
+
+	mtc.alloc_flags = select_zonelist_flags(nid);
+	if (mtc.alloc_flags == ALLOC_ZONELIST_PRIVATE) {
+		contig_alloc_targets(nid, &dst_nodes);
+		mtc.nmask = &dst_nodes;
+	}
 
 	lru_cache_disable();
 
@@ -7340,6 +7356,8 @@ int alloc_contig_frozen_range_noprof(unsigned long start, unsigned long end,
 	 */
 	if (WARN_ON_ONCE((gfp_mask & __GFP_COMP) && order > MAX_FOLIO_ORDER))
 		return -EINVAL;
+	if (!node_state(zone_to_nid(cc.zone), N_MEMORY_CONTIG_ALLOC))
+		return -EPERM;
 
 	gfp_mask = current_gfp_context(gfp_mask);
 	if (__alloc_contig_verify_gfp_mask(gfp_mask, (gfp_t *)&cc.gfp_mask))
@@ -7580,8 +7598,8 @@ struct page *alloc_contig_frozen_pages_noprof(unsigned long nr_pages,
 
 retry:
 	zonelist = node_zonelist(nid, gfp_mask);
-	for_each_zone_zonelist_nodemask(zone, z, zonelist,
-					gfp_zone(gfp_mask), nodemask) {
+	for_each_zone_node_state(zone, z, zonelist, gfp_zone(gfp_mask),
+				 nodemask, N_MEMORY_CONTIG_ALLOC) {
 		spin_lock_irqsave(&zone->lock, flags);
 
 		pfn = ALIGN(zone->zone_start_pfn, nr_pages);
