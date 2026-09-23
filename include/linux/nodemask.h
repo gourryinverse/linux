@@ -398,8 +398,15 @@ enum node_states {
 #else
 	N_HIGH_MEMORY = N_NORMAL_MEMORY,
 #endif
-	N_MEMORY,		/* The node has memory(regular, high, movable) */
+	/*
+	 * Online memory exists on the node.  This is a topology and accounting
+	 * state; it does not by itself authorize allocation or an MM service.
+	 * Use N_MEMORY_COMMON or the appropriate N_MEMORY_* service state for
+	 * eligibility decisions.
+	 */
+	N_MEMORY,		/* the node has memory */
 	N_MEMORY_COMMON,	/* common pool (fallback zonelist) */
+	/* Opt-in subsets of N_MEMORY; N_MEMORY_COMMON implies all. */
 	N_MEMORY_COMPACTION,	/* mm compaction may operate on the node */
 	N_MEMORY_RECLAIM,	/* generic reclaim may operate on the node */
 	N_CPU,		/* The node has one or more cpus */
@@ -517,16 +524,36 @@ static __always_inline int node_random(const nodemask_t *maskp)
 #define for_each_online_node(node) for_each_node_state(node, N_ONLINE)
 #define for_each_node_with_cpus(node)	for_each_node_state(node, N_CPU)
 
-static inline void node_set_memory_state(int nid, bool high, bool normal)
+/*
+ * Private nodes omit NODE_MEMORY_FEAT_COMMON. Their owners opt into
+ * individual MM services with the remaining bits.
+ */
+#define NODE_MEMORY_FEAT_COMMON		BIT(0) /* add to fallback zonelist */
+#define NODE_MEMORY_FEAT_COMPACTION	BIT(1) /* mm compaction */
+#define NODE_MEMORY_FEAT_RECLAIM	BIT(2) /* generic reclaim */
+#define NODE_MEMORY_FEAT_ALL		(~0UL)
+#define NODE_MEMORY_FEAT_VALID		(NODE_MEMORY_FEAT_COMMON | \
+					 NODE_MEMORY_FEAT_COMPACTION | \
+					 NODE_MEMORY_FEAT_RECLAIM)
+
+static inline void node_set_memory_state(int nid, bool high, bool normal,
+					 unsigned long features)
 {
+	/* A common node must enable all features */
+	WARN_ON_ONCE((features & NODE_MEMORY_FEAT_COMMON) &&
+		     (features != NODE_MEMORY_FEAT_ALL));
+
 	node_set_state(nid, N_MEMORY);
 	if (high)
 		node_set_state(nid, N_HIGH_MEMORY);
 	if (normal)
 		node_set_state(nid, N_NORMAL_MEMORY);
-	node_set_state(nid, N_MEMORY_COMMON);
-	node_set_state(nid, N_MEMORY_COMPACTION);
-	node_set_state(nid, N_MEMORY_RECLAIM);
+	if (features & NODE_MEMORY_FEAT_COMMON)
+		node_set_state(nid, N_MEMORY_COMMON);
+	if (features & NODE_MEMORY_FEAT_COMPACTION)
+		node_set_state(nid, N_MEMORY_COMPACTION);
+	if (features & NODE_MEMORY_FEAT_RECLAIM)
+		node_set_state(nid, N_MEMORY_RECLAIM);
 }
 
 static __always_inline void node_clear_memory_state(int nid)
