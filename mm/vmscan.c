@@ -1131,6 +1131,7 @@ static unsigned int demote_folio_list(struct list_head *demote_folios,
 		return 0;
 
 	mtc.nid = target_nid;
+	mtc.alloc_flags = select_zonelist_flags(target_nid);
 
 	/* Demotion ignores all cpuset and mempolicy settings */
 	migrate_pages(demote_folios, alloc_demote_folio, NULL,
