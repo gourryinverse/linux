@@ -5867,27 +5867,19 @@ int find_next_best_node_in(int node, nodemask_t *used_node_mask,
 
 
 /*
- * Build __GFP_THISNODE zonelists
+ * Build the zonelist pair starting at @zlidx over @candidates.
+ *
+ * zonelist pairs consist of a FALLBACK and NOFALLBACK list.
+ *
+ * FALLBACK contains every candidate node, ordered by node then zone within
+ * the node. This provides best-locality ordering.  Walkers will "fallback"
+ * to the next best zone/node in the list as they iterate.
+ *
+ * NOFALLBACK contains only the node itself and serves to constrain
+ * __GFP_THISNODE operations to the selected node.
  */
-static void build_thisnode_zonelists(pg_data_t *pgdat)
-{
-	struct zoneref *zonerefs;
-	int nr_zones;
-
-	zonerefs = pgdat->node_zonelists[ZONELIST_NOFALLBACK]._zonerefs;
-	nr_zones = build_zonerefs_node(pgdat, zonerefs);
-	zonerefs += nr_zones;
-	zonerefs->zone = NULL;
-	zonerefs->zone_idx = 0;
-}
-
-/*
- * Build one zonelist ordered by node and zones within node. This results in
- * maximum locality--normal zone overflows into local DMA zone, if any--but
- * risks exhausting DMA zone.
- */
-static void build_node_zonelist(pg_data_t *pgdat, const nodemask_t *candidates,
-				int zlidx)
+static void build_node_zonelists(pg_data_t *pgdat, const nodemask_t *candidates,
+				 int zlidx)
 {
 	struct zoneref *zonerefs = pgdat->node_zonelists[zlidx]._zonerefs;
 	nodemask_t used_mask = NODE_MASK_NONE;
@@ -5916,12 +5908,16 @@ static void build_node_zonelist(pg_data_t *pgdat, const nodemask_t *candidates,
 	zonerefs->zone = NULL;
 	zonerefs->zone_idx = 0;
 	pr_cont("\n");
+
+	zonerefs = pgdat->node_zonelists[zlidx + 1]._zonerefs;
+	zonerefs += build_zonerefs_node(pgdat, zonerefs);
+	zonerefs->zone = NULL;
+	zonerefs->zone_idx = 0;
 }
 
 static void build_zonelists(pg_data_t *pgdat)
 {
-	build_node_zonelist(pgdat, &node_states[N_MEMORY], ZONELIST_FALLBACK);
-	build_thisnode_zonelists(pgdat);
+	build_node_zonelists(pgdat, &node_states[N_MEMORY], ZONELIST_FALLBACK);
 }
 
 #ifdef CONFIG_HAVE_MEMORYLESS_NODES

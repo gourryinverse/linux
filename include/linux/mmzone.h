@@ -1404,6 +1404,11 @@ enum {
 	MAX_ZONELISTS
 };
 
+#ifdef CONFIG_NUMA
+/* Every fallback zonelist is followed by its nofallback counterpart. */
+static_assert(ZONELIST_FALLBACK + 1 == ZONELIST_NOFALLBACK);
+#endif
+
 /*
  * This struct contains information about a zone in a zonelist. It is stored
  * here to avoid dereferences into large structures and lookups of tables
