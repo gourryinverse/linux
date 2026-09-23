@@ -405,7 +405,7 @@ static int madvise_cold_or_pageout_pte_range(pmd_t *pmd,
 		if (!folio)
 			goto huge_unlock;
 
-		if (folio_is_zone_device(folio))
+		if (!folio_allows_reclaim(folio))
 			goto huge_unlock;
 
 		/* Do not interfere with other mappings of this folio */
@@ -488,7 +488,7 @@ restart:
 			continue;
 
 		folio = vm_normal_folio(vma, addr, ptent);
-		if (!folio || folio_is_zone_device(folio))
+		if (!folio || !folio_allows_reclaim(folio))
 			continue;
 
 		/*
@@ -718,7 +718,7 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 		}
 
 		folio = vm_normal_folio(vma, addr, ptent);
-		if (!folio || folio_is_zone_device(folio))
+		if (!folio || !folio_allows_reclaim(folio))
 			continue;
 
 		/*
