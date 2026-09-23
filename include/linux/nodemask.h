@@ -403,6 +403,7 @@ enum node_states {
 	N_MEMORY_CONTIG_ALLOC,	/* contiguous allocation may operate on the node */
 	N_MEMORY_COMPACTION,	/* mm compaction may operate on the node */
 	N_MEMORY_RECLAIM,	/* mm reclaim may operate on the node */
+	N_MEMORY_DEMOTION,	/* tiering may demote to the node */
 	N_CPU,		/* The node has one or more cpus */
 	N_GENERIC_INITIATOR,	/* The node has one or more Generic Initiators */
 	NR_NODE_STATES
@@ -541,10 +542,12 @@ static inline void node_set_memory_state(int nid, bool high, bool normal)
 	node_set_state(nid, N_MEMORY_CONTIG_ALLOC);
 	node_set_state(nid, N_MEMORY_COMPACTION);
 	node_set_state(nid, N_MEMORY_RECLAIM);
+	node_set_state(nid, N_MEMORY_DEMOTION);
 }
 
 static __always_inline void node_clear_memory_state(int nid)
 {
+	node_clear_state(nid, N_MEMORY_DEMOTION);
 	node_clear_state(nid, N_MEMORY_RECLAIM);
 	node_clear_state(nid, N_MEMORY_COMPACTION);
 	node_clear_state(nid, N_MEMORY_CONTIG_ALLOC);
