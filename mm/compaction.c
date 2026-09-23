@@ -2490,6 +2490,10 @@ bool compaction_zonelist_suitable(struct alloc_context *ac, int order,
 				 ac->nodemask, N_MEMORY_COMPACTION) {
 		unsigned long available;
 
+		/* Reclaim cannot make progress on a compaction-only node. */
+		if (!node_state(zone_to_nid(zone), N_MEMORY_RECLAIM))
+			continue;
+
 		if (cpusets_enabled() && (alloc_flags & ALLOC_CPUSET) &&
 		    !__cpuset_zone_allowed(zone, gfp_mask))
 			continue;
