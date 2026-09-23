@@ -6556,12 +6556,16 @@ void __init page_alloc_init_cpuhp(void)
 static void calculate_totalreserve_pages(void)
 {
 	struct pglist_data *pgdat;
-	unsigned long reserve_pages = 0;
+	unsigned long common_reserve_pages = 0;
 	enum zone_type i, j;
 
 	for_each_online_pgdat(pgdat) {
 
 		pgdat->totalreserve_pages = 0;
+
+		/* Non-reclaim nodes have zero watermarks and no system reserve. */
+		if (!node_state(pgdat->node_id, N_MEMORY_RECLAIM))
+			continue;
 
 		for (i = 0; i < MAX_NR_ZONES; i++) {
 			struct zone *zone = pgdat->node_zones + i;
@@ -6590,10 +6594,12 @@ static void calculate_totalreserve_pages(void)
 
 			pgdat->totalreserve_pages += max;
 
-			reserve_pages += max;
+			/* Global reserves describe the common allocation domain. */
+			if (node_state(pgdat->node_id, N_MEMORY_COMMON))
+				common_reserve_pages += max;
 		}
 	}
-	totalreserve_pages = reserve_pages;
+	totalreserve_pages = common_reserve_pages;
 	trace_mm_calculate_totalreserve_pages(totalreserve_pages);
 }
 
@@ -6651,22 +6657,38 @@ static void setup_per_zone_lowmem_reserve(void)
 static void __setup_per_zone_wmarks(void)
 {
 	unsigned long pages_min = min_free_kbytes >> (PAGE_SHIFT - 10);
-	unsigned long lowmem_pages = 0;
+	unsigned long common_lowmem_pages = 0;
 	struct zone *zone;
 	unsigned long flags;
 
-	/* Calculate total number of !ZONE_HIGHMEM and !ZONE_MOVABLE pages */
+	/*
+	 * Calculate total number of !ZONE_HIGHMEM and !ZONE_MOVABLE pages.
+	 * Distribute the global pages_min budget over common memory. Private
+	 * reclaim-capable nodes use the same reserve ratio without reducing the
+	 * watermarks protecting common memory.
+	 */
 	for_each_zone(zone) {
-		if (!is_highmem(zone) && zone_idx(zone) != ZONE_MOVABLE)
-			lowmem_pages += zone_managed_pages(zone);
+		if (!is_highmem(zone) && zone_idx(zone) != ZONE_MOVABLE &&
+		    node_state(zone_to_nid(zone), N_MEMORY_COMMON))
+			common_lowmem_pages += zone_managed_pages(zone);
 	}
 
 	for_each_zone(zone) {
 		u64 tmp;
 
 		spin_lock_irqsave(&zone->lock, flags);
+		/* A node that does not permit reclaim carries no watermarks. */
+		if (!node_state(zone_to_nid(zone), N_MEMORY_RECLAIM)) {
+			zone->_watermark[WMARK_MIN] = 0;
+			zone->_watermark[WMARK_LOW] = 0;
+			zone->_watermark[WMARK_HIGH] = 0;
+			zone->_watermark[WMARK_PROMO] = 0;
+			zone->watermark_boost = 0;
+			spin_unlock_irqrestore(&zone->lock, flags);
+			continue;
+		}
 		tmp = (u64)pages_min * zone_managed_pages(zone);
-		tmp = div64_ul(tmp, lowmem_pages);
+		tmp = div64_ul(tmp, common_lowmem_pages);
 		if (is_highmem(zone) || zone_idx(zone) == ZONE_MOVABLE) {
 			/*
 			 * __GFP_HIGH and PF_MEMALLOC allocations usually don't
