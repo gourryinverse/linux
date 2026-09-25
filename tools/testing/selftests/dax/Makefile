@@ -10,6 +10,7 @@ TEST_GEN_FILES += cram_leak_tool
 TEST_GEN_FILES += cram_gate_tool
 TEST_GEN_FILES += cram_noalloc_tool
 TEST_GEN_FILES += cram_pressure_tool
+TEST_GEN_FILES += cram_swap_tool
 include ../lib.mk
 
 TEST_PROGS += cram_readable.sh
@@ -22,4 +23,6 @@ TEST_PROGS += cram_trim.sh
 TEST_PROGS += cram_gate.sh
 TEST_PROGS += cram_pressure.sh
 TEST_PROGS += cram_control.sh
+TEST_PROGS += cram_swap.sh
+TEST_PROGS += cram_balloon_migrate.sh
 TEST_PROGS += cram_noalloc.sh
