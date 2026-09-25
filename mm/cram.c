@@ -144,6 +144,15 @@ int cram_migrate_to(struct list_head *folios, enum migrate_mode mode,
 	return ret;
 }
 
+static void cram_release_zone_withdrawal(struct cram_node *cn)
+{
+	struct zone *zone = &NODE_DATA(cn->nid)->node_zones[ZONE_MOVABLE];
+
+	/* The zone outlives the cram_node that owns its withdrawal. */
+	if (test_bit(ZONE_NO_ALLOC, &zone->flags))
+		zone_clear_no_alloc(zone);
+}
+
 /**
  * cram_register() - donate physical region(s) to CRAM as a private node
  * @nid:         target NUMA node
@@ -291,12 +300,52 @@ int cram_unregister(int nid, const struct range *ranges, unsigned int n)
 	mutex_unlock(&cram_mutex);
 	/* Drain reclaim-side readers before freeing cn. */
 	synchronize_rcu();
+	cram_release_zone_withdrawal(cn);
 
 	kfree(cn->ranges);
 	kfree(cn);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(cram_unregister);
+
+/**
+ * cram_set_no_alloc() - withdraw or restore a CRAM node
+ * @nid: CRAM node
+ * @no_alloc: true withdraws the node, false restores it
+ *
+ * This is the provider's critical-low-memory signal.  ZONE_NO_ALLOC is the
+ * source of truth and stays set until the provider clears it.  Withdrawing the
+ * zone does not touch resident folios; reclaim spills to another CRAM node or
+ * swap.
+ */
+int cram_set_no_alloc(int nid, bool no_alloc)
+{
+	struct cram_node *cn;
+	struct zone *zone;
+	int ret = 0;
+
+	if (!cram_valid_nid(nid))
+		return -ENODEV;
+
+	mutex_lock(&cram_mutex);
+	cn = rcu_dereference_protected(cram_nodes[nid],
+				       lockdep_is_held(&cram_mutex));
+	if (!cn) {
+		mutex_unlock(&cram_mutex);
+		return -ENODEV;
+	}
+	zone = &NODE_DATA(nid)->node_zones[ZONE_MOVABLE];
+
+	if (no_alloc) {
+		if (!test_bit(ZONE_NO_ALLOC, &zone->flags))
+			ret = zone_set_no_alloc(zone);
+	} else if (test_bit(ZONE_NO_ALLOC, &zone->flags)) {
+		zone_clear_no_alloc(zone);
+	}
+	mutex_unlock(&cram_mutex);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(cram_set_no_alloc);
 
 MODULE_DESCRIPTION("Compressed-RAM private-node anonymous-memory service");
 MODULE_LICENSE("GPL");
