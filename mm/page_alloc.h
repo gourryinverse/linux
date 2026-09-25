@@ -56,6 +56,11 @@
  * alloc_tag_sub_check().
  */
 #define ALLOC_NO_CODETAG       0x1000
+#ifdef CONFIG_NUMA
+#define ALLOC_ZONELIST_PRIVATE 0x2000	/* use ZONELIST_PRIVATE */
+#else
+#define ALLOC_ZONELIST_PRIVATE 0x0
+#endif
 
 /* Flags that allow allocations below the min watermark. */
 #define ALLOC_RESERVES (ALLOC_NON_BLOCK|ALLOC_MIN_RESERVE|ALLOC_HIGHATOMIC|ALLOC_OOM)

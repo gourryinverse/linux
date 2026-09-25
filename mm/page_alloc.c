@@ -5098,7 +5098,13 @@ static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
 		unsigned int *alloc_flags)
 {
 	ac->highest_zoneidx = gfp_zone(gfp_mask);
-	ac->zonelist = node_zonelist(preferred_nid, gfp_mask);
+#ifdef CONFIG_NUMA
+	if (*alloc_flags & ALLOC_ZONELIST_PRIVATE)
+		ac->zonelist = &NODE_DATA(preferred_nid)->
+			node_zonelists[ZONELIST_PRIVATE];
+	else
+#endif
+		ac->zonelist = node_zonelist(preferred_nid, gfp_mask);
 	ac->nodemask = nodemask;
 	ac->migratetype = gfp_migratetype(gfp_mask);
 
@@ -5398,7 +5404,8 @@ struct page *__alloc_frozen_pages_noprof(gfp_t gfp, unsigned int order,
 	unsigned int fastpath_alloc_flags = alloc_flags;
 
 	/* Other flags could be supported later if needed. */
-	if (WARN_ON(alloc_flags & ~(ALLOC_NOLOCK | ALLOC_NO_CODETAG)))
+	if (WARN_ON(alloc_flags & ~(ALLOC_NOLOCK | ALLOC_NO_CODETAG |
+				    ALLOC_ZONELIST_PRIVATE)))
 		return NULL;
 
 	if (!alloc_order_allowed(gfp, order, alloc_flags))
@@ -5501,6 +5508,27 @@ struct folio *__folio_alloc_noprof(gfp_t gfp, unsigned int order, int preferred_
 	return page_rmappable_folio(page);
 }
 EXPORT_SYMBOL(__folio_alloc_noprof);
+
+struct folio *folio_alloc_node_private_noprof(gfp_t gfp, unsigned int order,
+					      int nid)
+{
+	struct page *page;
+
+	if (!IS_ENABLED(CONFIG_NUMA))
+		return NULL;
+	if (WARN_ON_ONCE(nid == NUMA_NO_NODE || !(gfp & __GFP_THISNODE) ||
+			 gfp & __GFP_NOFAIL))
+		return NULL;
+	if (WARN_ON_ONCE(!node_state(nid, N_MEMORY) ||
+			 node_state(nid, N_MEMORY_COMMON)))
+		return NULL;
+
+	warn_if_node_offline(nid, gfp);
+	page = __alloc_pages_noprof(gfp | __GFP_COMP, order, nid, NULL,
+				    ALLOC_ZONELIST_PRIVATE);
+	return page_rmappable_folio(page);
+}
+EXPORT_SYMBOL(folio_alloc_node_private_noprof);
 
 /*
  * Common helper functions. Never use with __GFP_HIGHMEM because the returned
@@ -7293,6 +7321,8 @@ int alloc_contig_frozen_range_noprof(unsigned long start, unsigned long end,
 {
 	const unsigned int order = ilog2(end - start);
 	unsigned long outer_start, outer_end;
+	bool private_node;
+	int nid;
 	int ret = 0;
 
 	struct compact_control cc = {
@@ -7316,6 +7346,14 @@ int alloc_contig_frozen_range_noprof(unsigned long start, unsigned long end,
 	 */
 	if (WARN_ON_ONCE((gfp_mask & __GFP_COMP) && order > MAX_FOLIO_ORDER))
 		return -EINVAL;
+
+	nid = zone_to_nid(cc.zone);
+	if (!node_state(nid, N_MEMORY))
+		return -EPERM;
+
+	private_node = !node_state(nid, N_MEMORY_COMMON);
+	if (private_node != !!(alloc_flags & ACR_FLAGS_PRIVATE))
+		return -EPERM;
 
 	gfp_mask = current_gfp_context(gfp_mask);
 	if (__alloc_contig_verify_gfp_mask(gfp_mask, (gfp_t *)&cc.gfp_mask))

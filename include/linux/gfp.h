@@ -262,6 +262,11 @@ struct folio *__folio_alloc_node_noprof(gfp_t gfp, unsigned int order, int nid)
 
 #define  __folio_alloc_node(...)		alloc_hooks(__folio_alloc_node_noprof(__VA_ARGS__))
 
+struct folio *folio_alloc_node_private_noprof(gfp_t gfp, unsigned int order,
+					      int nid);
+#define folio_alloc_node_private(...)				\
+	alloc_hooks(folio_alloc_node_private_noprof(__VA_ARGS__))
+
 /*
  * Allocate pages, preferring the node given as nid. When nid == NUMA_NO_NODE,
  * prefer the current CPU's closest node. Otherwise node must be valid and
@@ -390,6 +395,7 @@ extern gfp_t vma_thp_gfp_mask(struct vm_area_struct *vma);
 typedef unsigned int __bitwise acr_flags_t;
 #define ACR_FLAGS_NONE ((__force acr_flags_t)0) // ordinary allocation request
 #define ACR_FLAGS_CMA ((__force acr_flags_t)BIT(0)) // allocate for CMA
+#define ACR_FLAGS_PRIVATE ((__force acr_flags_t)BIT(1)) // allocate private memory
 
 /* The below functions must be run on a range from a single zone. */
 int alloc_contig_frozen_range_noprof(unsigned long start, unsigned long end,
