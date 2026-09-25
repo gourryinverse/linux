@@ -33,6 +33,7 @@
 #include <linux/topology.h>
 #include <linux/cpu.h>
 #include <linux/cpuset.h>
+#include <linux/cram.h>
 #include <linux/compaction.h>
 #include <linux/notifier.h>
 #include <linux/delay.h>
@@ -1166,15 +1167,18 @@ static unsigned int shrink_folio_list(struct list_head *folio_list,
 	struct folio_batch free_folios;
 	LIST_HEAD(ret_folios);
 	LIST_HEAD(demote_folios);
+	LIST_HEAD(cram_folios);
 	unsigned int nr_reclaimed = 0, nr_demoted = 0;
 	unsigned int pgactivate = 0;
 	bool do_demote_pass;
+	bool do_cram_pass;
 	struct swap_io_ctx ctx = {};
 
 	folio_batch_init(&free_folios);
 	memset(stat, 0, sizeof(*stat));
 	cond_resched();
 	do_demote_pass = can_demote(pgdat->node_id, sc, memcg);
+	do_cram_pass = cram_can_demote(pgdat->node_id);
 
 retry:
 	while (!list_empty(folio_list)) {
@@ -1351,6 +1355,14 @@ retry:
 		if (do_demote_pass &&
 		    (thp_migration_supported() || !folio_test_large(folio))) {
 			list_add(&folio->lru, &demote_folios);
+			folio_unlock(folio);
+			continue;
+		}
+
+		/* Give anonymous folios to CRAM before falling through to swap. */
+		if (do_cram_pass && cram_folio_eligible(folio) &&
+		    (thp_migration_supported() || !folio_test_large(folio))) {
+			list_add(&folio->lru, &cram_folios);
 			folio_unlock(folio);
 			continue;
 		}
@@ -1678,6 +1690,22 @@ keep:
 		if (!sc->proactive) {
 			do_demote_pass = false;
 			goto retry;
+		}
+	}
+
+	if (!list_empty(&cram_folios)) {
+		unsigned int nr_crammed = 0;
+
+		cram_migrate_to(&cram_folios, MIGRATE_ASYNC, MR_DEMOTION,
+				&nr_crammed);
+		nr_reclaimed += nr_crammed;
+		stat->nr_demoted += nr_crammed;
+		if (!list_empty(&cram_folios)) {
+			list_splice_init(&cram_folios, folio_list);
+			if (!sc->proactive) {
+				do_cram_pass = false;
+				goto retry;
+			}
 		}
 	}
 
