@@ -640,6 +640,8 @@ config CRAM
 	bool "Compressed-RAM private-node anonymous-memory service"
 	depends on NUMA && MIGRATION && MMU && MEMORY_HOTPLUG
 	depends on MEMORY_HOTREMOVE
+	select BALLOON
+	select BALLOON_MIGRATION
 	help
 	  Manage anonymous folios placed on compressed private memory nodes.
 	  Reclaim diverts eligible anonymous folios onto CRAM and maps them
