@@ -19,6 +19,7 @@ struct folio;
 int cram_register(int nid, const struct range *ranges, unsigned int n,
 		  unsigned long features);
 int cram_unregister(int nid, const struct range *ranges, unsigned int n);
+int cram_set_no_alloc(int nid, bool no_alloc);
 bool cram_can_demote(int src_nid);
 
 bool cram_folio_eligible(struct folio *folio);
@@ -35,6 +36,11 @@ static inline int cram_register(int nid, const struct range *ranges,
 
 static inline int cram_unregister(int nid, const struct range *ranges,
 				  unsigned int n)
+{
+	return -ENODEV;
+}
+
+static inline int cram_set_no_alloc(int nid, bool no_alloc)
 {
 	return -ENODEV;
 }
