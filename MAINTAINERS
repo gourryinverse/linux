@@ -6919,6 +6919,7 @@ CRAM COMPRESSED-MEMORY SERVICE
 M:	Gregory Price <gourry@gourry.net>
 L:	linux-mm@kvack.org
 S:	Maintained
+F:	drivers/dax/cramdax.c
 F:	include/linux/cram.h
 F:	mm/cram.c
 
