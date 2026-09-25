@@ -13,3 +13,4 @@ TEST_PROGS += cram_readable.sh
 TEST_PROGS += cram_fork.sh
 TEST_PROGS += cram_ops.sh
 TEST_PROGS += cram_leak.sh
+TEST_PROGS += cram_node_basic.sh
