@@ -177,6 +177,8 @@ nodes with particular properties as defined by ``enum node_states``:
   that named no node can be satisfied from it.
 ``N_MEMORY_COMPACTION``
   Memory compaction may operate on the node.
+``N_MEMORY_RECLAIM``
+  Generic page reclaim may operate on the node.
 ``N_CPU``
   The node has one or more CPUs
 ``N_GENERIC_INITIATOR``
