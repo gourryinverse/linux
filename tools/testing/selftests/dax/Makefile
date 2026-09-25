@@ -15,12 +15,14 @@ TEST_GEN_FILES += cram_swap_tool
 TEST_GEN_FILES += cram_perf_tool
 TEST_GEN_FILES += anondax_shared_tool
 TEST_GEN_FILES += anondax_policy_tool
+TEST_GEN_FILES += cram_exclusion_tool
 include ../lib.mk
 
 TEST_PROGS += anondax_shared.sh
 TEST_PROGS += anondax_policy.sh
 TEST_PROGS += anondax_cpuset.sh
 TEST_PROGS += anondax_services.sh
+TEST_PROGS += cram_exclusion.sh
 TEST_PROGS += cram_readable.sh
 TEST_PROGS += cram_fork.sh
 TEST_PROGS += cram_ops.sh
