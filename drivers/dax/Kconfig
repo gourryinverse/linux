@@ -101,4 +101,19 @@ config DEV_DAX_ANON
 	  The private node always permits reclaim and compaction.
 
 	  Say N if unsure.
+
+config DEV_DAX_CRAM
+	tristate "CRAM DAX: test compressed private memory"
+	depends on DEV_DAX && CRAM
+	depends on MEMORY_HOTPLUG && MEMORY_HOTREMOVE
+	help
+	  Provide an explicit device-dax mode for exercising the CRAM
+	  compressed-memory service.  The driver onlines the device ranges as
+	  private movable memory and exposes test controls for CRAM provider
+	  events such as capacity changes and allocation withdrawal.
+
+	  This is a test provider.  It does not emulate compression hardware.
+	  Its trim callback zeros pages in place.
+
+	  Say N if unsure.
 endif

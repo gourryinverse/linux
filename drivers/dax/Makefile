@@ -4,6 +4,7 @@ obj-$(CONFIG_DAX) += dax.o
 obj-$(CONFIG_DEV_DAX) += device_dax.o
 obj-$(CONFIG_DEV_DAX_KMEM) += kmem.o
 obj-$(CONFIG_DEV_DAX_ANON) += anondax.o
+obj-$(CONFIG_DEV_DAX_CRAM) += cramdax.o
 obj-$(CONFIG_DEV_DAX_PMEM) += dax_pmem.o
 obj-$(CONFIG_DEV_DAX_CXL) += dax_cxl.o
 obj-$(CONFIG_DEV_DAX_FSDEV) += fsdev_dax.o

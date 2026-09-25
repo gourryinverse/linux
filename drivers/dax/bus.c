@@ -1361,7 +1361,8 @@ static ssize_t memmap_on_memory_store(struct device *dev,
 		return rc;
 
 	if (dev_dax->memmap_on_memory != val && dev->driver &&
-	    to_dax_drv(dev->driver)->type == DAXDRV_KMEM_TYPE) {
+	    (to_dax_drv(dev->driver)->type == DAXDRV_KMEM_TYPE ||
+	     to_dax_drv(dev->driver)->type == DAXDRV_CRAM_TYPE)) {
 		up_write(&dax_dev_rwsem);
 		return -EBUSY;
 	}
