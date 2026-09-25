@@ -1744,7 +1744,7 @@ out_unlock:
 	unlock_device_hotplug();
 	return rc;
 }
-EXPORT_SYMBOL_FOR_MODULES(__add_memory_driver_managed, "kmem");
+EXPORT_SYMBOL_FOR_MODULES(__add_memory_driver_managed, "kmem,anondax");
 
 /**
  * add_memory_driver_managed - add driver-managed memory
