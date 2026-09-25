@@ -17,6 +17,7 @@ TEST_GEN_FILES += anondax_shared_tool
 TEST_GEN_FILES += anondax_policy_tool
 TEST_GEN_FILES += cram_exclusion_tool
 TEST_GEN_FILES += cram_hold_tool
+TEST_GEN_FILES += anondax_rebind_tool
 include ../lib.mk
 
 TEST_PROGS += anondax_shared.sh
@@ -25,6 +26,7 @@ TEST_PROGS += anondax_cpuset.sh
 TEST_PROGS += anondax_services.sh
 TEST_PROGS += cram_exclusion.sh
 TEST_PROGS += cram_memcg.sh
+TEST_PROGS += anondax_rebind.sh
 TEST_PROGS += cram_readable.sh
 TEST_PROGS += cram_fork.sh
 TEST_PROGS += cram_ops.sh
