@@ -19,6 +19,7 @@ include ../lib.mk
 
 TEST_PROGS += anondax_shared.sh
 TEST_PROGS += anondax_policy.sh
+TEST_PROGS += anondax_cpuset.sh
 TEST_PROGS += cram_readable.sh
 TEST_PROGS += cram_fork.sh
 TEST_PROGS += cram_ops.sh
