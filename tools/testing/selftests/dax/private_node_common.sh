@@ -80,6 +80,32 @@ pn_bind_cramdax()
 	[ "$driver" = cramdax ]
 }
 
+# Bind a memoryless dax device to the explicit shared-allocation provider.
+pn_bind_anondax()
+{
+	local dev=$1 name driver nid
+
+	name=$(basename "$dev")
+	nid=$(cat "$dev/target_node" 2>/dev/null) || return 1
+	driver=$(basename "$(readlink "$dev/driver" 2>/dev/null)" 2>/dev/null)
+	[ "$driver" = anondax ] && return 0
+
+	if [ "$driver" = kmem ]; then
+		echo unplugged > "$dev/state" 2>/dev/null || return 1
+	elif [ "$driver" = cramdax ]; then
+		echo offline > "$dev/state" 2>/dev/null || return 1
+	fi
+	if [ -n "$driver" ]; then
+		echo "$name" > "/sys/bus/dax/drivers/$driver/unbind" 2>/dev/null ||
+			return 1
+	fi
+	node_in_mask "$nid" has_memory && return 1
+	echo "$name" > /sys/bus/dax/drivers/anondax/new_id 2>/dev/null ||
+		return 1
+	driver=$(basename "$(readlink "$dev/driver" 2>/dev/null)" 2>/dev/null)
+	[ "$driver" = anondax ]
+}
+
 pn_is_private()
 {
 	pn_node_is_private "$PN"

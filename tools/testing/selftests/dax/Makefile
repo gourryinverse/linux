@@ -2,6 +2,7 @@
 all:
 
 TEST_PROGS := dax-kmem-hotplug.sh
+TEST_FILES := private_node_common.sh
 
 TEST_GEN_FILES += cram_readable_tool
 TEST_GEN_FILES += cram_fork_tool
@@ -12,8 +13,10 @@ TEST_GEN_FILES += cram_noalloc_tool
 TEST_GEN_FILES += cram_pressure_tool
 TEST_GEN_FILES += cram_swap_tool
 TEST_GEN_FILES += cram_perf_tool
+TEST_GEN_FILES += anondax_shared_tool
 include ../lib.mk
 
+TEST_PROGS += anondax_shared.sh
 TEST_PROGS += cram_readable.sh
 TEST_PROGS += cram_fork.sh
 TEST_PROGS += cram_ops.sh
