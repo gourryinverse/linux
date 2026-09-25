@@ -160,10 +160,9 @@ argument to ``node_features_register()``, which
    * - ``NODE_MEMORY_FEAT_RECLAIM``
      - direct, background, proactive, and userspace-requested reclaim of the
        node's folios
-   * - ``NODE_MEMORY_FEAT_USER_WRITE``
-     - userspace may write resident folios in place.  A driver may withhold
-       this feature from a movable-only node; anonymous folios on such a node
-       remain read-only and a write fault copies them to common memory.
+   * - ``NODE_MEMORY_FEAT_WR_FENCE``
+     - userspace writes must relocate resident anonymous folios.  This
+       restrictive property is valid only for a movable-only private node.
 
 ``NODE_MEMORY_FEAT_COMMON`` is what makes a node ordinary: a node with it
 set holds every feature, and its absence is what makes a node private.
@@ -193,6 +192,55 @@ interface can then offline the range, and unbinding an unused device removes it.
 
 Anondax has no feature-control ABI.  A device is selected explicitly by writing
 its name to ``/sys/bus/dax/drivers/anondax/new_id``.
+
+Compressed anonymous memory
+===========================
+
+``CONFIG_CRAM`` provides a driver-facing service for compressed memory whose
+contents can be read in place but cannot be written in place.  A CRAM provider
+onlines movable private memory with ``NODE_MEMORY_FEAT_RECLAIM`` and
+``NODE_MEMORY_FEAT_WR_FENCE``.
+
+CRAM is not registered in the generic memory-tier topology.  Instead, vmscan
+offers eligible anonymous, swap-backed folios to the nearest available CRAM
+node before swapping them.  Placement uses ``folio_alloc_node_private()`` and
+therefore cannot fall back to common memory or another private service.  File
+folios, including shmem, are not eligible.
+
+Resident anonymous folios remain present and readable on CRAM.  Migration
+reinstalls their mappings read-only and non-exclusive; a userspace write takes
+the ordinary copy-on-write fault path, whose replacement allocation comes from
+common memory.  Reclaim on the CRAM node can write anonymous folios to swap.
+
+Providers report usable capacity through the CRAM API.  CRAM uses the balloon
+infrastructure to reserve or release movable pages so the node's allocatable
+capacity follows the backing device.  A provider can independently withdraw
+the node from new placement when it reports a critical-low-memory condition.
+CRAM itself exposes no userspace interface.
+
+With ``CONFIG_DEV_DAX_CRAM``, a device-dax instance can be bound explicitly to
+the ``cramdax`` test driver through its ``new_id`` file.  The driver does not
+claim devices automatically and initially leaves their memory offline.  Its
+device attributes provide:
+
+``state``
+  ``online`` registers the ranges with CRAM; ``offline`` unregisters them.
+``memory_features``
+  Feature mask used at the next online.  Reclaim is required; common placement
+  and in-place userspace writes are forbidden.  Compaction is optional.
+``zratio`` and ``compression_ratio``
+  Configure the expected ratio while offline and report achieved ratios while
+  online.  The test provider converts the ratio into usable capacity before
+  reporting it to CRAM.
+``balloon_target``
+  Inject an absolute reserved-page target.  The test provider converts it into
+  usable capacity before reporting it to CRAM.
+``no_alloc``
+  Inject the provider's critical-low-memory signal.  Setting it withdraws the
+  CRAM zone until the provider explicitly clears it again.
+``trim_count``
+  Count pages passed to the provider trim callback, which this test driver
+  implements by zeroing their contents.
 
 Observability
 =============
