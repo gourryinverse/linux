@@ -8,6 +8,7 @@ TEST_GEN_FILES += cram_fork_tool
 TEST_GEN_FILES += cram_ops_tool
 TEST_GEN_FILES += cram_leak_tool
 TEST_GEN_FILES += cram_gate_tool
+TEST_GEN_FILES += cram_noalloc_tool
 include ../lib.mk
 
 TEST_PROGS += cram_readable.sh
@@ -18,3 +19,4 @@ TEST_PROGS += cram_node_basic.sh
 TEST_PROGS += cram_ratio.sh
 TEST_PROGS += cram_trim.sh
 TEST_PROGS += cram_gate.sh
+TEST_PROGS += cram_noalloc.sh
