@@ -160,6 +160,10 @@ argument to ``node_features_register()``, which
    * - ``NODE_MEMORY_FEAT_RECLAIM``
      - direct, background, proactive, and userspace-requested reclaim of the
        node's folios
+   * - ``NODE_MEMORY_FEAT_USER_WRITE``
+     - userspace may write resident folios in place.  A driver may withhold
+       this feature from a movable-only node; anonymous folios on such a node
+       remain read-only and a write fault copies them to common memory.
 
 ``NODE_MEMORY_FEAT_COMMON`` is what makes a node ordinary: a node with it
 set holds every feature, and its absence is what makes a node private.

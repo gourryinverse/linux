@@ -10,6 +10,8 @@
 #include <linux/swap.h>
 #include <linux/leafops.h>
 
+#include "internal.h"
+
 #undef pr_fmt
 #define pr_fmt(fmt)	"page_table_check: " fmt
 
@@ -108,6 +110,7 @@ static void page_table_check_set(unsigned long pfn, unsigned long pgcnt,
 	page = pfn_to_page(pfn);
 	BUG_ON(PageSlab(page));
 	anon = PageAnon(page);
+	WARN_ON_ONCE(rw && page_write_fenced(page));
 
 	rcu_read_lock();
 	for_each_page_ext(page, pgcnt, page_ext, iter) {

@@ -1671,6 +1671,43 @@ static inline bool can_spin_trylock(void)
 	return true;
 }
 
+static inline bool folio_write_fenced(struct folio *folio)
+{
+	return folio &&
+	       (NODE_DATA(folio_nid(folio))->memory_features &
+		NODE_MEMORY_FEAT_WR_FENCE);
+}
+
+static inline bool page_write_fenced(struct page *page)
+{
+	return page && folio_write_fenced(page_folio(page));
+}
+
+/* KSM and write-fenced anonymous folios cannot be reused on a write fault. */
+static inline bool folio_must_cow(struct folio *folio)
+{
+	return folio_test_ksm(folio) || folio_write_fenced(folio);
+}
+
+#ifdef CONFIG_MMU
+/* Keep migrated fenced anonymous folios non-exclusive and read-only. */
+static inline rmap_t migration_remap_rmap_flags(struct folio *folio,
+						bool was_read)
+{
+	if (folio_test_anon(folio) && !was_read && !folio_write_fenced(folio))
+		return RMAP_EXCLUSIVE;
+	return RMAP_NONE;
+}
+
+static inline bool migration_remap_writable(struct folio *folio, bool was_write,
+					    rmap_t rmap_flags)
+{
+	if (!was_write)
+		return false;
+	return !folio_test_anon(folio) || (rmap_flags & RMAP_EXCLUSIVE);
+}
+#endif
+
 /* char-mem.c */
 bool file_is_dev_zero(const struct file *file);
 

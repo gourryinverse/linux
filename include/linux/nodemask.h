@@ -531,15 +531,17 @@ static __always_inline int node_random(const nodemask_t *maskp)
 #define NODE_MEMORY_FEAT_COMMON		BIT(0) /* add to fallback zonelist */
 #define NODE_MEMORY_FEAT_COMPACTION	BIT(1) /* mm compaction */
 #define NODE_MEMORY_FEAT_RECLAIM	BIT(2) /* generic reclaim */
-#define NODE_MEMORY_FEAT_ALL		(~0UL)
-#define NODE_MEMORY_FEAT_VALID		(NODE_MEMORY_FEAT_COMMON | \
+#define NODE_MEMORY_FEAT_WR_FENCE	BIT(3) /* user writes must relocate */
+#define NODE_MEMORY_FEAT_ALL		(NODE_MEMORY_FEAT_COMMON | \
 					 NODE_MEMORY_FEAT_COMPACTION | \
 					 NODE_MEMORY_FEAT_RECLAIM)
+#define NODE_MEMORY_FEAT_VALID		(NODE_MEMORY_FEAT_ALL | \
+					 NODE_MEMORY_FEAT_WR_FENCE)
 
 static inline void node_set_memory_state(int nid, bool high, bool normal,
 					 unsigned long features)
 {
-	/* A common node must enable all features */
+	/* Common memory enables every permissive service and cannot be fenced. */
 	WARN_ON_ONCE((features & NODE_MEMORY_FEAT_COMMON) &&
 		     (features != NODE_MEMORY_FEAT_ALL));
 

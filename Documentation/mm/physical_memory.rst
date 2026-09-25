@@ -186,8 +186,8 @@ nodes with particular properties as defined by ``enum node_states``:
 
 ``N_MEMORY_*`` states describe the operations a private node supports. All
 are subsets of ``N_MEMORY``, and ``N_MEMORY_COMMON`` implies presence in all
-feature masks. A node with memory but without ``N_MEMORY_COMMON`` is a
-private node, described in Documentation/mm/numa_private_nodes.rst.
+permissive feature masks. A node with memory but without ``N_MEMORY_COMMON``
+is a private node, described in Documentation/mm/numa_private_nodes.rst.
 
 For each node that has a property described above, the bit corresponding to the
 node ID in the ``node_states[<property>]`` bitmask is set.
