@@ -73,7 +73,8 @@ static bool can_change_private_pte_writable(struct vm_area_struct *vma,
 	 * any additional checks while holding the PT lock.
 	 */
 	page = vm_normal_page(vma, addr, pte);
-	return page && PageAnon(page) && PageAnonExclusive(page);
+	return page && PageAnon(page) && PageAnonExclusive(page) &&
+	       !page_write_fenced(page);
 }
 
 static bool can_change_shared_pte_writable(struct vm_area_struct *vma,
@@ -202,7 +203,8 @@ static __always_inline void set_write_prot_commit_flush_ptes(struct vm_area_stru
 	}
 
 	set_write = maybe_change_pte_writable(vma, ptent) &&
-		    (folio && folio_test_anon(folio));
+		    (folio && folio_test_anon(folio)) &&
+		    !folio_write_fenced(folio);
 	if (!set_write) {
 		prot_commit_flush_ptes(vma, addr, ptep, oldpte, ptent, nr_ptes,
 				       /* idx = */ 0, set_write, tlb);

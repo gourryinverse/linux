@@ -2198,6 +2198,12 @@ vm_fault_t do_huge_pmd_wp_page(struct vm_fault *vmf)
 	folio = page_folio(page);
 	VM_BUG_ON_PAGE(!PageHead(page), page);
 
+	/* Split so the PTE write fault copies a write-fenced folio off-node. */
+	if (folio_must_cow(folio)) {
+		spin_unlock(vmf->ptl);
+		goto fallback;
+	}
+
 	/* Early check when only holding the PT lock. */
 	if (PageAnonExclusive(page))
 		goto reuse;
@@ -2279,9 +2285,12 @@ static inline bool can_change_pmd_writable(struct vm_area_struct *vma,
 	if (userfaultfd_huge_pmd_wp(vma, pmd))
 		return false;
 
+	page = vm_normal_page_pmd(vma, addr, pmd);
+	if (page_write_fenced(page))
+		return false;
+
 	if (!(vma->vm_flags & VM_SHARED)) {
 		/* See can_change_pte_writable(). */
-		page = vm_normal_page_pmd(vma, addr, pmd);
 		return page && PageAnon(page) && PageAnonExclusive(page);
 	}
 
@@ -5141,6 +5150,7 @@ void remove_migration_pmd(struct page_vma_mapped_walk *pvmw, struct folio *folio
 	unsigned long haddr = address & HPAGE_PMD_MASK;
 	pmd_t pmde;
 	softleaf_t entry;
+	rmap_t rmap_flags;
 
 	if (!(pvmw->pmd && !pvmw->pte))
 		return;
@@ -5148,10 +5158,13 @@ void remove_migration_pmd(struct page_vma_mapped_walk *pvmw, struct folio *folio
 	entry = softleaf_from_pmd(*pvmw->pmd);
 	folio_get(folio);
 	pmde = folio_mk_pmd(folio, READ_ONCE(vma->vm_page_prot));
+	rmap_flags = migration_remap_rmap_flags(folio,
+						softleaf_is_migration_read(entry));
 
 	if (pmd_swp_soft_dirty(*pvmw->pmd))
 		pmde = pmd_mksoft_dirty(pmde);
-	if (softleaf_is_migration_write(entry))
+	if (migration_remap_writable(folio, softleaf_is_migration_write(entry),
+				     rmap_flags))
 		pmde = pmd_mkwrite(pmde, vma);
 	if (pmd_swp_uffd(*pvmw->pmd))
 		pmde = pmd_mkuffd(pmde);
@@ -5182,11 +5195,6 @@ void remove_migration_pmd(struct page_vma_mapped_walk *pvmw, struct folio *folio
 	}
 
 	if (folio_test_anon(folio)) {
-		rmap_t rmap_flags = RMAP_NONE;
-
-		if (!softleaf_is_migration_read(entry))
-			rmap_flags |= RMAP_EXCLUSIVE;
-
 		folio_add_anon_rmap_pmd(folio, &folio->page, vma, haddr, rmap_flags);
 	} else {
 		folio_add_file_rmap_pmd(folio, &folio->page, vma);

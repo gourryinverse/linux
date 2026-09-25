@@ -4509,7 +4509,7 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 	 * If we encounter a page that is marked exclusive, we must reuse
 	 * the page without further checks.
 	 */
-	if (folio && folio_test_anon(folio) &&
+	if (folio && folio_test_anon(folio) && !folio_must_cow(folio) &&
 	    (PageAnonExclusive(vmf->page) || wp_can_reuse_anon_folio(folio, vma))) {
 		if (!PageAnonExclusive(vmf->page))
 			SetPageAnonExclusive(vmf->page);

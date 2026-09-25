@@ -1160,6 +1160,11 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 			 !IS_ALIGNED(pfn + nr_pages, PAGES_PER_SECTION)))
 		return -EINVAL;
 
+	/* A write fault can leave a fenced node only if every page is movable. */
+	if ((READ_ONCE(NODE_DATA(nid)->memory_features) &
+	     NODE_MEMORY_FEAT_WR_FENCE) && zone_idx(zone) != ZONE_MOVABLE)
+		return -EINVAL;
+
 
 	/* associate pfn range with the zone */
 	move_pfn_range_to_zone(zone, pfn, nr_pages, NULL, MIGRATE_MOVABLE,
@@ -1723,6 +1728,10 @@ int __add_memory_driver_managed(int nid, u64 start, u64 size,
 	if (!resource_name ||
 	    strstr(resource_name, "System RAM (") != resource_name ||
 	    resource_name[strlen(resource_name) - 1] != ')')
+		return -EINVAL;
+
+	if (online_type == MMOP_ONLINE_KERNEL &&
+	    (features & NODE_MEMORY_FEAT_WR_FENCE))
 		return -EINVAL;
 
 	if (online_type < MMOP_OFFLINE || online_type > MMOP_ONLINE_MOVABLE)
