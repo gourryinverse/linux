@@ -636,6 +636,20 @@ config BALLOON_MIGRATION
 	  allocations (e.g., ZONE_MOVABLE, CMA) and such that they can be
 	  migrated for memory defragmentation purposes by memory compaction.
 
+config CRAM
+	bool "Compressed-RAM private-node anonymous-memory service"
+	depends on NUMA && MIGRATION && MMU && MEMORY_HOTPLUG
+	depends on MEMORY_HOTREMOVE
+	help
+	  Manage anonymous folios placed on compressed private memory nodes.
+	  Reclaim diverts eligible anonymous folios onto CRAM and maps them
+	  present read-only, so reads are zero-copy and writes copy the folio
+	  back to common memory. Entry is by migration, not swap.
+
+	  A device driver registers its memory with cram_register().
+
+	  If unsure, say N.
+
 #
 # support for memory compaction
 config COMPACTION
