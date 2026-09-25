@@ -87,4 +87,18 @@ config DEV_DAX_KMEM
 
 	  Say N if unsure.
 
+config DEV_DAX_ANON
+	tristate "Anonymous DAX: shared mappings backed by private memory"
+	depends on DEV_DAX && NUMA && MMU
+	depends on MEMORY_HOTPLUG && MEMORY_HOTREMOVE
+	help
+	  Bind a device-dax instance to anondax to online its ranges as a
+	  private memory node.  MAP_SHARED mappings of the resulting device
+	  allocate pages explicitly from that node; MAP_PRIVATE is rejected.
+
+	  Each open file describes an independent allocation object.  Mappings
+	  of the same offsets through that file share their contents.
+	  The private node always permits reclaim and compaction.
+
+	  Say N if unsure.
 endif
