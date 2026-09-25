@@ -6915,6 +6915,13 @@ R:	Yury Norov <yury.norov@gmail.com>
 S:	Maintained
 F:	rust/kernel/cpumask.rs
 
+CRAM COMPRESSED-MEMORY SERVICE
+M:	Gregory Price <gourry@gourry.net>
+L:	linux-mm@kvack.org
+S:	Maintained
+F:	include/linux/cram.h
+F:	mm/cram.c
+
 CRAMFS FILESYSTEM
 M:	Nicolas Pitre <nico@fluxnic.net>
 S:	Maintained
