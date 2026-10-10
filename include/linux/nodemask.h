@@ -413,6 +413,7 @@ enum node_states {
 	N_MEMORY,		/* the node has memory */
 	N_MEMORY_COMMON,	/* common pool (fallback zonelist) */
 	N_MEMORY_PRIVATE,	/* memory outside the common pool */
+	N_MEMORY_MEMPOLICY,	/* memory policy may target the node */
 	N_CPU,		/* The node has one or more cpus */
 	N_GENERIC_INITIATOR,	/* The node has one or more Generic Initiators */
 	/* Internal states, not exported through sysfs */

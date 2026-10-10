@@ -697,7 +697,7 @@ static void queue_folios_pmd(pmd_t *pmd, unsigned long addr,
 		return;
 	}
 	folio = vm_normal_folio_pmd(walk->vma, addr, pmdval);
-	if (!folio || folio_is_zone_device(folio))
+	if (!folio || !folio_allows_mempolicy(folio))
 		return;
 	if (!queue_folio_required(folio, qp))
 		return;
@@ -755,7 +755,7 @@ static int queue_folios_pte_range(pmd_t *pmd, unsigned long addr,
 			continue;
 		}
 		folio = vm_normal_folio(vma, addr, ptent);
-		if (!folio || folio_is_zone_device(folio))
+		if (!folio || !folio_allows_mempolicy(folio))
 			continue;
 		if (folio_test_large(folio) && max_nr != 1)
 			nr = folio_pte_batch(folio, pte, ptent, max_nr);
@@ -828,6 +828,8 @@ static int queue_folios_hugetlb(pte_t *pte, unsigned long hmask,
 		goto unlock;
 	}
 	folio = pfn_folio(pte_pfn(ptep));
+	if (!folio_allows_mempolicy(folio))
+		goto unlock;
 	if (!queue_folio_required(folio, qp))
 		goto unlock;
 	if (!(flags & (MPOL_MF_MOVE | MPOL_MF_MOVE_ALL)) ||
@@ -2114,7 +2116,7 @@ bool apply_policy_zone(struct mempolicy *policy, enum zone_type zone)
 	 * if policy->nodes has movable memory only,
 	 * we apply policy when gfp_zone(gfp) = ZONE_MOVABLE only.
 	 *
-	 * policy->nodes is intersect with node_states[N_MEMORY].
+	 * policy->nodes is intersected with node_states[N_MEMORY].
 	 * so if the following test fails, it implies
 	 * policy->nodes has movable memory only.
 	 */

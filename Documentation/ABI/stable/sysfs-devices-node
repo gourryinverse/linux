@@ -57,6 +57,14 @@ Description:
 		A node listed here is opted out of common memory management
 		services and is typically driver-managed.
 
+What:		/sys/devices/system/node/has_mpol_memory
+Date:		October 2026
+Contact:	Linux Memory Management list <linux-mm@kvack.org>
+Description:
+		Nodelist of the memory nodes that memory-policy interfaces
+		may target: every common memory node, and each private node
+		whose owner allows userspace NUMA placement.
+
 What:		/sys/devices/system/node/nodeX
 Date:		October 2002
 Contact:	Linux Memory Management list <linux-mm@kvack.org>
