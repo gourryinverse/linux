@@ -1076,6 +1076,58 @@ static void check_panic_on_oom(struct oom_control *oc)
 		sysctl_panic_on_oom == 2 ? "compulsory" : "system-wide");
 }
 
+/*
+ * The kernel cannot infer which other task should pay for exhausting memory
+ * owned by a device or another private-memory service.  Until individual
+ * use cases provide a better model, select the allocating process rather
+ * than scoring other tasks. Normal shared-mm and memory.oom.group killing
+ * still applies, respecting the administrator's workload grouping.
+ */
+static bool private_memory_oom(struct oom_control *oc)
+{
+	static bool protected_reported;
+	struct task_struct *p;
+	bool pending = false;
+
+	oc->constraint = CONSTRAINT_MEMORY_POLICY;
+	check_panic_on_oom(oc);
+
+	/* As in select_bad_process(), wait for an earlier victim's memory. */
+	rcu_read_lock();
+	for_each_process(p) {
+		if (tsk_is_oom_victim(p) &&
+		    !mm_flags_test(MMF_OOM_SKIP, p->signal->oom_mm)) {
+			pending = true;
+			break;
+		}
+	}
+	rcu_read_unlock();
+	if (pending)
+		return true;
+
+	if (!current->mm || oom_unkillable_task(current) ||
+	    current->signal->oom_score_adj == OOM_SCORE_ADJ_MIN) {
+		/*
+		 * Fail the allocation; a user fault retries until memory on the
+		 * node is freed. Future users may upgrade this to SIGBUS with
+		 * the appropriate fault plumbing.
+		 */
+		if (!protected_reported) {
+			protected_reported = true;
+			dump_header(oc);
+			pr_warn("Private memory exhausted; OOM-protected %s (%d) waits for memory\n",
+				current->comm, task_pid_nr(current));
+		}
+		oc->quiet = true;
+		return false;
+	}
+
+	get_task_struct(current);
+	oc->chosen = current;
+	oom_kill_process(oc, "Private memory out of memory");
+	return true;
+}
+
 static BLOCKING_NOTIFIER_HEAD(oom_notify_list);
 
 int register_oom_notifier(struct notifier_block *nb)
@@ -1106,7 +1158,7 @@ bool out_of_memory(struct oom_control *oc)
 	if (oom_killer_disabled)
 		return false;
 
-	if (!is_memcg_oom(oc)) {
+	if (!is_memcg_oom(oc) && !oc->private_memory) {
 		blocking_notifier_call_chain(&oom_notify_list, 0, &freed);
 		if (freed > 0 && !is_sysrq_oom(oc))
 			/* Got some memory back in the last second. */
@@ -1131,6 +1183,9 @@ bool out_of_memory(struct oom_control *oc)
 	 */
 	if (!(oc->gfp_mask & __GFP_FS) && !is_memcg_oom(oc))
 		return true;
+
+	if (oc->private_memory)
+		return private_memory_oom(oc);
 
 	/*
 	 * Check if there were limitations on the allocation (only relevant for
