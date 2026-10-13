@@ -341,6 +341,24 @@ MPOL_F_RELATIVE_NODES
 	MPOL_PREFERRED policies that were created with an empty nodemask
 	(local allocation).
 
+MPOL_F_PRIVATE_NODES
+	This flag binds a VMA to a single private memory node (see
+	Documentation/mm/numa_private_nodes.rst).  Without it, private
+	nodes in a policy's nodemask are ignored, as nodes outside the
+	task's cpuset are.
+
+	Only mbind() with MPOL_BIND accepts the flag, and its nodemask
+	must name exactly one private node listed in has_mpol_memory.
+	A private binding is never rebound when the task's allowed nodes
+	change.  While its node is outside the task's cpuset or has no
+	memory, the binding is suspended and allocations use common
+	memory; it resumes when the node becomes eligible again.
+	get_mempolicy() reports the original nodemask.
+
+	MPOL_F_PRIVATE_NODES cannot be combined with
+	MPOL_F_STATIC_NODES, MPOL_F_RELATIVE_NODES or
+	MPOL_F_NUMA_BALANCING, and cannot be used on HugeTLB mappings.
+
 Memory Policy Reference Counting
 ================================
 
