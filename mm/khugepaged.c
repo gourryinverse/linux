@@ -3139,6 +3139,10 @@ void set_recommended_min_free_kbytes(void)
 		if (zone_idx(zone) > gfp_zone(GFP_USER))
 			continue;
 
+		/* min_free_kbytes is distributed over common memory only. */
+		if (!node_state(zone_to_nid(zone), N_MEMORY_COMMON))
+			continue;
+
 		nr_zones++;
 	}
 
