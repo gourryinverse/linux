@@ -4107,10 +4107,12 @@ static bool alloc_policy_valid(const struct alloc_context *ac)
 
 static inline struct page *
 __alloc_pages_may_oom(gfp_t gfp_mask, unsigned int order,
-	const struct alloc_context *ac, unsigned long *did_some_progress)
+	const struct alloc_context *ac, unsigned long *did_some_progress,
+	bool *quiet)
 {
 	struct oom_control oc = {
 		.zonelist = ac->zonelist,
+		.private_memory = ac->alloc_flags & ALLOC_ZONELIST_PRIVATE,
 		.nodemask = ac->nodemask,
 		.memcg = NULL,
 		.gfp_mask = gfp_mask,
@@ -4119,6 +4121,7 @@ __alloc_pages_may_oom(gfp_t gfp_mask, unsigned int order,
 	struct page *page;
 
 	*did_some_progress = 0;
+	*quiet = false;
 
 	/*
 	 * Acquire the oom lock.  If that fails, somebody else is
@@ -4174,6 +4177,15 @@ __alloc_pages_may_oom(gfp_t gfp_mask, unsigned int order,
 	 * failures more gracefully we should just bail out here.
 	 */
 
+	/*
+	 * A private request revoked since the last retry check is not out of
+	 * memory. Report progress so the slowpath retries and relaxes it.
+	 */
+	if (oc.private_memory && !alloc_policy_valid(ac)) {
+		*did_some_progress = 1;
+		goto out;
+	}
+
 	/* Exhausted what can be done so it's blame time */
 	if (out_of_memory(&oc) ||
 	    WARN_ON_ONCE_GFP(gfp_mask & __GFP_NOFAIL, gfp_mask)) {
@@ -4187,6 +4199,7 @@ __alloc_pages_may_oom(gfp_t gfp_mask, unsigned int order,
 			page = __alloc_pages_cpuset_fallback(gfp_mask, order,
 					ac->alloc_flags|ALLOC_NO_WATERMARKS, ac);
 	}
+	*quiet = oc.quiet;
 out:
 	mutex_unlock(&oom_lock);
 	return page;
@@ -4902,6 +4915,7 @@ __alloc_pages_slowpath(gfp_t gfp_mask, unsigned int order,
 	int reserve_flags;
 	bool compact_first = false;
 	bool can_retry_reserves = true;
+	bool oom_quiet = false;
 	unsigned long alloc_start_time = jiffies;
 
 	/*
@@ -4935,6 +4949,7 @@ restart:
 	no_progress_loops = 0;
 	compact_result = COMPACT_SKIPPED;
 	compact_priority = DEF_COMPACT_PRIORITY;
+	oom_quiet = false;
 	cpuset_mems_cookie = read_mems_allowed_begin();
 	zonelist_iter_cookie = zonelist_iter_begin();
 
@@ -5173,7 +5188,8 @@ retry:
 		goto restart;
 
 	/* Reclaim has failed us, start killing things */
-	page = __alloc_pages_may_oom(gfp_mask, order, ac, &did_some_progress);
+	page = __alloc_pages_may_oom(gfp_mask, order, ac, &did_some_progress,
+				     &oom_quiet);
 	if (page)
 		goto got_pg;
 
@@ -5228,8 +5244,9 @@ nopage:
 		goto retry;
 	}
 fail:
-	warn_alloc(gfp_mask, ac->nodemask,
-			"page allocation failure: order:%u", order);
+	if (!oom_quiet)
+		warn_alloc(gfp_mask, ac->nodemask,
+			   "page allocation failure: order:%u", order);
 got_pg:
 	return page;
 }

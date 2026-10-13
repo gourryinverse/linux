@@ -32,6 +32,12 @@ struct oom_control {
 	/* Used to determine mempolicy */
 	const nodemask_t *nodemask;
 
+	/* The allocation selected a private-memory zonelist. */
+	bool private_memory;
+
+	/* Private memory OOM declined, and has already reported it. */
+	bool quiet;
+
 	/* Memory cgroup in which oom is invoked, or NULL for global oom */
 	struct mem_cgroup *memcg;
 
