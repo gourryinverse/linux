@@ -2390,6 +2390,12 @@ retry:
 			goto out_unlock;
 		}
 
+		/* Migration may have moved the folio since the scan. */
+		if (unlikely(!folio_is_common_memory(folio))) {
+			result = SCAN_PAGE_NULL;
+			goto out_unlock;
+		}
+
 		if (!is_shmem && (folio_test_dirty(folio) ||
 				  folio_test_writeback(folio))) {
 			/*
