@@ -550,6 +550,39 @@ static __always_inline int node_random(const nodemask_t *maskp)
 #define for_each_node_with_cpus(node)	for_each_node_state(node, N_CPU)
 
 /*
+ * Private nodes omit NODE_MEMORY_FEAT_COMMON. Their owners opt into
+ * individual MM services with the remaining bits.
+ */
+#define NODE_MEMORY_FEAT_COMMON		BIT(0) /* add to fallback zonelist */
+#define NODE_MEMORY_FEAT_MEMPOLICY	BIT(1) /* userspace NUMA controls */
+#define NODE_MEMORY_FEAT_RECLAIM	BIT(2) /* mm reclaim */
+#define NODE_MEMORY_FEAT_COMPACTION	BIT(3) /* mm compaction */
+#define NODE_MEMORY_FEAT_ALL		(NODE_MEMORY_FEAT_COMMON | \
+					 NODE_MEMORY_FEAT_MEMPOLICY | \
+					 NODE_MEMORY_FEAT_RECLAIM | \
+					 NODE_MEMORY_FEAT_COMPACTION)
+
+/*
+ * Common memory carries every feature. Userspace NUMA placement requires
+ * reclaim and compaction on the node, and reclaim requires compaction.
+ */
+static inline bool node_memory_features_valid(unsigned long features)
+{
+	unsigned long managed = NODE_MEMORY_FEAT_RECLAIM |
+				NODE_MEMORY_FEAT_COMPACTION;
+
+	if (features & ~NODE_MEMORY_FEAT_ALL)
+		return false;
+	if (features & NODE_MEMORY_FEAT_COMMON)
+		return features == NODE_MEMORY_FEAT_ALL;
+	if (features & NODE_MEMORY_FEAT_MEMPOLICY)
+		return (features & managed) == managed;
+	if (features & NODE_MEMORY_FEAT_RECLAIM)
+		return features & NODE_MEMORY_FEAT_COMPACTION;
+	return true;
+}
+
+/*
  * For nodemask scratch area.
  * NODEMASK_ALLOC(type, name) allocates an object with a specified type and
  * name.

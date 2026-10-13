@@ -1204,7 +1204,8 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 	 * Publish this node's memory states, including any newly-normal zone.
 	 * Hotplug never adds highmem.
 	 */
-	node_set_memory_state(nid, false, zone_idx(zone) <= ZONE_NORMAL);
+	node_set_memory_state(nid, false, zone_idx(zone) <= ZONE_NORMAL,
+			      NODE_MEMORY_FEAT_ALL);
 
 	if (need_zonelists_rebuild)
 		build_all_zonelists(NULL);

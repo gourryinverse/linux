@@ -59,7 +59,8 @@ void lru_add_drain_cpu_zone(struct zone *zone);
 void folio_deactivate(struct folio *folio);
 void folio_mark_lazyfree(struct folio *folio);
 
-void node_set_memory_state(int nid, bool high, bool normal);
+void node_set_memory_state(int nid, bool high, bool normal,
+			   unsigned long features);
 void node_clear_memory_state(int nid);
 
 /*

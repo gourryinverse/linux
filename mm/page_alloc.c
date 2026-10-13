@@ -211,17 +211,26 @@ nodemask_t node_states[NR_NODE_STATES] __read_mostly = {
 };
 EXPORT_SYMBOL(node_states);
 
-void __meminit node_set_memory_state(int nid, bool high, bool normal)
+void __meminit node_set_memory_state(int nid, bool high, bool normal,
+				     unsigned long features)
 {
+	WARN_ON_ONCE(!node_memory_features_valid(features));
+
 	node_set_state(nid, N_MEMORY);
 	if (high)
 		node_set_state(nid, N_HIGH_MEMORY);
 	if (normal)
 		node_set_state(nid, N_NORMAL_MEMORY);
-	node_set_state(nid, N_MEMORY_COMMON);
-	node_set_state(nid, N_MEMORY_MEMPOLICY);
-	node_set_state(nid, N_MEMORY_RECLAIM);
-	node_set_state(nid, N_MEMORY_COMPACTION);
+	if (features & NODE_MEMORY_FEAT_COMMON)
+		node_set_state(nid, N_MEMORY_COMMON);
+	else
+		node_set_state(nid, N_MEMORY_PRIVATE);
+	if (features & NODE_MEMORY_FEAT_MEMPOLICY)
+		node_set_state(nid, N_MEMORY_MEMPOLICY);
+	if (features & NODE_MEMORY_FEAT_RECLAIM)
+		node_set_state(nid, N_MEMORY_RECLAIM);
+	if (features & NODE_MEMORY_FEAT_COMPACTION)
+		node_set_state(nid, N_MEMORY_COMPACTION);
 }
 
 void __meminit node_clear_memory_state(int nid)
