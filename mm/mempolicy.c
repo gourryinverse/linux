@@ -1334,7 +1334,7 @@ static bool migrate_folio_add(struct folio *folio, struct list_head *foliolist,
 static long migrate_to_node(struct mm_struct *mm, int source, int dest,
 			    int flags)
 {
-	nodemask_t nmask;
+	nodemask_t nmask, dest_mask;
 	struct vm_area_struct *vma;
 	LIST_HEAD(pagelist);
 	long nr_failed;
@@ -1344,6 +1344,14 @@ static long migrate_to_node(struct mm_struct *mm, int source, int dest,
 		.gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_THISNODE,
 		.reason = MR_SYSCALL,
 	};
+
+	/* Private placement is reachable only through the private zonelist. */
+	if (node_state(dest, N_MEMORY_MEMPOLICY) &&
+	    node_state(dest, N_MEMORY_PRIVATE)) {
+		init_nodemask_of_node(&dest_mask, dest);
+		mtc.nmask = &dest_mask;
+		mtc.alloc_flags = ALLOC_ZONELIST_PRIVATE;
+	}
 
 	nodes_clear(nmask);
 	node_set(source, nmask);

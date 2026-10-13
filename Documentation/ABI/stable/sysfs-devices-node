@@ -66,8 +66,9 @@ Description:
 		whose owner allows userspace NUMA placement.
 
 		A private node is currently reachable only through mbind()
-		with MPOL_F_PRIVATE_NODES. set_mempolicy() and tmpfs mount
-		policies do not target private nodes.
+		with MPOL_F_PRIVATE_NODES and through explicit migration
+		(move_pages(2), migrate_pages(2)). set_mempolicy() and tmpfs
+		mount policies do not target private nodes.
 
 What:		/sys/devices/system/node/nodeX
 Date:		October 2002
