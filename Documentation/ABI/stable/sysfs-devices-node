@@ -65,6 +65,10 @@ Description:
 		may target: every common memory node, and each private node
 		whose owner allows userspace NUMA placement.
 
+		A private node is currently reachable only through mbind()
+		with MPOL_F_PRIVATE_NODES. set_mempolicy() and tmpfs mount
+		policies do not target private nodes.
+
 What:		/sys/devices/system/node/nodeX
 Date:		October 2002
 Contact:	Linux Memory Management list <linux-mm@kvack.org>
