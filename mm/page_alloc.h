@@ -70,11 +70,11 @@
  * between functions involved in allocations, including the alloc_pages*
  * family of functions.
  *
- * nodemask, migratetype and highest_zoneidx are initialized only once in
+ * migratetype, preferred_nid and highest_zoneidx are initialized only once in
  * __alloc_pages() and then never change.
  *
- * zonelist, preferred_zone and highest_zoneidx are set first in
- * __alloc_pages() for the fast path, and might be later changed
+ * zonelist, nodemask, preferred_zone, highest_zoneidx and alloc_flags are set
+ * first in __alloc_pages() for the fast path, and might be later changed
  * in __alloc_pages_slowpath(). All other functions pass the whole structure
  * by a const pointer.
  */
@@ -84,6 +84,7 @@ struct alloc_context {
 	struct zoneref *preferred_zoneref;
 	/* The zone first_zones_zonelist() found at preferred_zoneref */
 	struct zone *preferred_zone;
+	int preferred_nid;
 	int migratetype;
 
 	/*
