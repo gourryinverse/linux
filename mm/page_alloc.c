@@ -4066,6 +4066,33 @@ __alloc_pages_cpuset_fallback(gfp_t gfp_mask, unsigned int order,
 	return page;
 }
 
+static bool alloc_policy_valid(const struct alloc_context *ac)
+{
+	struct zoneref *z;
+	struct zone *zone;
+
+	if (!ac->nodemask)
+		return true;
+
+	/* The preferred zone is in both the nodemask and the zonelist. */
+	zone = zonelist_zone(ac->preferred_zoneref);
+	if (zone && (!cpusets_enabled() ||
+		     node_isset(zone_to_nid(zone), cpuset_current_mems_allowed)))
+		return true;
+
+	/*
+	 * Check node membership across all zone types, not GFP zone suitability
+	 * or free capacity. Neither should cause a request to be relaxed.
+	 */
+	for_each_zone_zonelist_nodemask(zone, z, ac->zonelist, MAX_NR_ZONES - 1,
+				      ac->nodemask) {
+		if (!cpusets_enabled() ||
+		    node_isset(zone_to_nid(zone), cpuset_current_mems_allowed))
+			return true;
+	}
+	return false;
+}
+
 static inline struct page *
 __alloc_pages_may_oom(gfp_t gfp_mask, unsigned int order,
 	const struct alloc_context *ac, unsigned long *did_some_progress)
@@ -4764,6 +4791,51 @@ check_retry_cpuset(int cpuset_mems_cookie, struct alloc_context *ac)
 	return false;
 }
 
+/*
+ * A private request stays strict while its zonelist holds an allowed node.
+ * Recheck the cpuset and zonelist cookies before relaxing it to common memory.
+ */
+static bool check_retry_private(gfp_t gfp, int cpuset_mems_cookie,
+				unsigned int zonelist_iter_cookie,
+				struct alloc_context *ac)
+{
+	/* A strict local private request keeps its allocation domain. */
+	bool policy_valid = ((gfp & __GFP_THISNODE) &&
+			     (ac->alloc_flags & ALLOC_ZONELIST_PRIVATE)) ||
+			    alloc_policy_valid(ac);
+
+	if (read_mems_allowed_retry(cpuset_mems_cookie) ||
+	    check_retry_zonelist(zonelist_iter_cookie))
+		return true;
+	if (policy_valid)
+		return false;
+
+	ac->nodemask = NULL;
+	ac->alloc_flags &= ~ALLOC_ZONELIST_PRIVATE;
+	ac->zonelist = node_zonelist(ac->preferred_nid, gfp);
+	return true;
+}
+
+/* A private request, or an ordinary mask naming a node that became private. */
+static bool alloc_policy_private(const struct alloc_context *ac)
+{
+	if (ac->alloc_flags & ALLOC_ZONELIST_PRIVATE)
+		return true;
+	return ac->nodemask &&
+	       nodes_intersects(*ac->nodemask, node_states[N_MEMORY_PRIVATE]);
+}
+
+static inline bool
+check_retry_alloc(gfp_t gfp, int cpuset_mems_cookie,
+		  unsigned int zonelist_iter_cookie, struct alloc_context *ac)
+{
+	if (alloc_policy_private(ac))
+		return check_retry_private(gfp, cpuset_mems_cookie,
+					   zonelist_iter_cookie, ac);
+	return check_retry_cpuset(cpuset_mems_cookie, ac) ||
+	       check_retry_zonelist(zonelist_iter_cookie);
+}
+
 static void check_alloc_stall_warn(gfp_t gfp_mask, const nodemask_t *nodemask,
 				unsigned int order, unsigned long alloc_start_time)
 {
@@ -4916,16 +4988,24 @@ retry:
 		goto got_pg;
 
 	reserve_flags = __gfp_pfmemalloc_flags(gfp_mask);
-	if (reserve_flags)
+	if (reserve_flags) {
+		unsigned int keep = ALLOC_KSWAPD;
+
+		/* The cpuset still grants a private request's node. */
+		if (ac->alloc_flags & ALLOC_ZONELIST_PRIVATE)
+			keep |= ALLOC_CPUSET;
 		alloc_flags = alloc_flags_cma(gfp_mask) | reserve_flags |
-				ac->alloc_flags | (alloc_flags & ALLOC_KSWAPD);
+				ac->alloc_flags | (alloc_flags & keep);
+	}
 
 	/*
 	 * Reset the nodemask and zonelist iterators if memory policies can be
 	 * ignored. These allocations are high priority and system rather than
-	 * user oriented.
+	 * user oriented. A private request keeps its node: private memory has
+	 * no reserves to grant.
 	 */
-	if (!(alloc_flags & ALLOC_CPUSET) || reserve_flags) {
+	if ((!(alloc_flags & ALLOC_CPUSET) || reserve_flags) &&
+	    !(ac->alloc_flags & ALLOC_ZONELIST_PRIVATE)) {
 		ac->nodemask = NULL;
 		ac->preferred_zoneref = first_zones_zonelist(ac->zonelist,
 					ac->highest_zoneidx, ac->nodemask);
@@ -5041,8 +5121,8 @@ retry:
 	 * infinite retries. No "goto retry;" can be placed above this check
 	 * unless it can execute just once.
 	 */
-	if (check_retry_cpuset(cpuset_mems_cookie, ac) ||
-	    check_retry_zonelist(zonelist_iter_cookie))
+	if (check_retry_alloc(gfp_mask, cpuset_mems_cookie,
+			      zonelist_iter_cookie, ac))
 		goto restart;
 
 	if (should_reclaim_retry(gfp_mask, order, ac, alloc_flags,
@@ -5076,8 +5156,8 @@ retry:
 	 * Deal with possible cpuset update races or zonelist updates to avoid
 	 * a unnecessary OOM kill.
 	 */
-	if (check_retry_cpuset(cpuset_mems_cookie, ac) ||
-	    check_retry_zonelist(zonelist_iter_cookie))
+	if (check_retry_alloc(gfp_mask, cpuset_mems_cookie,
+			      zonelist_iter_cookie, ac))
 		goto restart;
 
 	/* Reclaim has failed us, start killing things */
@@ -5102,8 +5182,8 @@ nopage:
 	 * Deal with possible cpuset update races or zonelist updates to avoid
 	 * a unnecessary OOM kill.
 	 */
-	if (check_retry_cpuset(cpuset_mems_cookie, ac) ||
-	    check_retry_zonelist(zonelist_iter_cookie))
+	if (check_retry_alloc(gfp_mask, cpuset_mems_cookie,
+			      zonelist_iter_cookie, ac))
 		goto restart;
 
 	/*
@@ -5148,6 +5228,7 @@ static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
 		unsigned int *alloc_flags)
 {
 	ac->highest_zoneidx = gfp_zone(gfp_mask);
+	ac->preferred_nid = preferred_nid;
 	ac->zonelist = select_zonelist(preferred_nid, gfp_mask, *alloc_flags);
 	ac->nodemask = nodemask;
 	ac->migratetype = gfp_migratetype(gfp_mask);
@@ -5451,6 +5532,8 @@ struct page *__alloc_frozen_pages_noprof(gfp_t gfp, unsigned int order,
 	if (WARN_ON(alloc_flags & ~(ALLOC_NOLOCK | ALLOC_NO_CODETAG |
 				    ALLOC_ZONELIST_PRIVATE)))
 		return NULL;
+	/* Without a nodemask, a private request could never be relaxed. */
+	VM_WARN_ON_ONCE((alloc_flags & ALLOC_ZONELIST_PRIVATE) && !nodemask);
 
 	if (!alloc_order_allowed(gfp, order, alloc_flags))
 		return NULL;
