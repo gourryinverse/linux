@@ -739,6 +739,20 @@ extern char * const zone_names[MAX_NR_ZONES];
 extern int min_free_kbytes;
 extern int defrag_mode;
 
+/* Free pages on private nodes, which ordinary allocations cannot use. */
+static inline unsigned long private_free_pages(void)
+{
+	unsigned long nr = 0;
+	int nid;
+
+	if (!IS_ENABLED(CONFIG_NUMA))
+		return 0;
+
+	for_each_node_state(nid, N_MEMORY_PRIVATE)
+		nr += sum_zone_node_page_state(nid, NR_FREE_PAGES);
+	return nr;
+}
+
 void setup_per_zone_wmarks(void);
 void calculate_min_free_kbytes(void);
 int __meminit init_per_zone_wmark_min(void);
