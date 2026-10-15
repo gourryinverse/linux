@@ -259,11 +259,16 @@ static enum oom_constraint constrained_alloc(struct oom_control *oc)
 		return CONSTRAINT_MEMCG;
 	}
 
-	/* Default to all available memory */
-	oc->totalpages = totalram_pages() + total_swap_pages;
-
-	if (!IS_ENABLED(CONFIG_NUMA))
+	if (!IS_ENABLED(CONFIG_NUMA)) {
+		oc->totalpages = totalram_pages() + total_swap_pages;
 		return CONSTRAINT_NONE;
+	}
+
+	/* Private capacity cannot satisfy an ordinary allocation. */
+	oc->totalpages = totalram_pages() + total_swap_pages;
+	for_each_populated_zone(zone)
+		if (node_state(zone_to_nid(zone), N_MEMORY_PRIVATE))
+			oc->totalpages -= zone_managed_pages(zone);
 
 	if (!oc->zonelist)
 		return CONSTRAINT_NONE;
@@ -274,9 +279,9 @@ static enum oom_constraint constrained_alloc(struct oom_control *oc)
 	 * get_page_from_freelist().
 	 */
 	if (oc->nodemask &&
-	    !nodes_subset(node_states[N_MEMORY], *oc->nodemask)) {
+	    !nodes_subset(node_states[N_MEMORY_COMMON], *oc->nodemask)) {
 		oc->totalpages = total_swap_pages;
-		for_each_node_mask(nid, *oc->nodemask)
+		for_each_node_mask_state(nid, *oc->nodemask, N_MEMORY_COMMON)
 			oc->totalpages += node_present_pages(nid);
 		return CONSTRAINT_MEMORY_POLICY;
 	}
@@ -289,7 +294,8 @@ static enum oom_constraint constrained_alloc(struct oom_control *oc)
 
 	if (cpuset_limited) {
 		oc->totalpages = total_swap_pages;
-		for_each_node_mask(nid, cpuset_current_mems_allowed)
+		for_each_node_mask_state(nid, cpuset_current_mems_allowed,
+					 N_MEMORY_COMMON)
 			oc->totalpages += node_present_pages(nid);
 		return CONSTRAINT_CPUSET;
 	}
