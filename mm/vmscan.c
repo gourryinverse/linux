@@ -6631,6 +6631,17 @@ static void consider_reclaim_throttle(pg_data_t *pgdat, struct scan_control *sc)
 }
 
 /*
+ * Private nodes are absent from the fallback zonelists. Memcg and
+ * hibernation reclaim visit the ones that permit reclaim directly.
+ */
+static bool reclaim_private_node(int nid, struct scan_control *sc)
+{
+	return (cgroup_reclaim(sc) || sc->hibernation_mode) &&
+	       !node_state(nid, N_MEMORY_COMMON) &&
+	       (!sc->nodemask || node_isset(nid, *sc->nodemask));
+}
+
+/*
  * This is the direct reclaim path, for page-allocating processes.  We only
  * try to reclaim pages from zones which will satisfy the caller's allocation
  * request.
@@ -6645,6 +6656,7 @@ static void shrink_zones(struct zonelist *zonelist, struct scan_control *sc)
 	gfp_t orig_mask;
 	pg_data_t *last_pgdat = NULL;
 	pg_data_t *first_pgdat = NULL;
+	int nid;
 
 	/*
 	 * If the number of buffer_heads in the machine exceeds the maximum
@@ -6700,6 +6712,10 @@ static void shrink_zones(struct zonelist *zonelist, struct scan_control *sc)
 		shrink_node(zone->zone_pgdat, sc);
 	}
 
+	for_each_node_state(nid, N_MEMORY_RECLAIM)
+		if (reclaim_private_node(nid, sc))
+			shrink_node(NODE_DATA(nid), sc);
+
 	if (first_pgdat)
 		consider_reclaim_throttle(first_pgdat, sc);
 
@@ -6725,6 +6741,18 @@ static void snapshot_refaults(struct mem_cgroup *target_memcg, pg_data_t *pgdat)
 	target_lruvec->refaults[WORKINGSET_FILE] = refaults;
 }
 
+static void finish_node_reclaim(pg_data_t *pgdat, struct scan_control *sc)
+{
+	snapshot_refaults(sc->target_mem_cgroup, pgdat);
+
+	if (cgroup_reclaim(sc)) {
+		struct lruvec *lruvec;
+
+		lruvec = mem_cgroup_lruvec(sc->target_mem_cgroup, pgdat);
+		clear_bit(LRUVEC_CGROUP_CONGESTED, &lruvec->flags);
+	}
+}
+
 /*
  * This is the main entry point to direct page reclaim.
  *
@@ -6748,6 +6776,7 @@ static unsigned long do_try_to_free_pages(struct zonelist *zonelist,
 	pg_data_t *last_pgdat;
 	struct zoneref *z;
 	struct zone *zone;
+	int nid;
 retry:
 	delayacct_freepages_start();
 
@@ -6774,17 +6803,12 @@ retry:
 		if (zone->zone_pgdat == last_pgdat)
 			continue;
 		last_pgdat = zone->zone_pgdat;
-
-		snapshot_refaults(sc->target_mem_cgroup, zone->zone_pgdat);
-
-		if (cgroup_reclaim(sc)) {
-			struct lruvec *lruvec;
-
-			lruvec = mem_cgroup_lruvec(sc->target_mem_cgroup,
-						   zone->zone_pgdat);
-			clear_bit(LRUVEC_CGROUP_CONGESTED, &lruvec->flags);
-		}
+		finish_node_reclaim(zone->zone_pgdat, sc);
 	}
+
+	for_each_node_state(nid, N_MEMORY_RECLAIM)
+		if (reclaim_private_node(nid, sc))
+			finish_node_reclaim(NODE_DATA(nid), sc);
 
 	delayacct_freepages_end();
 
@@ -7032,7 +7056,8 @@ unsigned long try_to_free_mem_cgroup_pages(struct mem_cgroup *memcg,
 	/*
 	 * Traverse the ZONELIST_FALLBACK zonelist of the current node to put
 	 * equal pressure on all the nodes. This is based on the assumption that
-	 * the reclaim does not bail out early.
+	 * the reclaim does not bail out early. shrink_zones() also visits the
+	 * private nodes that permit reclaim.
 	 */
 	struct zonelist *zonelist = node_zonelist(numa_node_id(), sc.gfp_mask);
 
