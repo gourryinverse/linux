@@ -177,6 +177,8 @@ nodes with particular properties as defined by ``enum node_states``:
 ``N_MEMORY_PRIVATE``
   The node has memory but is not on the fallback zonelists. Together with
   ``N_MEMORY_COMMON`` it partitions ``N_MEMORY``.
+``N_MEMORY_RECLAIM``
+  Page reclaim may operate on the node.
 ``N_CPU``
   The node has one or more CPUs
 ``N_GENERIC_INITIATOR``
@@ -193,6 +195,7 @@ For example, for node 2 with normal memory and CPUs, bit 2 will be set in ::
   node_states[N_HIGH_MEMORY]
   node_states[N_MEMORY]
   node_states[N_MEMORY_COMMON]
+  node_states[N_MEMORY_RECLAIM]
   node_states[N_CPU]
 
 For various operations possible with nodemasks please refer to

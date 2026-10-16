@@ -415,6 +415,8 @@ enum node_states {
 	N_MEMORY_PRIVATE,	/* memory outside the common pool */
 	N_CPU,		/* The node has one or more cpus */
 	N_GENERIC_INITIATOR,	/* The node has one or more Generic Initiators */
+	/* Internal states, not exported through sysfs */
+	N_MEMORY_RECLAIM,	/* mm reclaim may operate on the node */
 	NR_NODE_STATES
 };
 
