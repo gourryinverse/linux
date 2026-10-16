@@ -1799,6 +1799,18 @@ static unsigned long minimum_image_size(unsigned long saveable)
 	return saveable <= size ? 0 : saveable - size;
 }
 
+/* Free pages on private nodes, which image allocations cannot use. */
+static unsigned long hibernate_private_free_pages(void)
+{
+	unsigned long free = 0;
+	struct zone *zone;
+
+	for_each_populated_zone(zone)
+		if (node_state(zone_to_nid(zone), N_MEMORY_PRIVATE))
+			free += zone_page_state(zone, NR_FREE_PAGES);
+	return free;
+}
+
 /**
  * hibernate_preallocate_memory - Preallocate memory for hibernation image.
  *
@@ -1826,6 +1838,7 @@ int hibernate_preallocate_memory(void)
 	struct zone *zone;
 	unsigned long saveable, size, max_size, count, highmem, pages = 0;
 	unsigned long alloc, save_highmem, pages_highmem, avail_normal;
+	unsigned long private_free, freed;
 	ktime_t start, stop;
 	int error;
 
@@ -1917,7 +1930,20 @@ int hibernate_preallocate_memory(void)
 	 * NOTE: If this is not done, performance will be hurt badly in some
 	 * test cases.
 	 */
+	private_free = hibernate_private_free_pages();
 	shrink_all_memory(saveable - size);
+
+	/*
+	 * Private pages the shrink freed are no longer saveable, but their
+	 * frames cannot hold image pages, so they leave count.
+	 */
+	freed = hibernate_private_free_pages();
+	freed = freed > private_free ? freed - private_free : 0;
+	if (freed) {
+		count -= min(count, freed);
+		max_size -= min(max_size, freed / 2);
+		size = min(size, max_size);
+	}
 
 	/*
 	 * The number of saveable pages in memory was too high, so apply some
