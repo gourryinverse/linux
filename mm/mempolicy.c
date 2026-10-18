@@ -2301,8 +2301,11 @@ static nodemask_t *policy_nodemask(gfp_t gfp, struct mempolicy *pol,
 			*nid = pol->home_node;
 		break;
 	case MPOL_BIND:
-		/* Restrict to nodemask (but not on lower zones) */
-		if (apply_policy_zone(pol, gfp_zone(gfp)) &&
+		/*
+		 * Restrict to nodemask (but not on lower zones). A scoped
+		 * context, such as a long-term pin, can exclude ZONE_MOVABLE.
+		 */
+		if (apply_policy_zone(pol, gfp_zone(current_gfp_context(gfp))) &&
 		    cpuset_nodemask_valid_mems_allowed(&pol->nodes))
 			nodemask = &pol->nodes;
 		if (pol->home_node != NUMA_NO_NODE)
