@@ -1868,6 +1868,9 @@ int hibernate_preallocate_memory(void)
 	size = 0;
 	for_each_populated_zone(zone) {
 		size += snapshot_additional_pages(zone);
+		/* Image pages come from ordinary allocations. */
+		if (!node_state(zone_to_nid(zone), N_MEMORY_COMMON))
+			continue;
 		if (is_highmem(zone))
 			highmem += zone_page_state(zone, NR_FREE_PAGES);
 		else
@@ -2012,7 +2015,8 @@ static int enough_free_mem(unsigned int nr_pages, unsigned int nr_highmem)
 	unsigned int free = alloc_normal;
 
 	for_each_populated_zone(zone)
-		if (!is_highmem(zone))
+		if (!is_highmem(zone) &&
+		    node_state(zone_to_nid(zone), N_MEMORY_COMMON))
 			free += zone_page_state(zone, NR_FREE_PAGES);
 
 	nr_pages += count_pages_for_highmem(nr_highmem);
