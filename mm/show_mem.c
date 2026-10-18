@@ -43,9 +43,11 @@ long si_mem_available(void)
 
 	/*
 	 * Estimate the amount of memory available for userspace allocations,
-	 * without causing swapping or OOM.
+	 * without causing swapping or OOM. Free private memory serves only
+	 * explicit bindings.
 	 */
-	available = global_zone_page_state(NR_FREE_PAGES) - totalreserve_pages;
+	available = global_zone_page_state(NR_FREE_PAGES) - private_free_pages() -
+		    totalreserve_pages;
 
 	/*
 	 * Not all the page cache can be freed, otherwise the system will
