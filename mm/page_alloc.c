@@ -4407,7 +4407,7 @@ EXPORT_SYMBOL_GPL(fs_reclaim_release);
  */
 static DEFINE_SEQLOCK(zonelist_update_seq);
 
-unsigned int zonelist_iter_begin(void)
+static unsigned int zonelist_iter_begin(void)
 {
 	if (IS_ENABLED(CONFIG_MEMORY_HOTPLUG))
 		return read_seqbegin(&zonelist_update_seq);
@@ -4415,12 +4415,26 @@ unsigned int zonelist_iter_begin(void)
 	return 0;
 }
 
-unsigned int check_retry_zonelist(unsigned int seq)
+static unsigned int check_retry_zonelist(unsigned int seq)
 {
 	if (IS_ENABLED(CONFIG_MEMORY_HOTPLUG))
 		return read_seqretry(&zonelist_update_seq, seq);
 
 	return 0;
+}
+
+struct zonelist_walk_cookie zonelist_walk_begin(void)
+{
+	return (struct zonelist_walk_cookie) {
+		.mems = read_mems_allowed_begin(),
+		.zonelist = zonelist_iter_begin(),
+	};
+}
+
+bool zonelist_walk_retry(struct zonelist_walk_cookie cookie)
+{
+	return read_mems_allowed_retry(cookie.mems) ||
+	       check_retry_zonelist(cookie.zonelist);
 }
 
 /* Perform direct synchronous page reclaim */
@@ -4703,14 +4717,15 @@ out:
 }
 
 static inline bool
-check_retry_cpuset(int cpuset_mems_cookie, struct alloc_context *ac)
+check_retry_walk(struct zonelist_walk_cookie walk_cookie,
+		 struct alloc_context *ac)
 {
 	/*
 	 * It's possible that cpuset's mems_allowed and the nodemask from
 	 * mempolicy don't intersect. This should be normally dealt with by
 	 * policy_nodemask(), but it's possible to race with cpuset update in
 	 * such a way the check therein was true, and then it became false
-	 * before we got our cpuset_mems_cookie here.
+	 * before we got our walk_cookie here.
 	 * This assumes that for all allocations, ac->nodemask can come only
 	 * from MPOL_BIND mempolicy (whose documented semantics is to be ignored
 	 * when it does not intersect with the cpuset restrictions) or the
@@ -4725,14 +4740,11 @@ check_retry_cpuset(int cpuset_mems_cookie, struct alloc_context *ac)
 	/*
 	 * When updating a task's mems_allowed or mempolicy nodemask, it is
 	 * possible to race with parallel threads in such a way that our
-	 * allocation can fail while the mask is being updated. If we are about
-	 * to fail, check if the cpuset changed during allocation and if so,
-	 * retry.
+	 * allocation can fail while the mask is being updated. A zonelist
+	 * rebuild can likewise make the walk miss zones. If we are about to
+	 * fail, check if either happened during allocation and if so, retry.
 	 */
-	if (read_mems_allowed_retry(cpuset_mems_cookie))
-		return true;
-
-	return false;
+	return zonelist_walk_retry(walk_cookie);
 }
 
 static void check_alloc_stall_warn(gfp_t gfp_mask, const nodemask_t *nodemask,
@@ -4784,8 +4796,7 @@ __alloc_pages_slowpath(gfp_t gfp_mask, unsigned int order,
 	enum compact_result compact_result;
 	int compaction_retries;
 	int no_progress_loops;
-	unsigned int cpuset_mems_cookie;
-	unsigned int zonelist_iter_cookie;
+	struct zonelist_walk_cookie walk_cookie;
 	int reserve_flags;
 	bool compact_first = false;
 	bool can_retry_reserves;
@@ -4823,8 +4834,7 @@ restart:
 	compact_result = COMPACT_SKIPPED;
 	compact_priority = DEF_COMPACT_PRIORITY;
 	can_retry_reserves = true;
-	cpuset_mems_cookie = read_mems_allowed_begin();
-	zonelist_iter_cookie = zonelist_iter_begin();
+	walk_cookie = zonelist_walk_begin();
 
 	/*
 	 * For costly allocations, try direct compaction first, as it's likely
@@ -5016,8 +5026,7 @@ retry:
 	 * infinite retries. No "goto retry;" can be placed above this check
 	 * unless it can execute just once.
 	 */
-	if (check_retry_cpuset(cpuset_mems_cookie, ac) ||
-	    check_retry_zonelist(zonelist_iter_cookie))
+	if (check_retry_walk(walk_cookie, ac))
 		goto restart;
 
 	if (should_reclaim_retry(gfp_mask, order, ac, alloc_flags,
@@ -5051,8 +5060,7 @@ retry:
 	 * Deal with possible cpuset update races or zonelist updates to avoid
 	 * a unnecessary OOM kill.
 	 */
-	if (check_retry_cpuset(cpuset_mems_cookie, ac) ||
-	    check_retry_zonelist(zonelist_iter_cookie))
+	if (check_retry_walk(walk_cookie, ac))
 		goto restart;
 
 	/* Reclaim has failed us, start killing things */
@@ -5077,8 +5085,7 @@ nopage:
 	 * Deal with possible cpuset update races or zonelist updates to avoid
 	 * a unnecessary OOM kill.
 	 */
-	if (check_retry_cpuset(cpuset_mems_cookie, ac) ||
-	    check_retry_zonelist(zonelist_iter_cookie))
+	if (check_retry_walk(walk_cookie, ac))
 		goto restart;
 
 	/*

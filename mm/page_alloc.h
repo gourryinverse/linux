@@ -267,8 +267,20 @@ extern void zone_pcp_disable(struct zone *zone);
 extern void zone_pcp_enable(struct zone *zone);
 extern void zone_pcp_init(struct zone *zone);
 
-unsigned int zonelist_iter_begin(void);
-unsigned int check_retry_zonelist(unsigned int seq);
+/*
+ * A zonelist walk can miss zones while cpuset changes mems_allowed or memory
+ * hotplug rebuilds the zonelists. A walker that filters by cpuset and whose
+ * failure must not be spurious takes a cookie before the walk, and retries the
+ * failure if it changed. Taking the cookie may wait for a writer, so it is not
+ * safe in NMI or under ALLOC_NOLOCK.
+ */
+struct zonelist_walk_cookie {
+	unsigned int mems;
+	unsigned int zonelist;
+};
+
+struct zonelist_walk_cookie zonelist_walk_begin(void);
+bool zonelist_walk_retry(struct zonelist_walk_cookie cookie);
 
 enum fallback_result {
 	/* Found suitable migratetype, *mt_out is valid. */

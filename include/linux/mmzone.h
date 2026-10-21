@@ -1868,7 +1868,9 @@ static inline struct zoneref *first_zones_zonelist(struct zonelist *zonelist,
  * @nodemask: Nodemask allowed by the allocator
  *
  * This iterator iterates though all zones at or below a given zone index and
- * within a given nodemask
+ * within a given nodemask. A concurrent zonelist rebuild can make it skip a
+ * zone or return one twice. A walker whose failure must not be spurious
+ * should retry it with zonelist_walk_begin() and zonelist_walk_retry().
  */
 #define for_each_zone_zonelist_nodemask(zone, z, zlist, highidx, nodemask) \
 	for (z = first_zones_zonelist(zlist, highidx, nodemask, &zone);	\
