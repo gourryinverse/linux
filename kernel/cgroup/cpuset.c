@@ -394,10 +394,15 @@ static void wait_attach_done_lock(void)
 
 static inline void check_insane_mems_config(nodemask_t *nodes)
 {
+	nodemask_t mems;
+
+	/* Only memory nodes decide whether kernel allocations are possible. */
+	nodes_and(mems, *nodes, node_states[N_MEMORY]);
 	if (!cpusets_insane_config() &&
-		movable_only_nodes(nodes)) {
+		movable_only_nodes(&mems)) {
 		static_branch_enable_cpuslocked(&cpusets_insane_config_key);
-		pr_info("Unsupported (movable nodes only) cpuset configuration detected (nmask=%*pbl)!\n"
+		pr_info("Unsupported cpuset configuration detected (nmask=%*pbl)\n"
+			"No memory node can serve kernel allocations!\n"
 			"Cpuset allocations might fail even with a lot of memory available.\n",
 			nodemask_pr_args(nodes));
 	}
