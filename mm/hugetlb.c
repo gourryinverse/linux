@@ -1312,10 +1312,6 @@ retry_cpuset:
 	for_each_zone_zonelist_nodemask(zone, z, zonelist, gfp_zone(gfp_mask), nmask) {
 		struct folio *folio;
 
-		/* A rebuild may have shifted a node outside @nmask into this slot. */
-		if (unlikely(check_retry_zonelist(zonelist_cookie)))
-			goto retry_cpuset;
-
 		if (!cpuset_zone_allowed(zone, gfp_mask))
 			continue;
 		/*
