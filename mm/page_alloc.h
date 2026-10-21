@@ -77,6 +77,8 @@ struct alloc_context {
 	struct zonelist *zonelist;
 	const nodemask_t *nodemask;
 	struct zoneref *preferred_zoneref;
+	/* The zone first_zones_zonelist() found at preferred_zoneref */
+	struct zone *preferred_zone;
 	int migratetype;
 
 	/*

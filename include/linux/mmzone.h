@@ -1386,10 +1386,11 @@ enum {
  * A zone in a zonelist: the zone pointer with zone_idx(zone) in its low bits,
  * so the iterators can filter on the index without dereferencing the zone.
  * build_all_zonelists() rewrites zonelists in place, and keeping both in one
- * word lets a reader get them from a single load.
+ * word lets a reader get them from a single load. Only the zonelist iterators
+ * read it, and they return the zone from the load that passed their filter.
  */
 struct zoneref {
-	unsigned long val;
+	unsigned long __private val;
 };
 
 /*
@@ -1397,14 +1398,6 @@ struct zoneref {
  * is a list of zones, the first one is the 'goal' of the
  * allocation, the other zones are fallback zones, in decreasing
  * priority.
- *
- * To speed the reading of the zonelist, the zonerefs contain the zone index
- * of the entry being read. Helper functions to access information given
- * a struct zoneref are
- *
- * zonelist_zone()	- Return the struct zone * for an entry in _zonerefs
- * zonelist_zone_idx()	- Return the index of the zone for an entry
- * zonelist_node_idx()	- Return the index of the node for an entry
  */
 struct zonelist {
 	struct zoneref _zonerefs[MAX_ZONES_PER_ZONELIST + 1];
@@ -1788,9 +1781,9 @@ extern struct zone *next_zone(struct zone *zone);
 
 #define ZONEREF_IDX_MASK	((1UL << ZONES_SHIFT) - 1)
 
-static inline unsigned long zoneref_read(const struct zoneref *zoneref)
+static inline unsigned long __zoneref_read(const struct zoneref *zoneref)
 {
-	return READ_ONCE(zoneref->val);
+	return READ_ONCE(ACCESS_PRIVATE(zoneref, val));
 }
 
 static inline struct zone *zoneref_zone(unsigned long val)
@@ -1803,47 +1796,41 @@ static inline enum zone_type zoneref_idx(unsigned long val)
 	return val & ZONEREF_IDX_MASK;
 }
 
-static inline struct zone *zonelist_zone(const struct zoneref *zoneref)
-{
-	return zoneref_zone(zoneref_read(zoneref));
-}
-
-static inline int zonelist_zone_idx(const struct zoneref *zoneref)
-{
-	return zoneref_idx(zoneref_read(zoneref));
-}
-
-static inline int zonelist_node_idx(const struct zoneref *zoneref)
-{
-	return zone_to_nid(zonelist_zone(zoneref));
-}
-
 struct zoneref *__next_zones_zonelist(struct zoneref *z,
 					enum zone_type highest_zoneidx,
-					const nodemask_t *nodes);
+					const nodemask_t *nodes,
+					struct zone **zonep);
 
 /**
  * next_zones_zonelist - Returns the next zone at or below highest_zoneidx within the allowed nodemask using a cursor within a zonelist as a starting point
  * @z: The cursor used as a starting point for the search
  * @highest_zoneidx: The zone index of the highest zone to return
  * @nodes: An optional nodemask to filter the zonelist with
+ * @zonep: Set to the zone found, or NULL at the end of the zonelist
  *
- * This function returns the next zone at or below a given zone index that is
+ * This function finds the next zone at or below a given zone index that is
  * within the allowed nodemask using a cursor as the starting point for the
  * search. The zoneref returned is a cursor that represents the current zone
  * being examined. It should be advanced by one before calling
  * next_zones_zonelist again.
  *
- * Return: the next zone at or below highest_zoneidx within the allowed
- * nodemask using a cursor within a zonelist as a starting point
+ * A concurrent zonelist rebuild can rewrite the slot under the cursor, so
+ * use *@zonep, which is the zone that passed the filter.
+ *
+ * Return: the cursor of the zone found
  */
 static __always_inline struct zoneref *next_zones_zonelist(struct zoneref *z,
 					enum zone_type highest_zoneidx,
-					const nodemask_t *nodes)
+					const nodemask_t *nodes,
+					struct zone **zonep)
 {
-	if (likely(!nodes && zonelist_zone_idx(z) <= highest_zoneidx))
+	unsigned long val = __zoneref_read(z);
+
+	if (likely(!nodes && zoneref_idx(val) <= highest_zoneidx)) {
+		*zonep = zoneref_zone(val);
 		return z;
-	return __next_zones_zonelist(z, highest_zoneidx, nodes);
+	}
+	return __next_zones_zonelist(z, highest_zoneidx, nodes, zonep);
 }
 
 /**
@@ -1851,24 +1838,25 @@ static __always_inline struct zoneref *next_zones_zonelist(struct zoneref *z,
  * @zonelist: The zonelist to search for a suitable zone
  * @highest_zoneidx: The zone index of the highest zone to return
  * @nodes: An optional nodemask to filter the zonelist with
+ * @zonep: Set to the zone found, or NULL if there is none
  *
- * This function returns the first zone at or below a given zone index that is
+ * This function finds the first zone at or below a given zone index that is
  * within the allowed nodemask. The zoneref returned is a cursor that can be
  * used to iterate the zonelist with next_zones_zonelist by advancing it by
  * one before calling.
  *
- * When no eligible zone is found, zoneref->zone is NULL (zoneref itself is
- * never NULL). This may happen either genuinely, or due to concurrent nodemask
- * update due to cpuset modification.
+ * When no eligible zone is found, *@zonep is NULL. This may happen either
+ * genuinely, or due to concurrent nodemask update due to cpuset modification.
  *
- * Return: Zoneref pointer for the first suitable zone found
+ * Return: the cursor of the zone found
  */
 static inline struct zoneref *first_zones_zonelist(struct zonelist *zonelist,
 					enum zone_type highest_zoneidx,
-					const nodemask_t *nodes)
+					const nodemask_t *nodes,
+					struct zone **zonep)
 {
 	return next_zones_zonelist(zonelist->_zonerefs,
-							highest_zoneidx, nodes);
+				   highest_zoneidx, nodes, zonep);
 }
 
 /**
@@ -1883,16 +1871,17 @@ static inline struct zoneref *first_zones_zonelist(struct zonelist *zonelist,
  * within a given nodemask
  */
 #define for_each_zone_zonelist_nodemask(zone, z, zlist, highidx, nodemask) \
-	for (z = first_zones_zonelist(zlist, highidx, nodemask), zone = zonelist_zone(z);	\
+	for (z = first_zones_zonelist(zlist, highidx, nodemask, &zone);	\
 		zone;							\
-		z = next_zones_zonelist(++z, highidx, nodemask),	\
-			zone = zonelist_zone(z))
+		z = next_zones_zonelist(++z, highidx, nodemask, &zone))
 
-#define for_next_zone_zonelist_nodemask(zone, z, highidx, nodemask) \
-	for (zone = zonelist_zone(z);	\
-		zone;							\
-		z = next_zones_zonelist(++z, highidx, nodemask),	\
-			zone = zonelist_zone(z))
+/*
+ * Continue a walk from the zone @start and its cursor @z, as returned by
+ * first_zones_zonelist() or next_zones_zonelist().
+ */
+#define for_next_zone_zonelist_nodemask(zone, z, start, highidx, nodemask) \
+	for (zone = (start); zone;					\
+		z = next_zones_zonelist(++z, highidx, nodemask, &zone))
 
 
 /**
@@ -1911,7 +1900,7 @@ static inline struct zoneref *first_zones_zonelist(struct zonelist *zonelist,
 static inline bool movable_only_nodes(nodemask_t *nodes)
 {
 	struct zonelist *zonelist;
-	struct zoneref *z;
+	struct zone *zone;
 	int nid;
 
 	if (nodes_empty(*nodes))
@@ -1924,8 +1913,8 @@ static inline bool movable_only_nodes(nodemask_t *nodes)
 	 */
 	nid = first_node(*nodes);
 	zonelist = &NODE_DATA(nid)->node_zonelists[ZONELIST_FALLBACK];
-	z = first_zones_zonelist(zonelist, ZONE_NORMAL,	nodes);
-	return (!zonelist_zone(z)) ? true : false;
+	first_zones_zonelist(zonelist, ZONE_NORMAL, nodes, &zone);
+	return !zone;
 }
 
 

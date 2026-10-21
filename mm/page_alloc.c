@@ -3801,11 +3801,7 @@ get_page_from_freelist(gfp_t gfp_mask, unsigned int order, int alloc_flags,
 	bool skip_kswapd_nodes = nr_online_nodes > 1;
 	bool skipped_kswapd_nodes = false;
 
-	/*
-	 * A concurrent zonelist rebuild can NULL or replace this slot. Zones
-	 * are never freed, so reading it once keeps a usable zone.
-	 */
-	preferred_zone = zonelist_zone(ac->preferred_zoneref);
+	preferred_zone = ac->preferred_zone;
 	if (!preferred_zone)
 		return NULL;
 
@@ -3816,8 +3812,8 @@ retry:
 	 */
 	no_fallback = alloc_flags & ALLOC_NOFRAGMENT;
 	z = ac->preferred_zoneref;
-	for_next_zone_zonelist_nodemask(zone, z, ac->highest_zoneidx,
-					ac->nodemask) {
+	for_next_zone_zonelist_nodemask(zone, z, preferred_zone,
+					ac->highest_zoneidx, ac->nodemask) {
 		struct page *page;
 		unsigned long mark;
 
@@ -4874,8 +4870,9 @@ restart:
 	 * could end up iterating over non-eligible zones endlessly.
 	 */
 	ac->preferred_zoneref = first_zones_zonelist(ac->zonelist,
-					ac->highest_zoneidx, ac->nodemask);
-	if (!zonelist_zone(ac->preferred_zoneref))
+					ac->highest_zoneidx, ac->nodemask,
+					&ac->preferred_zone);
+	if (!ac->preferred_zone)
 		goto nopage;
 
 	/*
@@ -4884,10 +4881,11 @@ restart:
 	 * GFP_HIGHUSER allocations from MOVABLE nodes only.
 	 */
 	if (cpusets_insane_config() && (gfp_mask & __GFP_HARDWALL)) {
-		struct zoneref *z = first_zones_zonelist(ac->zonelist,
-					ac->highest_zoneidx,
-					&cpuset_current_mems_allowed);
-		if (!zonelist_zone(z))
+		struct zone *zone;
+
+		first_zones_zonelist(ac->zonelist, ac->highest_zoneidx,
+				     &cpuset_current_mems_allowed, &zone);
+		if (!zone)
 			goto nopage;
 	}
 
@@ -4917,7 +4915,8 @@ retry:
 	if (!(alloc_flags & ALLOC_CPUSET) || reserve_flags) {
 		ac->nodemask = NULL;
 		ac->preferred_zoneref = first_zones_zonelist(ac->zonelist,
-					ac->highest_zoneidx, ac->nodemask);
+					ac->highest_zoneidx, ac->nodemask,
+					&ac->preferred_zone);
 
 		/*
 		 * The first time we adjust anything due to being allowed to
@@ -5180,7 +5179,8 @@ static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
 	 * may get reset for allocations that ignore memory policies.
 	 */
 	ac->preferred_zoneref = first_zones_zonelist(ac->zonelist,
-					ac->highest_zoneidx, ac->nodemask);
+					ac->highest_zoneidx, ac->nodemask,
+					&ac->preferred_zone);
 
 	return true;
 }
@@ -5263,14 +5263,14 @@ unsigned long alloc_pages_bulk_noprof(gfp_t gfp, int preferred_nid,
 	if (!prepare_alloc_pages(gfp, 0, preferred_nid, nodemask, &ac, &gfp, &alloc_flags))
 		goto out;
 
-	/* Read once; see get_page_from_freelist(). */
-	preferred_zone = zonelist_zone(ac.preferred_zoneref);
+	preferred_zone = ac.preferred_zone;
 	if (!preferred_zone)
 		goto failed;
 
 	/* Find an allowed local zone that meets the low watermark. */
 	z = ac.preferred_zoneref;
-	for_next_zone_zonelist_nodemask(zone, z, ac.highest_zoneidx, ac.nodemask) {
+	for_next_zone_zonelist_nodemask(zone, z, preferred_zone,
+					ac.highest_zoneidx, ac.nodemask) {
 		unsigned long mark;
 
 		if (cpusets_enabled() && (alloc_flags & ALLOC_CPUSET) &&
@@ -5494,7 +5494,7 @@ struct page *__alloc_frozen_pages_noprof(gfp_t gfp, unsigned int order,
 		 * fragment memory until all local zones are considered.
 		 */
 		fastpath_alloc_flags |= alloc_flags_nofragment(
-			zonelist_zone(ac.preferred_zoneref), gfp);
+			ac.preferred_zone, gfp);
 	}
 	fastpath_alloc_flags |= alloc_flags_nonblocking(gfp, order) & ALLOC_HIGHATOMIC;
 
@@ -5812,7 +5812,7 @@ static void zoneref_set_zone(struct zone *zone, struct zoneref *zoneref)
 	unsigned long val = zone ? (unsigned long)zone | zone_idx(zone) : 0;
 
 	VM_WARN_ON_ONCE((unsigned long)zone & ZONEREF_IDX_MASK);
-	WRITE_ONCE(zoneref->val, val);
+	WRITE_ONCE(ACCESS_PRIVATE(zoneref, val), val);
 }
 
 /*
@@ -6000,12 +6000,11 @@ static void build_zonelists(pg_data_t *pgdat)
  */
 int local_memory_node(int node)
 {
-	struct zoneref *z;
+	struct zone *zone;
 
-	z = first_zones_zonelist(node_zonelist(node, GFP_KERNEL),
-				   gfp_zone(GFP_KERNEL),
-				   NULL);
-	return zonelist_node_idx(z);
+	first_zones_zonelist(node_zonelist(node, GFP_KERNEL),
+			     gfp_zone(GFP_KERNEL), NULL, &zone);
+	return zone_to_nid(zone);
 }
 #endif
 

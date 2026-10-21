@@ -57,24 +57,27 @@ static inline bool zone_in_nodemask(const struct zone *zone,
 /* Returns the next zone at or below highest_zoneidx in a zonelist */
 struct zoneref *__next_zones_zonelist(struct zoneref *z,
 					enum zone_type highest_zoneidx,
-					const nodemask_t *nodes)
+					const nodemask_t *nodes,
+					struct zone **zonep)
 {
 	unsigned long val;
 
 	/*
-	 * Find the next suitable zone to use for the allocation, testing the
-	 * index and the node of each slot from one load.
+	 * Find the next suitable zone to use for the allocation, testing and
+	 * returning each slot from one load.
 	 * Only filter based on nodemask if it's set
 	 */
 	if (unlikely(nodes == NULL))
-		while (zoneref_idx(zoneref_read(z)) > highest_zoneidx)
+		while (val = __zoneref_read(z),
+		       zoneref_idx(val) > highest_zoneidx)
 			z++;
 	else
-		while (val = zoneref_read(z),
+		while (val = __zoneref_read(z),
 		       zoneref_idx(val) > highest_zoneidx ||
 		       !zone_in_nodemask(zoneref_zone(val), nodes))
 			z++;
 
+	*zonep = zoneref_zone(val);
 	return z;
 }
 

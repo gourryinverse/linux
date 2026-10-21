@@ -2175,7 +2175,6 @@ unsigned int mempolicy_slab_node(void)
 	case MPOL_BIND:
 	case MPOL_PREFERRED_MANY:
 	{
-		struct zoneref *z;
 		struct zone *zone;
 
 		/*
@@ -2185,9 +2184,8 @@ unsigned int mempolicy_slab_node(void)
 		struct zonelist *zonelist;
 		enum zone_type highest_zoneidx = gfp_zone(GFP_KERNEL);
 		zonelist = &NODE_DATA(node)->node_zonelists[ZONELIST_FALLBACK];
-		z = first_zones_zonelist(zonelist, highest_zoneidx,
-							&policy->nodes);
-		zone = zonelist_zone(z);
+		first_zones_zonelist(zonelist, highest_zoneidx,
+				     &policy->nodes, &zone);
 		return zone ? zone_to_nid(zone) : node;
 	}
 	case MPOL_LOCAL:
@@ -3022,7 +3020,7 @@ int mpol_misplaced(struct folio *folio, struct vm_fault *vmf,
 {
 	struct mempolicy *pol;
 	pgoff_t ilx;
-	struct zoneref *z;
+	struct zone *zone;
 	int curnid = folio_nid(folio);
 	struct vm_area_struct *vma = vmf->vma;
 	int thiscpu = raw_smp_processor_id();
@@ -3086,11 +3084,10 @@ int mpol_misplaced(struct folio *folio, struct vm_fault *vmf,
 		 */
 		if (node_isset(curnid, pol->nodes))
 			goto out;
-		z = first_zones_zonelist(
-				node_zonelist(thisnid, GFP_HIGHUSER),
-				gfp_zone(GFP_HIGHUSER),
-				&pol->nodes);
-		polnid = zonelist_node_idx(z);
+		first_zones_zonelist(node_zonelist(thisnid, GFP_HIGHUSER),
+				     gfp_zone(GFP_HIGHUSER), &pol->nodes,
+				     &zone);
+		polnid = zone_to_nid(zone);
 		break;
 
 	default:
