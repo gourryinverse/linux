@@ -1133,7 +1133,8 @@ struct zone {
 #ifdef CONFIG_VMEMMAP_OPTIMIZATION
 	struct page **vmemmap_tails;
 #endif
-} ____cacheline_internodealigned_in_smp;
+	/* A zoneref keeps zone_idx in the low bits of the zone pointer. */
+} ____cacheline_internodealigned_in_smp __aligned(1 << ZONES_SHIFT);
 
 enum pgdat_flags {
 	PGDAT_WRITEBACK,		/* reclaim scanning has recently found
@@ -1382,12 +1383,13 @@ enum {
 };
 
 /*
- * This struct contains information about a zone in a zonelist. It is stored
- * here to avoid dereferences into large structures and lookups of tables
+ * A zone in a zonelist: the zone pointer with zone_idx(zone) in its low bits,
+ * so the iterators can filter on the index without dereferencing the zone.
+ * build_all_zonelists() rewrites zonelists in place, and keeping both in one
+ * word lets a reader get them from a single load.
  */
 struct zoneref {
-	struct zone *zone;	/* Pointer to actual zone */
-	int zone_idx;		/* zone_idx(zoneref->zone) */
+	unsigned long val;
 };
 
 /*
@@ -1784,19 +1786,36 @@ extern struct zone *next_zone(struct zone *zone);
 			; /* do nothing */		\
 		else
 
-static inline struct zone *zonelist_zone(struct zoneref *zoneref)
+#define ZONEREF_IDX_MASK	((1UL << ZONES_SHIFT) - 1)
+
+static inline unsigned long zoneref_read(const struct zoneref *zoneref)
 {
-	return zoneref->zone;
+	return READ_ONCE(zoneref->val);
+}
+
+static inline struct zone *zoneref_zone(unsigned long val)
+{
+	return (struct zone *)(val & ~ZONEREF_IDX_MASK);
+}
+
+static inline enum zone_type zoneref_idx(unsigned long val)
+{
+	return val & ZONEREF_IDX_MASK;
+}
+
+static inline struct zone *zonelist_zone(const struct zoneref *zoneref)
+{
+	return zoneref_zone(zoneref_read(zoneref));
 }
 
 static inline int zonelist_zone_idx(const struct zoneref *zoneref)
 {
-	return zoneref->zone_idx;
+	return zoneref_idx(zoneref_read(zoneref));
 }
 
 static inline int zonelist_node_idx(const struct zoneref *zoneref)
 {
-	return zone_to_nid(zoneref->zone);
+	return zone_to_nid(zonelist_zone(zoneref));
 }
 
 struct zoneref *__next_zones_zonelist(struct zoneref *z,

@@ -59,16 +59,20 @@ struct zoneref *__next_zones_zonelist(struct zoneref *z,
 					enum zone_type highest_zoneidx,
 					const nodemask_t *nodes)
 {
+	unsigned long val;
+
 	/*
-	 * Find the next suitable zone to use for the allocation.
+	 * Find the next suitable zone to use for the allocation, testing the
+	 * index and the node of each slot from one load.
 	 * Only filter based on nodemask if it's set
 	 */
 	if (unlikely(nodes == NULL))
-		while (zonelist_zone_idx(z) > highest_zoneidx)
+		while (zoneref_idx(zoneref_read(z)) > highest_zoneidx)
 			z++;
 	else
-		while (zonelist_zone_idx(z) > highest_zoneidx ||
-		       !zone_in_nodemask(READ_ONCE(z->zone), nodes))
+		while (val = zoneref_read(z),
+		       zoneref_idx(val) > highest_zoneidx ||
+		       !zone_in_nodemask(zoneref_zone(val), nodes))
 			z++;
 
 	return z;

@@ -3805,7 +3805,7 @@ get_page_from_freelist(gfp_t gfp_mask, unsigned int order, int alloc_flags,
 	 * A concurrent zonelist rebuild can NULL or replace this slot. Zones
 	 * are never freed, so reading it once keeps a usable zone.
 	 */
-	preferred_zone = READ_ONCE(ac->preferred_zoneref->zone);
+	preferred_zone = zonelist_zone(ac->preferred_zoneref);
 	if (!preferred_zone)
 		return NULL;
 
@@ -5264,7 +5264,7 @@ unsigned long alloc_pages_bulk_noprof(gfp_t gfp, int preferred_nid,
 		goto out;
 
 	/* Read once; see get_page_from_freelist(). */
-	preferred_zone = READ_ONCE(ac.preferred_zoneref->zone);
+	preferred_zone = zonelist_zone(ac.preferred_zoneref);
 	if (!preferred_zone)
 		goto failed;
 
@@ -5806,10 +5806,13 @@ unsigned long nr_free_buffer_pages(void)
 }
 EXPORT_SYMBOL_GPL(nr_free_buffer_pages);
 
+/* A NULL zone writes the terminator. */
 static void zoneref_set_zone(struct zone *zone, struct zoneref *zoneref)
 {
-	zoneref->zone = zone;
-	zoneref->zone_idx = zone_idx(zone);
+	unsigned long val = zone ? (unsigned long)zone | zone_idx(zone) : 0;
+
+	VM_WARN_ON_ONCE((unsigned long)zone & ZONEREF_IDX_MASK);
+	WRITE_ONCE(zoneref->val, val);
 }
 
 /*
@@ -5943,8 +5946,7 @@ static void build_thisnode_zonelists(pg_data_t *pgdat)
 	zonerefs = pgdat->node_zonelists[ZONELIST_NOFALLBACK]._zonerefs;
 	nr_zones = build_zonerefs_node(pgdat, zonerefs);
 	zonerefs += nr_zones;
-	zonerefs->zone = NULL;
-	zonerefs->zone_idx = 0;
+	zoneref_set_zone(NULL, zonerefs);
 }
 
 /*
@@ -5979,8 +5981,7 @@ static void build_node_zonelist(pg_data_t *pgdat, const nodemask_t *candidates,
 		prev_node = node;
 	}
 
-	zonerefs->zone = NULL;
-	zonerefs->zone_idx = 0;
+	zoneref_set_zone(NULL, zonerefs);
 	pr_cont("\n");
 }
 
@@ -6021,8 +6022,7 @@ static void build_zonelists(pg_data_t *pgdat)
 	nr_zones = build_zonerefs_node(pgdat, zonerefs);
 	zonerefs += nr_zones;
 
-	zonerefs->zone = NULL;
-	zonerefs->zone_idx = 0;
+	zoneref_set_zone(NULL, zonerefs);
 }
 
 #endif	/* CONFIG_NUMA */
