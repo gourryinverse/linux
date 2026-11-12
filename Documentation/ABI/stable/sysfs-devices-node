@@ -46,6 +46,16 @@ Description:
 		requesting the node explicitly, and that kernel memory
 		management services manage.
 
+What:		/sys/devices/system/node/has_private_memory
+Date:		November 2026
+Contact:	Linux Memory Management list <linux-mm@kvack.org>
+Description:
+		Nodelist of the memory nodes absent from has_common_memory.
+		Together the two lists partition has_memory.
+
+		Ordinary allocations do not use memory on a node listed here.
+		See Documentation/mm/numa_private_nodes.rst.
+
 What:		/sys/devices/system/node/nodeX
 Date:		October 2002
 Contact:	Linux Memory Management list <linux-mm@kvack.org>

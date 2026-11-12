@@ -174,6 +174,9 @@ nodes with particular properties as defined by ``enum node_states``:
 ``N_MEMORY_COMMON``
   Ordinary allocations and memory management services may use the node's
   memory.
+``N_MEMORY_PRIVATE``
+  The node has memory but is not on the fallback zonelists. Together with
+  ``N_MEMORY_COMMON`` it partitions ``N_MEMORY``.
 ``N_CPU``
   The node has one or more CPUs
 ``N_GENERIC_INITIATOR``
