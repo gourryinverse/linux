@@ -1230,7 +1230,7 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 	/* reinitialise watermarks and update pcp limits */
 	init_per_zone_wmark_min();
 
-	if (node_state(nid, N_MEMORY_COMMON))
+	if (node_state(nid, N_MEMORY_RECLAIM))
 		kswapd_run(nid);
 	if (node_state(nid, N_MEMORY_COMPACTION))
 		kcompactd_run(nid);
