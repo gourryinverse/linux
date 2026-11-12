@@ -6610,6 +6610,8 @@ static void calculate_totalreserve_pages(void)
 	enum zone_type i, j;
 
 	for_each_online_pgdat(pgdat) {
+		/* Only common memory holds the system reserve. */
+		bool common = node_state(pgdat->node_id, N_MEMORY_COMMON);
 
 		pgdat->totalreserve_pages = 0;
 
@@ -6640,7 +6642,8 @@ static void calculate_totalreserve_pages(void)
 
 			pgdat->totalreserve_pages += max;
 
-			reserve_pages += max;
+			if (common)
+				reserve_pages += max;
 		}
 	}
 	totalreserve_pages = reserve_pages;
@@ -6705,9 +6708,13 @@ static void __setup_per_zone_wmarks(void)
 	struct zone *zone;
 	unsigned long flags;
 
-	/* Calculate total number of !ZONE_HIGHMEM and !ZONE_MOVABLE pages */
+	/*
+	 * Calculate total number of !ZONE_HIGHMEM and !ZONE_MOVABLE pages.
+	 * Distribute the global pages_min budget only over common memory.
+	 */
 	for_each_zone(zone) {
-		if (!is_highmem(zone) && zone_idx(zone) != ZONE_MOVABLE)
+		if (!is_highmem(zone) && zone_idx(zone) != ZONE_MOVABLE &&
+		    !node_state(zone_to_nid(zone), N_MEMORY_PRIVATE))
 			lowmem_pages += zone_managed_pages(zone);
 	}
 
@@ -6715,6 +6722,16 @@ static void __setup_per_zone_wmarks(void)
 		u64 tmp;
 
 		spin_lock_irqsave(&zone->lock, flags);
+		/* No kswapd runs for a private node to restore watermarks. */
+		if (node_state(zone_to_nid(zone), N_MEMORY_PRIVATE)) {
+			zone->_watermark[WMARK_MIN] = 0;
+			zone->_watermark[WMARK_LOW] = 0;
+			zone->_watermark[WMARK_HIGH] = 0;
+			zone->_watermark[WMARK_PROMO] = 0;
+			zone->watermark_boost = 0;
+			spin_unlock_irqrestore(&zone->lock, flags);
+			continue;
+		}
 		tmp = (u64)pages_min * zone_managed_pages(zone);
 		tmp = div64_ul(tmp, lowmem_pages);
 		if (is_highmem(zone) || zone_idx(zone) == ZONE_MOVABLE) {
