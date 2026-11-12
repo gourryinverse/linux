@@ -45,6 +45,16 @@ Description:
 		Nodes whose memory ordinary allocations may use without
 		requesting the node explicitly.
 
+What:		/sys/devices/system/node/has_private_memory
+Date:		November 2026
+Contact:	Linux Memory Management list <linux-mm@kvack.org>
+Description:
+		Nodelist of the memory nodes absent from has_common_memory.
+		Together the two lists partition has_memory.
+
+		A node listed here is opted out of common memory management
+		services and is typically driver-managed.
+
 What:		/sys/devices/system/node/nodeX
 Date:		October 2002
 Contact:	Linux Memory Management list <linux-mm@kvack.org>
