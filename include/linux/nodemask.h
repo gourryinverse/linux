@@ -413,6 +413,7 @@ enum node_states {
 	N_GENERIC_INITIATOR,	/* The node has one or more Generic Initiators */
 	/* Internal states, not exported through sysfs */
 	N_MEMORY_COMPACTION,	/* mm compaction may operate on the node */
+	N_MEMORY_RECLAIM,	/* mm reclaim may operate on the node */
 	NR_NODE_STATES
 };
 
@@ -550,12 +551,15 @@ static __always_inline int node_random(const nodemask_t *maskp)
  */
 #define NODE_MEMORY_FEAT_COMMON		BIT(0) /* add to fallback zonelist */
 #define NODE_MEMORY_FEAT_COMPACTION	BIT(1) /* mm compaction */
+#define NODE_MEMORY_FEAT_RECLAIM	BIT(2) /* mm reclaim */
 #define NODE_MEMORY_FEAT_ALL		(NODE_MEMORY_FEAT_COMMON | \
-					 NODE_MEMORY_FEAT_COMPACTION)
+					 NODE_MEMORY_FEAT_COMPACTION | \
+					 NODE_MEMORY_FEAT_RECLAIM)
 
 /*
  * Common memory carries every feature. Private memory needs NUMA: node 0
- * holds all memory without it.
+ * holds all memory without it. Reclaim leaves high-order requests to
+ * compaction, so it requires compaction.
  */
 static inline bool node_memory_features_valid(unsigned long features)
 {
@@ -563,6 +567,9 @@ static inline bool node_memory_features_valid(unsigned long features)
 		return false;
 	if (features & NODE_MEMORY_FEAT_COMMON)
 		return features == NODE_MEMORY_FEAT_ALL;
+	if ((features & NODE_MEMORY_FEAT_RECLAIM) &&
+	    !(features & NODE_MEMORY_FEAT_COMPACTION))
+		return false;
 	return IS_ENABLED(CONFIG_NUMA);
 }
 
