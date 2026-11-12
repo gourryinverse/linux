@@ -48,6 +48,15 @@ static void private_node_features_valid(struct kunit *test)
 {
 	KUNIT_EXPECT_TRUE(test, node_memory_features_valid(0));
 	KUNIT_EXPECT_TRUE(test, node_memory_features_valid(NODE_MEMORY_FEAT_ALL));
+	/* Private memory opts into services individually. */
+	KUNIT_EXPECT_TRUE(test,
+			  node_memory_features_valid(NODE_MEMORY_FEAT_COMPACTION));
+	KUNIT_EXPECT_TRUE(test,
+			  node_memory_features_valid(NODE_MEMORY_FEAT_RECLAIM |
+						     NODE_MEMORY_FEAT_COMPACTION));
+	/* Reclaim requires compaction. */
+	KUNIT_EXPECT_FALSE(test,
+			   node_memory_features_valid(NODE_MEMORY_FEAT_RECLAIM));
 	/* Common memory carries every feature. */
 	KUNIT_EXPECT_FALSE(test,
 			   node_memory_features_valid(NODE_MEMORY_FEAT_COMMON));
