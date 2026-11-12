@@ -7893,6 +7893,10 @@ unsigned long node_reclaim(struct pglist_data *pgdat, gfp_t gfp_mask, unsigned i
 	if (!gfpflags_allow_blocking(gfp_mask) || (current->flags & PF_MEMALLOC))
 		return 0;
 
+	/* Reclaim operates only on common memory. */
+	if (node_state(pgdat->node_id, N_MEMORY_PRIVATE))
+		return 0;
+
 	/*
 	 * Only run node reclaim on the local node or on nodes that do not
 	 * have associated processors. This will favor the local processor
@@ -8096,6 +8100,9 @@ static ssize_t reclaim_store(struct device *dev,
 			     const char *buf, size_t count)
 {
 	int ret, nid = dev->id;
+
+	if (node_state(nid, N_MEMORY_PRIVATE))
+		return -EINVAL;
 
 	ret = user_proactive_reclaim((char *)buf, NULL, NODE_DATA(nid));
 	return ret ? ret : count;
