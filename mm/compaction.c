@@ -2497,8 +2497,12 @@ bool compaction_zonelist_suitable(struct alloc_context *ac, int order,
 	 * retrying the reclaim.
 	 */
 	for_each_zone_node_state(zone, z, ac->zonelist, ac->highest_zoneidx,
-				 ac->nodemask, N_MEMORY_COMMON) {
+				 ac->nodemask, N_MEMORY_COMPACTION) {
 		unsigned long available;
+
+		/* Reclaim cannot make room on a node that does not permit it. */
+		if (!node_state(zone_to_nid(zone), N_MEMORY_RECLAIM))
+			continue;
 
 		if (cpusets_enabled() && (alloc_flags & ALLOC_CPUSET) &&
 		    !__cpuset_zone_allowed(zone, gfp_mask))
@@ -2856,7 +2860,7 @@ enum compact_result try_to_compact_pages(gfp_t gfp_mask, unsigned int order,
 
 	/* Compact each zone in the list */
 	for_each_zone_node_state(zone, z, ac->zonelist, ac->highest_zoneidx,
-				 ac->nodemask, N_MEMORY_COMMON) {
+				 ac->nodemask, N_MEMORY_COMPACTION) {
 		enum compact_result status;
 
 		if (cpusets_enabled() &&
@@ -2973,7 +2977,7 @@ static int compact_nodes(void)
 	/* Flush pending updates to the LRU lists */
 	lru_add_drain_all();
 
-	for_each_node_state(nid, N_MEMORY_COMMON) {
+	for_each_node_state(nid, N_MEMORY_COMPACTION) {
 		ret = compact_node(NODE_DATA(nid), false);
 		if (ret)
 			return ret;
@@ -2992,7 +2996,7 @@ static int compaction_proactiveness_sysctl_handler(const struct ctl_table *table
 		return rc;
 
 	if (write && sysctl_compaction_proactiveness) {
-		for_each_node_state(nid, N_MEMORY_COMMON) {
+		for_each_node_state(nid, N_MEMORY_COMPACTION) {
 			pg_data_t *pgdat = NODE_DATA(nid);
 
 			if (pgdat->proactive_compact_trigger)
@@ -3038,7 +3042,8 @@ static ssize_t compact_store(struct device *dev,
 	int nid = dev->id;
 
 	if (nid >= 0 && nid < nr_node_ids && node_online(nid)) {
-		if (node_state(nid, N_MEMORY_PRIVATE))
+		if (node_state(nid, N_MEMORY_PRIVATE) &&
+		    !node_state(nid, N_MEMORY_COMPACTION))
 			return -EINVAL;
 
 		/* Flush pending updates to the LRU lists */
@@ -3369,7 +3374,7 @@ static int __init kcompactd_init(void)
 {
 	int nid;
 
-	for_each_node_state(nid, N_MEMORY_COMMON)
+	for_each_node_state(nid, N_MEMORY_COMPACTION)
 		kcompactd_run(nid);
 	register_sysctl_init("vm", vm_compaction);
 	return 0;
