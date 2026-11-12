@@ -56,8 +56,8 @@ long si_mem_available(void)
 	 * start swapping or thrashing. Assume at least half of the page
 	 * cache, or the low watermark worth of cache, needs to stay.
 	 */
-	pagecache = global_node_page_state(NR_ACTIVE_FILE) +
-		global_node_page_state(NR_INACTIVE_FILE);
+	/* Reclaiming file pages on private nodes frees only private memory. */
+	pagecache = common_file_pages();
 	pagecache -= min(pagecache / 2, wmark_low);
 	available += pagecache;
 

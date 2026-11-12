@@ -797,6 +797,23 @@ static inline bool node_memory_is_general_purpose(int nid)
 	return NODE_DATA(nid)->memory_features & NODE_MEMORY_FEAT_MEMPOLICY;
 }
 
+/* File LRU pages on common nodes, whose reclaim frees common memory. */
+static inline unsigned long common_file_pages(void)
+{
+	unsigned long nr = global_node_page_state(NR_ACTIVE_FILE) +
+			   global_node_page_state(NR_INACTIVE_FILE);
+	int nid;
+
+	if (!IS_ENABLED(CONFIG_NUMA))
+		return nr;
+
+	for_each_node_state(nid, N_MEMORY_PRIVATE) {
+		nr -= min(nr, node_page_state(NODE_DATA(nid), NR_ACTIVE_FILE) +
+			      node_page_state(NODE_DATA(nid), NR_INACTIVE_FILE));
+	}
+	return nr;
+}
+
 extern int min_free_kbytes;
 extern int defrag_mode;
 
