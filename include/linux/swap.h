@@ -310,6 +310,7 @@ extern unsigned long totalreserve_pages;
 
 /* linux/mm/show_mem.c */
 unsigned long nr_free_pages(void);
+unsigned long common_free_pages(void);
 
 /* linux/mm/folio.c */
 void folio_add_lru(struct folio *folio);

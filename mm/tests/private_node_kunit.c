@@ -54,9 +54,15 @@ static void private_node_features_valid(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test,
 			  node_memory_features_valid(NODE_MEMORY_FEAT_RECLAIM |
 						     NODE_MEMORY_FEAT_COMPACTION));
-	/* Reclaim requires compaction. */
+	KUNIT_EXPECT_TRUE(test,
+			  node_memory_features_valid(NODE_MEMORY_FEAT_ALL &
+						     ~NODE_MEMORY_FEAT_COMMON));
+	/* Reclaim requires compaction, and placement requires both. */
 	KUNIT_EXPECT_FALSE(test,
 			   node_memory_features_valid(NODE_MEMORY_FEAT_RECLAIM));
+	KUNIT_EXPECT_FALSE(test,
+			   node_memory_features_valid(NODE_MEMORY_FEAT_MEMPOLICY |
+						      NODE_MEMORY_FEAT_COMPACTION));
 	/* Common memory carries every feature. */
 	KUNIT_EXPECT_FALSE(test,
 			   node_memory_features_valid(NODE_MEMORY_FEAT_COMMON));

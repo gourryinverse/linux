@@ -61,11 +61,12 @@ static bool clean_pages_on_decompress;
 #define MAP_PAGE_ENTRIES	(PAGE_SIZE / sizeof(sector_t) - 1)
 
 /*
- * Number of free pages that are not high.
+ * Number of free pages that are not high, on the common memory that the image
+ * writer allocates from.
  */
 static inline unsigned long low_free_pages(void)
 {
-	return nr_free_pages() - nr_free_highpages();
+	return common_free_pages() - nr_free_highpages();
 }
 
 /*

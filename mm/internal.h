@@ -88,6 +88,13 @@ static inline bool folio_allows_reclaim(struct folio *folio)
 	       node_state(folio_nid(folio), N_MEMORY_RECLAIM);
 }
 
+/* May userspace NUMA operations act on this folio's memory? */
+static inline bool folio_allows_mempolicy(struct folio *folio)
+{
+	return !folio_is_zone_device(folio) &&
+	       node_state(folio_nid(folio), N_MEMORY_MEMPOLICY);
+}
+
 /* mm/vmscan.c */
 unsigned long zone_reclaimable_pages(struct zone *zone);
 unsigned long try_to_free_pages(struct zonelist *zonelist, int order,
@@ -780,13 +787,14 @@ extern char * const zone_names[MAX_NR_ZONES];
 
 /*
  * Does @nid hold general-purpose memory, memory that holds ordinary data?
- * For now that is common memory. totalram_pages() and MemFree count only
- * general-purpose memory; features are fixed while a node has memory, so the
- * node's claim decides.
+ * That is common memory and memory userspace may place data on, so the
+ * N_MEMORY_MEMPOLICY nodes; common nodes carry every feature.
+ * totalram_pages() and MemFree count only general-purpose memory; features are
+ * fixed while a node has memory, so the node's claim decides.
  */
 static inline bool node_memory_is_general_purpose(int nid)
 {
-	return NODE_DATA(nid)->memory_features & NODE_MEMORY_FEAT_COMMON;
+	return NODE_DATA(nid)->memory_features & NODE_MEMORY_FEAT_MEMPOLICY;
 }
 
 extern int min_free_kbytes;

@@ -204,6 +204,7 @@ nodemask_t node_states[NR_NODE_STATES] __read_mostly = {
 #endif
 	[N_MEMORY] = { { [0] = 1UL } },
 	[N_MEMORY_COMMON] = { { [0] = 1UL } },
+	[N_MEMORY_MEMPOLICY] = { { [0] = 1UL } },
 	[N_MEMORY_RECLAIM] = { { [0] = 1UL } },
 	[N_MEMORY_COMPACTION] = { { [0] = 1UL } },
 	[N_CPU] = { { [0] = 1UL } },
@@ -225,6 +226,8 @@ void __meminit node_set_memory_state(int nid, bool high, bool normal,
 		node_set_state(nid, N_MEMORY_COMMON);
 	else
 		node_set_state(nid, N_MEMORY_PRIVATE);
+	if (features & NODE_MEMORY_FEAT_MEMPOLICY)
+		node_set_state(nid, N_MEMORY_MEMPOLICY);
 	if (features & NODE_MEMORY_FEAT_RECLAIM)
 		node_set_state(nid, N_MEMORY_RECLAIM);
 	if (features & NODE_MEMORY_FEAT_COMPACTION)
@@ -235,6 +238,7 @@ void __meminit node_clear_memory_state(int nid)
 {
 	node_clear_state(nid, N_MEMORY_COMPACTION);
 	node_clear_state(nid, N_MEMORY_RECLAIM);
+	node_clear_state(nid, N_MEMORY_MEMPOLICY);
 	node_clear_state(nid, N_MEMORY_PRIVATE);
 	node_clear_state(nid, N_MEMORY_COMMON);
 	node_clear_state(nid, N_NORMAL_MEMORY);

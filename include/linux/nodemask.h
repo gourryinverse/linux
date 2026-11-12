@@ -413,6 +413,7 @@ enum node_states {
 	N_MEMORY,		/* the node has memory */
 	N_MEMORY_COMMON,	/* common pool (fallback zonelist) */
 	N_MEMORY_PRIVATE,	/* memory outside the common pool */
+	N_MEMORY_MEMPOLICY,	/* memory policy may target the node */
 	N_CPU,		/* The node has one or more cpus */
 	N_GENERIC_INITIATOR,	/* The node has one or more Generic Initiators */
 	/* Internal states, not exported through sysfs */
@@ -548,9 +549,11 @@ static __always_inline int node_random(const nodemask_t *maskp)
 #define NODE_MEMORY_FEAT_COMMON		BIT(0) /* add to fallback zonelist */
 #define NODE_MEMORY_FEAT_RECLAIM	BIT(1) /* mm reclaim */
 #define NODE_MEMORY_FEAT_COMPACTION	BIT(2) /* mm compaction */
+#define NODE_MEMORY_FEAT_MEMPOLICY	BIT(3) /* userspace NUMA controls */
 #define NODE_MEMORY_FEAT_ALL		(NODE_MEMORY_FEAT_COMMON | \
 					 NODE_MEMORY_FEAT_RECLAIM | \
-					 NODE_MEMORY_FEAT_COMPACTION)
+					 NODE_MEMORY_FEAT_COMPACTION | \
+					 NODE_MEMORY_FEAT_MEMPOLICY)
 
 /* Owns common memory, and private memory that no driver allocates from. */
 #define NODE_MEMORY_OWNER_KERNEL	NULL
@@ -558,7 +561,8 @@ static __always_inline int node_random(const nodemask_t *maskp)
 /*
  * Common memory carries every feature. Private memory needs NUMA: node 0
  * holds all memory without it. Reclaim leaves high-order requests to
- * compaction, so it requires compaction.
+ * compaction, so it requires compaction. Userspace placement assumes the
+ * node is reclaimed and compacted like any other memory.
  */
 static inline bool node_memory_features_valid(unsigned long features)
 {
@@ -568,6 +572,9 @@ static inline bool node_memory_features_valid(unsigned long features)
 		return features == NODE_MEMORY_FEAT_ALL;
 	if ((features & NODE_MEMORY_FEAT_RECLAIM) &&
 	    !(features & NODE_MEMORY_FEAT_COMPACTION))
+		return false;
+	if ((features & NODE_MEMORY_FEAT_MEMPOLICY) &&
+	    !(features & NODE_MEMORY_FEAT_RECLAIM))
 		return false;
 	return IS_ENABLED(CONFIG_NUMA);
 }
