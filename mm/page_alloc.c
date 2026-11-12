@@ -2202,8 +2202,8 @@ static inline bool boost_watermark(struct zone *zone)
 	if (is_kdump_kernel())
 		return false;
 
-	/* A boost asks kswapd to defragment, and only common nodes run it. */
-	if (!node_state(zone_to_nid(zone), N_MEMORY_COMMON))
+	/* A boost asks kswapd to defragment, and only reclaim nodes run it. */
+	if (!node_state(zone_to_nid(zone), N_MEMORY_RECLAIM))
 		return false;
 
 	/*
@@ -6808,8 +6808,9 @@ static void __setup_per_zone_wmarks(void)
 		u64 tmp;
 
 		spin_lock_irqsave(&zone->lock, flags);
-		/* No kswapd runs for a private node to restore watermarks. */
-		if (node_state(zone_to_nid(zone), N_MEMORY_PRIVATE)) {
+		/* A private node without reclaim carries no watermarks. */
+		if (node_state(zone_to_nid(zone), N_MEMORY_PRIVATE) &&
+		    !node_state(zone_to_nid(zone), N_MEMORY_RECLAIM)) {
 			zone->_watermark[WMARK_MIN] = 0;
 			zone->_watermark[WMARK_LOW] = 0;
 			zone->_watermark[WMARK_HIGH] = 0;
@@ -6820,11 +6821,13 @@ static void __setup_per_zone_wmarks(void)
 		}
 		tmp = (u64)pages_min * zone_managed_pages(zone);
 		tmp = div64_ul(tmp, lowmem_pages);
-		if (is_highmem(zone) || zone_idx(zone) == ZONE_MOVABLE) {
+		if (is_highmem(zone) || zone_idx(zone) == ZONE_MOVABLE ||
+		    node_state(zone_to_nid(zone), N_MEMORY_PRIVATE)) {
 			/*
 			 * __GFP_HIGH and PF_MEMALLOC allocations usually don't
 			 * need highmem and movable zones pages, so cap pages_min
-			 * to a small  value here.
+			 * to a small  value here. Private memory holds no system
+			 * reserve, only this small minimum.
 			 *
 			 * The WMARK_HIGH-WMARK_LOW and (WMARK_LOW-WMARK_MIN)
 			 * deltas control async page reclaim, and so should
