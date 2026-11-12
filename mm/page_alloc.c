@@ -2198,6 +2198,10 @@ static inline bool boost_watermark(struct zone *zone)
 	if (is_kdump_kernel())
 		return false;
 
+	/* A boost asks kswapd to defragment, and only common nodes run it. */
+	if (!node_state(zone_to_nid(zone), N_MEMORY_COMMON))
+		return false;
+
 	/*
 	 * Don't bother in zones that are unlikely to produce results.
 	 * On small machines, boosting the watermark can cause an out of
@@ -2956,6 +2960,7 @@ static bool free_frozen_page_commit(struct zone *zone,
 		 * kswapd work again by resetting kswapd_failures.
 		 */
 		if (kswapd_test_hopeless(pgdat) &&
+		    node_state(pgdat->node_id, N_MEMORY_COMMON) &&
 		    num_node_state(N_MEMORY_COMMON) > 1)
 			kswapd_clear_hopeless(pgdat, KSWAPD_CLEAR_HOPELESS_PCP);
 	}
@@ -6565,6 +6570,10 @@ static void calculate_totalreserve_pages(void)
 
 		pgdat->totalreserve_pages = 0;
 
+		/* Only common memory holds the system reserve. */
+		if (!node_state(pgdat->node_id, N_MEMORY_COMMON))
+			continue;
+
 		for (i = 0; i < MAX_NR_ZONES; i++) {
 			struct zone *zone = pgdat->node_zones + i;
 			long max = 0;
@@ -6657,9 +6666,13 @@ static void __setup_per_zone_wmarks(void)
 	struct zone *zone;
 	unsigned long flags;
 
-	/* Calculate total number of !ZONE_HIGHMEM and !ZONE_MOVABLE pages */
+	/*
+	 * Calculate total number of !ZONE_HIGHMEM and !ZONE_MOVABLE pages.
+	 * Distribute the global pages_min budget only over common memory.
+	 */
 	for_each_zone(zone) {
-		if (!is_highmem(zone) && zone_idx(zone) != ZONE_MOVABLE)
+		if (!is_highmem(zone) && zone_idx(zone) != ZONE_MOVABLE &&
+		    !node_state(zone_to_nid(zone), N_MEMORY_PRIVATE))
 			lowmem_pages += zone_managed_pages(zone);
 	}
 
@@ -6667,6 +6680,16 @@ static void __setup_per_zone_wmarks(void)
 		u64 tmp;
 
 		spin_lock_irqsave(&zone->lock, flags);
+		/* No kswapd runs for a private node to restore watermarks. */
+		if (node_state(zone_to_nid(zone), N_MEMORY_PRIVATE)) {
+			zone->_watermark[WMARK_MIN] = 0;
+			zone->_watermark[WMARK_LOW] = 0;
+			zone->_watermark[WMARK_HIGH] = 0;
+			zone->_watermark[WMARK_PROMO] = 0;
+			zone->watermark_boost = 0;
+			spin_unlock_irqrestore(&zone->lock, flags);
+			continue;
+		}
 		tmp = (u64)pages_min * zone_managed_pages(zone);
 		tmp = div64_ul(tmp, lowmem_pages);
 		if (is_highmem(zone) || zone_idx(zone) == ZONE_MOVABLE) {
