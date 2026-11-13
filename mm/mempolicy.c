@@ -2100,6 +2100,10 @@ bool apply_policy_zone(struct mempolicy *policy, enum zone_type zone)
 
 	BUG_ON(dynamic_policy_zone == ZONE_MOVABLE);
 
+	/* Memory hot-remove can leave policy->nodes without memory. */
+	if (!nodes_intersects(policy->nodes, node_states[N_MEMORY]))
+		return false;
+
 	/*
 	 * if policy->nodes has movable memory only,
 	 * we apply policy when gfp_zone(gfp) = ZONE_MOVABLE only.
