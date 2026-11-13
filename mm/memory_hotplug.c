@@ -1476,6 +1476,54 @@ out:
 	return ret;
 }
 
+static int check_no_memblock_for_node_cb(struct memory_block *mem, void *arg)
+{
+	int nid = *(int *)arg;
+
+	/*
+	 * If a memory block belongs to multiple nodes, the stored nid is not
+	 * reliable. However, such blocks are always online (e.g., cannot get
+	 * offlined) and, therefore, are still spanned by the node.
+	 */
+	return mem->nid == nid ? -EEXIST : 0;
+}
+
+/* Caller must hold the memory hotplug lock for these checks. */
+static bool node_has_memory_blocks(int nid)
+{
+	return for_each_memory_block(&nid, check_no_memblock_for_node_cb);
+}
+
+static bool node_has_system_ram(int nid)
+{
+	/* Mixed-node memory blocks are always online and covered by N_MEMORY. */
+	return node_state(nid, N_MEMORY) || node_has_memory_blocks(nid);
+}
+
+/*
+ * Whether memory with @features and @owner may join @nid. Offline System RAM
+ * blocks retain the node's claim, so it binds until the last block is removed.
+ */
+bool can_claim_node_memory(int nid, unsigned long features, const void *owner)
+{
+	pg_data_t *pgdat = NODE_DATA(nid);
+
+	if (pgdat->memory_features == features && pgdat->memory_owner == owner)
+		return true;
+	return !node_has_system_ram(nid);
+}
+
+static bool node_has_possible_cpus(int nid)
+{
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		if (cpu_to_node(cpu) == nid)
+			return true;
+	}
+	return false;
+}
+
 /*
  * NOTE: The caller must call lock_device_hotplug() to serialize hotplug
  * and online/offline operations (triggered e.g. by sysfs).
@@ -1483,11 +1531,14 @@ out:
  * we are OK calling __meminit stuff here - we have CONFIG_MEMORY_HOTPLUG
  */
 static int __add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags,
-				 enum mmop online_type)
+				 enum mmop online_type, unsigned long features,
+				 const void *owner)
 {
 	struct mhp_params params = { .pgprot = pgprot_mhp(PAGE_KERNEL) };
 	enum memblock_flags memblock_flags = MEMBLOCK_NONE;
 	struct memory_group *group = NULL;
+	unsigned long old_features;
+	const void *old_owner;
 	u64 start, size;
 	bool new_node = false;
 	int ret;
@@ -1510,14 +1561,14 @@ static int __add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags,
 		WARN(1, "node %d was absent from the node_possible_map\n", nid);
 		return -EINVAL;
 	}
+	if (!node_memory_features_valid(features))
+		return -EINVAL;
+	/* Only private memory can have a driver as its owner. */
+	if ((features & NODE_MEMORY_FEAT_COMMON) &&
+	    owner != NODE_MEMORY_OWNER_KERNEL)
+		return -EINVAL;
 
 	mem_hotplug_begin();
-
-	/* Ordinary memory would join the node's private claim. */
-	if (!(NODE_DATA(nid)->memory_features & NODE_MEMORY_FEAT_COMMON)) {
-		ret = -EBUSY;
-		goto error_mem_hotplug_end;
-	}
 
 	if (IS_ENABLED(CONFIG_ARCH_KEEP_MEMBLOCK)) {
 		if (res->flags & IORESOURCE_SYSRAM_DRIVER_MANAGED)
@@ -1539,6 +1590,26 @@ static int __add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags,
 		}
 		new_node = true;
 	}
+
+	old_features = NODE_DATA(nid)->memory_features;
+	old_owner = NODE_DATA(nid)->memory_owner;
+	if (!can_claim_node_memory(nid, features, owner)) {
+		ret = -EBUSY;
+		goto error;
+	}
+	/*
+	 * A private node must not have CPUs: a CPU's local memory serves
+	 * ordinary allocations. mem_hotplug_begin() holds off CPU hotplug, and
+	 * private_node_cpu_prepare() refuses a CPU whose node is assigned only
+	 * when it is hot-added.
+	 */
+	if (!(features & NODE_MEMORY_FEAT_COMMON) && node_has_possible_cpus(nid)) {
+		ret = -EINVAL;
+		goto error;
+	}
+	/* Claim the node before its memory is onlined. */
+	NODE_DATA(nid)->memory_features = features;
+	WRITE_ONCE(NODE_DATA(nid)->memory_owner, owner);
 
 	/*
 	 * Self hosted memmap array
@@ -1585,6 +1656,9 @@ static int __add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags,
 
 	return ret;
 error:
+	/* Restore the previous claim while still holding the lock. */
+	NODE_DATA(nid)->memory_features = old_features;
+	WRITE_ONCE(NODE_DATA(nid)->memory_owner, old_owner);
 	if (new_node) {
 		node_set_offline(nid);
 		unregister_node(nid);
@@ -1600,7 +1674,9 @@ error_mem_hotplug_end:
 int add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags)
 {
 	return __add_memory_resource(nid, res, mhp_flags,
-				     mhp_get_default_online_type());
+				     mhp_get_default_online_type(),
+				     NODE_MEMORY_FEAT_ALL,
+				     NODE_MEMORY_OWNER_KERNEL);
 }
 
 /* requires device_hotplug_lock, see __add_memory_resource() */
@@ -1639,6 +1715,13 @@ EXPORT_SYMBOL_GPL(add_memory);
  * @resource_name: Resource name in format "System RAM ($DRIVER)"
  * @mhp_flags: Memory hotplug flags
  * @online_type: Auto-Online behavior (offline, online, kernel, movable)
+ * @features: NODE_MEMORY_FEAT_* services the memory opts into;
+ *            %NODE_MEMORY_FEAT_ALL adds it as ordinary common system RAM,
+ *            and a mask without %NODE_MEMORY_FEAT_COMMON as private memory.
+ * @owner: Opaque cookie naming the driver that allocates from private memory,
+ *         or %NODE_MEMORY_OWNER_KERNEL if none does. The kernel only compares
+ *         it and never dereferences it, so a driver passes an address it owns
+ *         for as long as the memory is present.
  *
  * Add special, driver-managed memory to the system as system RAM. Such
  * memory is not exposed via the raw firmware-provided memmap as system
@@ -1665,7 +1748,8 @@ EXPORT_SYMBOL_GPL(add_memory);
  */
 int __add_memory_driver_managed(int nid, u64 start, u64 size,
 		const char *resource_name, mhp_t mhp_flags,
-		enum mmop online_type)
+		enum mmop online_type, unsigned long features,
+		const void *owner)
 {
 	struct resource *res;
 	int rc;
@@ -1686,7 +1770,8 @@ int __add_memory_driver_managed(int nid, u64 start, u64 size,
 		goto out_unlock;
 	}
 
-	rc = __add_memory_resource(nid, res, mhp_flags, online_type);
+	rc = __add_memory_resource(nid, res, mhp_flags, online_type, features,
+				   owner);
 	if (rc < 0)
 		release_memory_resource(res);
 
@@ -1715,8 +1800,8 @@ int add_memory_driver_managed(int nid, u64 start, u64 size,
 			      const char *resource_name, mhp_t mhp_flags)
 {
 	return __add_memory_driver_managed(nid, start, size, resource_name,
-			mhp_flags,
-			mhp_get_default_online_type());
+			mhp_flags, mhp_get_default_online_type(),
+			NODE_MEMORY_FEAT_ALL, NODE_MEMORY_OWNER_KERNEL);
 }
 EXPORT_SYMBOL_GPL(add_memory_driver_managed);
 
@@ -1777,18 +1862,6 @@ bool mhp_range_allowed(u64 start, u64 size, bool need_mapping)
 
 #ifdef CONFIG_MEMORY_HOTREMOVE
 
-static int check_no_memblock_for_node_cb(struct memory_block *mem, void *arg)
-{
-	int nid = *(int *)arg;
-
-	/*
-	 * If a memory block belongs to multiple nodes, the stored nid is not
-	 * reliable. However, such blocks are always online (e.g., cannot get
-	 * offlined) and, therefore, are still spanned by the node.
-	 */
-	return mem->nid == nid ? -EEXIST : 0;
-}
-
 /* Caller must hold the memory hotplug lock for this check. */
 static bool node_is_memoryless(int nid)
 {
@@ -1799,12 +1872,9 @@ static bool node_is_memoryless(int nid)
 	 */
 	if (node_spanned_pages(nid))
 		return false;
-	/*
-	 * Offline memory blocks may not be spanned by the node yet, but they
-	 * link to it in sysfs and can be onlined later, so the node is not
-	 * memoryless while any remain.
-	 */
-	return !for_each_memory_block(&nid, check_no_memblock_for_node_cb);
+
+	/* Offline memory blocks keep the node alive so they can be onlined. */
+	return !node_has_memory_blocks(nid);
 }
 
 /*
@@ -2328,8 +2398,15 @@ static int try_remove_memory(u64 start, u64 size)
 
 	release_mem_region_adjustable(start, size);
 
-	if (nid != NUMA_NO_NODE)
+	if (nid != NUMA_NO_NODE) {
+		/* Release the claim after removing the last System RAM block. */
+		if (!node_has_system_ram(nid)) {
+			NODE_DATA(nid)->memory_features = NODE_MEMORY_FEAT_ALL;
+			WRITE_ONCE(NODE_DATA(nid)->memory_owner,
+				   NODE_MEMORY_OWNER_KERNEL);
+		}
 		try_offline_node(nid);
+	}
 
 	mem_hotplug_done();
 	return 0;

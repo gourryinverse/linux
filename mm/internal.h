@@ -66,6 +66,16 @@ void node_set_memory_state(int nid, bool high, bool normal,
 			   unsigned long features);
 void node_clear_memory_state(int nid);
 
+#ifdef CONFIG_MEMORY_HOTPLUG
+bool can_claim_node_memory(int nid, unsigned long features, const void *owner);
+#else
+static inline bool can_claim_node_memory(int nid, unsigned long features,
+					 const void *owner)
+{
+	return false;
+}
+#endif
+
 /*
  * Common memory is available to generic MM services. ZONE_DEVICE folios do
  * not qualify even when their NUMA node is common.

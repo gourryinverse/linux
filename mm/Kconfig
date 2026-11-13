@@ -1494,7 +1494,8 @@ config PRIVATE_NODE_KUNIT_TEST
 	  page allocator's zonelists: private nodes never appear in fallback
 	  or __GFP_THISNODE zonelists, and are reachable only through their
 	  own private zonelist. With a kernel-owned private node, also check
-	  folio_alloc_private() and where allocations that name it land.
+	  its owner claim, folio_alloc_private() and where allocations that
+	  name it land.
 
 	  If unsure, say N.
 

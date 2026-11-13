@@ -14,6 +14,7 @@
 #include <linux/mmzone.h>
 #include <linux/nodemask.h>
 
+#include "../internal.h"
 #include "../page_alloc.h"
 
 /* Whether every zone in @zl belongs to @nid; counts the zones in @nr. */
@@ -232,6 +233,19 @@ static void check_ordinary_alloc(struct kunit *test, int nid)
 		__free_pages(page, 0);
 }
 
+static void check_private_claim(struct kunit *test, int nid)
+{
+	unsigned long features = NODE_DATA(nid)->memory_features;
+
+	/* The node's memory binds it to its owner and configuration. */
+	KUNIT_EXPECT_TRUE(test, can_claim_node_memory(nid, features,
+						      NODE_MEMORY_OWNER_KERNEL));
+	KUNIT_EXPECT_FALSE(test, can_claim_node_memory(nid, features,
+						       &private_test_stranger));
+	KUNIT_EXPECT_FALSE(test, can_claim_node_memory(nid, NODE_MEMORY_FEAT_ALL,
+						       NODE_MEMORY_OWNER_KERNEL));
+}
+
 /* Run @check against a kernel-owned private node, under the hotplug lock. */
 static void check_private_node(struct kunit *test,
 			       void (*check)(struct kunit *test, int nid))
@@ -257,6 +271,13 @@ static void private_node_alloc_ordinary(struct kunit *test)
 	check_private_node(test, check_ordinary_alloc);
 }
 
+static void private_node_claim(struct kunit *test)
+{
+	if (!IS_ENABLED(CONFIG_MEMORY_HOTPLUG))
+		kunit_skip(test, "no memory hotplug");
+	check_private_node(test, check_private_claim);
+}
+
 static struct kunit_case private_node_test_cases[] = {
 	KUNIT_CASE(private_node_states_partition),
 	KUNIT_CASE(private_node_features_valid),
@@ -265,6 +286,7 @@ static struct kunit_case private_node_test_cases[] = {
 	KUNIT_CASE(private_node_select_zonelist),
 	KUNIT_CASE(private_node_alloc_private),
 	KUNIT_CASE(private_node_alloc_ordinary),
+	KUNIT_CASE(private_node_claim),
 	{}
 };
 
