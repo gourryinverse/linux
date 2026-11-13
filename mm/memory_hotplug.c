@@ -770,6 +770,10 @@ struct auto_movable_stats {
 static void auto_movable_stats_account_zone(struct auto_movable_stats *stats,
 					    struct zone *zone)
 {
+	/* Private memory is outside the movable:kernel balance. */
+	if (node_state(zone_to_nid(zone), N_MEMORY_PRIVATE))
+		return;
+
 	if (zone_idx(zone) == ZONE_MOVABLE) {
 		stats->movable_pages += zone->present_pages;
 	} else {
