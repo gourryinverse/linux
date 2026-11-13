@@ -771,6 +771,17 @@ void set_recommended_min_free_kbytes(void);
 
 extern char * const zone_names[MAX_NR_ZONES];
 
+/*
+ * Does @nid hold general-purpose memory, memory that holds ordinary data?
+ * For now that is common memory. totalram_pages() and MemFree count only
+ * general-purpose memory; features are fixed while a node has memory, so the
+ * node's claim decides.
+ */
+static inline bool node_memory_is_general_purpose(int nid)
+{
+	return NODE_DATA(nid)->memory_features & NODE_MEMORY_FEAT_COMMON;
+}
+
 extern int min_free_kbytes;
 extern int defrag_mode;
 

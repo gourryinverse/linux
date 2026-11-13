@@ -2421,6 +2421,7 @@ static unsigned long __init free_low_memory_core_early(void)
 {
 	unsigned long count = 0;
 	phys_addr_t start, end;
+	int nid;
 	u64 i;
 
 	memblock_clear_hotplug(0, -1);
@@ -2433,8 +2434,13 @@ static unsigned long __init free_low_memory_core_early(void)
 	 *  low ram will be on Node1
 	 */
 	for_each_free_mem_range(i, NUMA_NO_NODE, MEMBLOCK_NONE, &start, &end,
-				NULL)
-		count += __free_memory_core(start, end);
+				&nid) {
+		unsigned long pages = __free_memory_core(start, end);
+
+		/* totalram_pages() counts only general-purpose memory. */
+		if (node_memory_is_general_purpose(nid))
+			count += pages;
+	}
 
 	return count;
 }

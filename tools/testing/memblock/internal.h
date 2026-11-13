@@ -46,6 +46,11 @@ static inline bool __is_kernel(unsigned long addr)
 
 #define __SetPageReserved(p)	((void)(p))
 
+static inline bool node_memory_is_general_purpose(int nid)
+{
+	return true;
+}
+
 static inline bool kho_bootmem_overlap(phys_addr_t phys, size_t size)
 {
 	return false;
