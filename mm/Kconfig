@@ -1485,6 +1485,19 @@ config ARCH_HAS_LAZY_MMU_MODE
 	  MMU-related architectural state to be deferred until the mode is
 	  exited. See <linux/pgtable.h> for details.
 
+config PRIVATE_NODE_KUNIT_TEST
+	bool "KUnit tests for private memory node isolation" if !KUNIT_ALL_TESTS
+	depends on NUMA && KUNIT=y
+	default KUNIT_ALL_TESTS
+	help
+	  Check the private memory node invariants of the node states and the
+	  page allocator's zonelists: private nodes never appear in fallback
+	  or __GFP_THISNODE zonelists, and are reachable only through their
+	  own private zonelist. With a kernel-owned private node, also check
+	  folio_alloc_private() and where allocations that name it land.
+
+	  If unsure, say N.
+
 config LAZY_MMU_MODE_KUNIT_TEST
 	tristate "KUnit tests for the lazy MMU mode" if !KUNIT_ALL_TESTS
 	depends on ARCH_HAS_LAZY_MMU_MODE
