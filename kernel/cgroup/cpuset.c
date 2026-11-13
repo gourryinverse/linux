@@ -4606,7 +4606,11 @@ void cpuset_nodes_allowed(struct cgroup *cgroup, nodemask_t *mask)
  */
 static int cpuset_spread_node(int *rotor)
 {
-	return *rotor = next_node_in(*rotor, current->mems_allowed);
+	nodemask_t nodes;
+
+	/* Spread page cache only over memory that ordinary allocations use. */
+	nodes_andnot(nodes, current->mems_allowed, node_states[N_MEMORY_PRIVATE]);
+	return *rotor = next_node_in(*rotor, nodes);
 }
 
 /**
