@@ -5636,6 +5636,44 @@ struct folio *__folio_alloc_noprof(gfp_t gfp, unsigned int order, int preferred_
 }
 EXPORT_SYMBOL(__folio_alloc_noprof);
 
+static bool node_private_owned_by(int nid, const void *owner)
+{
+	return numa_valid_node(nid) && node_state(nid, N_MEMORY_PRIVATE) &&
+	       READ_ONCE(NODE_DATA(nid)->memory_owner) == owner;
+}
+
+/**
+ * folio_alloc_private - Allocate a folio from a private memory node.
+ * @owner: The owner cookie the node's memory was added with.
+ * @nid: The private node to allocate from.
+ * @gfp: GFP flags.
+ * @order: Order of the folio.
+ *
+ * The kernel only compares @owner and never dereferences it. Private memory
+ * that no driver allocates from, such as boot memory, is owned by
+ * %NODE_MEMORY_OWNER_KERNEL.
+ *
+ * The allocation never falls back to another node and never invokes the OOM
+ * killer, so the owner must handle exhaustion of its memory. The caller's
+ * cpuset still applies.
+ *
+ * Return: The folio, or %NULL on failure or if @owner does not own @nid.
+ */
+struct folio *folio_alloc_private_noprof(const void *owner, int nid, gfp_t gfp,
+		unsigned int order)
+{
+	nodemask_t nodes;
+	struct page *page;
+
+	if (WARN_ON_ONCE(gfp & __GFP_NOFAIL) || !node_private_owned_by(nid, owner))
+		return NULL;
+
+	nodes = nodemask_of_node(nid);
+	page = __alloc_pages_noprof(gfp | __GFP_COMP | __GFP_THISNODE, order, nid,
+				    &nodes, ALLOC_ZONELIST_PRIVATE);
+	return page_rmappable_folio(page);
+}
+
 /*
  * Common helper functions. Never use with __GFP_HIGHMEM because the returned
  * address cannot represent highmem pages. Use alloc_pages and then kmap if

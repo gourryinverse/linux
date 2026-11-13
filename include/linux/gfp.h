@@ -204,6 +204,10 @@ struct folio *__folio_alloc_noprof(gfp_t gfp, unsigned int order, int preferred_
 		nodemask_t *nodemask);
 #define __folio_alloc(...)			alloc_hooks(__folio_alloc_noprof(__VA_ARGS__))
 
+struct folio *folio_alloc_private_noprof(const void *owner, int nid, gfp_t gfp,
+		unsigned int order);
+#define folio_alloc_private(...)		alloc_hooks(folio_alloc_private_noprof(__VA_ARGS__))
+
 unsigned long alloc_pages_bulk_noprof(gfp_t gfp, int preferred_nid,
 				nodemask_t *nodemask, int nr_pages,
 				struct page **page_array);
