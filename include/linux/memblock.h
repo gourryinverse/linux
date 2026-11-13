@@ -371,6 +371,8 @@ static inline int memblock_get_region_node(const struct memblock_region *r)
 {
 	return r->nid;
 }
+
+void memblock_set_node_private(int nid, bool private);
 #else
 static inline void memblock_set_region_node(struct memblock_region *r, int nid)
 {
@@ -379,6 +381,10 @@ static inline void memblock_set_region_node(struct memblock_region *r, int nid)
 static inline int memblock_get_region_node(const struct memblock_region *r)
 {
 	return 0;
+}
+
+static inline void memblock_set_node_private(int nid, bool private)
+{
 }
 #endif /* CONFIG_NUMA */
 

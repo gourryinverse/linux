@@ -33,6 +33,16 @@ int numa_nearest_node(int node, unsigned int state);
 
 int nearest_node_nodemask(int node, nodemask_t *mask);
 
+#ifdef CONFIG_ARCH_HAS_NODE_HAS_CPUS
+/* Whether a possible CPU is on @nid, before the per-CPU areas exist. */
+bool __init arch_node_has_cpus(int nid);
+#else
+static inline bool arch_node_has_cpus(int nid)
+{
+	return true;
+}
+#endif
+
 #ifndef memory_add_physaddr_to_nid
 int memory_add_physaddr_to_nid(u64 start);
 #endif

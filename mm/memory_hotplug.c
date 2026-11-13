@@ -1513,6 +1513,12 @@ static int __add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags,
 
 	mem_hotplug_begin();
 
+	/* Ordinary memory would join the node's private claim. */
+	if (!(NODE_DATA(nid)->memory_features & NODE_MEMORY_FEAT_COMMON)) {
+		ret = -EBUSY;
+		goto error_mem_hotplug_end;
+	}
+
 	if (IS_ENABLED(CONFIG_ARCH_KEEP_MEMBLOCK)) {
 		if (res->flags & IORESOURCE_SYSRAM_DRIVER_MANAGED)
 			memblock_flags = MEMBLOCK_DRIVER_MANAGED;

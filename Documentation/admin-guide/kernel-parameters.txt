@@ -5496,6 +5496,15 @@ Kernel parameters
 	printk.time=	Show timing data prefixed to each printk message line
 			Format: <bool>  (1/Y/y=enable, 0/N/n=disable)
 
+	private_nodes=	[X86,NUMA,EARLY]
+			Format: <nodelist>
+			Bring boot memory on the listed nodes up as private
+			memory nodes, which ordinary allocations do not use.
+			A node that has CPUs, holds the kernel image, holds
+			a CMA area or has no memory stays common.  Ignored
+			when kernelcore= or movablecore= sizes ZONE_MOVABLE.
+			See Documentation/mm/numa_private_nodes.rst.
+
 	proc_mem.force_override= [KNL]
 			Format: {always | ptrace | never}
 			Traditionally /proc/pid/mem allows memory permissions to be

@@ -3445,7 +3445,8 @@ static void __init hugetlb_hstate_alloc_pages_onenode(struct hstate *h, int nid)
 
 	for (i = 0; i < h->max_huge_pages_node[nid]; ++i) {
 		if (hstate_is_gigantic(h)) {
-			if (!alloc_bootmem_huge_page(h, nid))
+			if (node_state(nid, N_MEMORY_PRIVATE) ||
+			    !alloc_bootmem_huge_page(h, nid))
 				break;
 		} else {
 			struct folio *folio;
@@ -4560,6 +4561,8 @@ void __init hugetlb_bootmem_set_nodes(void)
 
 	for_each_mem_pfn_range(i, MAX_NUMNODES, NULL, NULL, &nid)
 		node_set(nid, hugetlb_bootmem_nodes);
+	nodes_andnot(hugetlb_bootmem_nodes, hugetlb_bootmem_nodes,
+		     node_states[N_MEMORY_PRIVATE]);
 }
 
 void __init hugetlb_bootmem_alloc(void)

@@ -33,6 +33,9 @@
 #include <linux/vmstat.h>
 #include <linux/kexec_handover.h>
 #include <linux/hugetlb.h>
+#include <linux/cpuhotplug.h>
+#include <linux/cma.h>
+#include <asm/sections.h>
 #include "internal.h"
 #include "mm_init.h"
 #include "page_alloc.h"
@@ -1339,12 +1342,16 @@ static void __init calc_nr_kernel_pages(void)
 {
 	unsigned long start_pfn, end_pfn;
 	phys_addr_t start_addr, end_addr;
+	int nid;
 	u64 u;
 #ifdef CONFIG_HIGHMEM
 	unsigned long high_zone_low = arch_zone_lowest_possible_pfn[ZONE_HIGHMEM];
 #endif
 
-	for_each_free_mem_range(u, NUMA_NO_NODE, MEMBLOCK_NONE, &start_addr, &end_addr, NULL) {
+	for_each_free_mem_range(u, NUMA_NO_NODE, MEMBLOCK_NONE, &start_addr, &end_addr, &nid) {
+		/* Private memory does not size system hashes. */
+		if (node_state(nid, N_MEMORY_PRIVATE))
+			continue;
 		start_pfn = PFN_UP(start_addr);
 		end_pfn   = PFN_DOWN(end_addr);
 
@@ -1770,6 +1777,138 @@ static void __init free_area_init_node(int nid)
 	lru_gen_init_pgdat(pgdat);
 }
 
+#ifdef CONFIG_NUMA
+/* private_nodes=<nodelist> brings boot memory on these nodes up private. */
+static nodemask_t private_boot_nodes __initdata;
+
+static int __init cmdline_parse_private_nodes(char *p)
+{
+	nodemask_t nodes;
+	int nid;
+
+	if (!IS_ENABLED(CONFIG_ARCH_HAS_NODE_HAS_CPUS)) {
+		pr_warn("private_nodes: not supported on this architecture\n");
+		return 0;
+	}
+	if (!p || nodelist_parse(p, nodes))
+		return -EINVAL;
+
+	/* A repeated parameter replaces the earlier list. */
+	for_each_node_mask(nid, private_boot_nodes) {
+		memblock_set_node_private(nid, false);
+	}
+	private_boot_nodes = nodes;
+	for_each_node_mask(nid, private_boot_nodes) {
+		memblock_set_node_private(nid, true);
+	}
+	return 0;
+}
+early_param("private_nodes", cmdline_parse_private_nodes);
+
+/*
+ * kernelcore= and movablecore= size ZONE_MOVABLE across all nodes before any
+ * node is claimed, so they cannot be combined with private nodes.
+ */
+static void __init check_private_boot_nodes(void)
+{
+	int nid;
+
+	if (nodes_empty(private_boot_nodes))
+		return;
+	if (!required_kernelcore && !required_kernelcore_percent &&
+	    !required_movablecore && !required_movablecore_percent)
+		return;
+
+	pr_warn("private_nodes: ignored with kernelcore= or movablecore=\n");
+	for_each_node_mask(nid, private_boot_nodes) {
+		memblock_set_node_private(nid, false);
+	}
+	nodes_clear(private_boot_nodes);
+}
+
+static int __init cma_in_range(struct cma *cma, void *data)
+{
+	struct range *range = data;
+
+	return cma_intersects(cma, range->start, range->end);
+}
+
+/* A CMA area on the node would hand its memory to cma_alloc(). */
+static bool __init node_has_cma(pg_data_t *pgdat)
+{
+	struct range range = {
+		.start = PFN_PHYS(pgdat->node_start_pfn),
+		.end = PFN_PHYS(pgdat_end_pfn(pgdat)) - 1,
+	};
+
+	return IS_ENABLED(CONFIG_CMA) && cma_for_each_area(cma_in_range, &range);
+}
+
+/*
+ * Runs before check_for_memory() publishes the node's states. A CPU's local
+ * memory serves ordinary allocations, and keeping the kernel image's node
+ * common leaves boot with some common memory.
+ */
+static void __init claim_private_boot_node(pg_data_t *pgdat)
+{
+	int nid = pgdat->node_id;
+	const char *reason = NULL;
+
+	if (!node_isset(nid, private_boot_nodes))
+		return;
+
+	if (!pgdat->node_present_pages)
+		reason = "no memory";
+	else if (arch_node_has_cpus(nid))
+		reason = "CPUs";
+	else if (nid == early_pfn_to_nid(PHYS_PFN(__pa_symbol(_text))))
+		reason = "the kernel image";
+	else if (node_has_cma(pgdat))
+		reason = "a CMA area";
+
+	if (!reason) {
+		pgdat->memory_features = 0;
+		pr_info("private_nodes: node %d is private\n", nid);
+		return;
+	}
+	pr_warn("private_nodes: node %d has %s, keeping it common\n",
+		nid, reason);
+	memblock_set_node_private(nid, false);
+}
+
+/* Refuse to online a CPU on a node that holds private memory. */
+static int private_node_cpu_prepare(unsigned int cpu)
+{
+	int nid = cpu_to_node(cpu);
+
+	if (nid == NUMA_NO_NODE || !NODE_DATA(nid) ||
+	    (NODE_DATA(nid)->memory_features & NODE_MEMORY_FEAT_COMMON))
+		return 0;
+	pr_warn("CPU %u: node %d holds private memory, not onlining\n",
+		cpu, nid);
+	return -EINVAL;
+}
+
+static int __init private_node_cpuhp_init(void)
+{
+	int ret;
+
+	ret = cpuhp_setup_state_nocalls(CPUHP_BP_PREPARE_DYN,
+					"mm/private_node:prepare",
+					private_node_cpu_prepare, NULL);
+	return ret < 0 ? ret : 0;
+}
+subsys_initcall(private_node_cpuhp_init);
+#else
+static inline void check_private_boot_nodes(void)
+{
+}
+
+static inline void claim_private_boot_node(pg_data_t *pgdat)
+{
+}
+#endif
+
 /* Publish the memory states of a node that has present pages. */
 static void __init check_for_memory(pg_data_t *pgdat)
 {
@@ -1870,6 +2009,8 @@ static void __init free_area_init(void)
 		start_pfn = end_pfn;
 	}
 
+	check_private_boot_nodes();
+
 	/* Find the PFNs that ZONE_MOVABLE begins at in each node */
 	find_zone_movable_pfns_for_nodes();
 
@@ -1922,6 +2063,7 @@ static void __init free_area_init(void)
 
 		pgdat = NODE_DATA(nid);
 		free_area_init_node(nid);
+		claim_private_boot_node(pgdat);
 
 		/*
 		 * No sysfs hierarchy will be created via register_node()

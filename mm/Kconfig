@@ -1208,6 +1208,13 @@ config ARCH_HAS_CURRENT_STACK_POINTER
 config ARCH_HAS_ZONE_DMA_SET
 	bool
 
+config ARCH_HAS_NODE_HAS_CPUS
+	bool
+	help
+	  The architecture implements arch_node_has_cpus(), which tells
+	  whether a node has possible CPUs before the per-CPU areas exist.
+	  private_nodes= needs it.
+
 config ZONE_DMA
 	bool "Support DMA zone" if ARCH_HAS_ZONE_DMA_SET
 	default y if ARM64 || X86

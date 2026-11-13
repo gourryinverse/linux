@@ -9,6 +9,7 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/init.h>
+#include <linux/bitmap.h>
 #include <linux/bitops.h>
 #include <linux/poison.h>
 #include <linux/pfn.h>
@@ -211,6 +212,40 @@ bool __init_memblock memblock_overlaps_region(struct memblock_type *type,
 	return false;
 }
 
+#ifdef CONFIG_NUMA
+/* Boot nodes that serve only memblock allocations that name them. */
+static DECLARE_BITMAP(memblock_private_nodes, MAX_NUMNODES) __initdata_memblock;
+
+void __init memblock_set_node_private(int nid, bool private)
+{
+	if (private)
+		__set_bit(nid, memblock_private_nodes);
+	else
+		__clear_bit(nid, memblock_private_nodes);
+}
+
+static bool __init_memblock memblock_has_private_nodes(void)
+{
+	return !bitmap_empty(memblock_private_nodes, MAX_NUMNODES);
+}
+
+static bool __init_memblock should_skip_private(int nid, int m_nid)
+{
+	return !numa_valid_node(nid) && numa_valid_node(m_nid) &&
+	       test_bit(m_nid, memblock_private_nodes);
+}
+#else
+static inline bool memblock_has_private_nodes(void)
+{
+	return false;
+}
+
+static inline bool should_skip_private(int nid, int m_nid)
+{
+	return false;
+}
+#endif
+
 /**
  * __memblock_find_range_bottom_up - find free area utility in bottom-up
  * @start: start of candidate range
@@ -220,6 +255,7 @@ bool __init_memblock memblock_overlaps_region(struct memblock_type *type,
  * @align: alignment of free area to find
  * @nid: nid of the free area to find, %NUMA_NO_NODE for any node
  * @flags: pick from blocks based on memory attributes
+ * @skip_private: skip private boot nodes if @nid is %NUMA_NO_NODE
  *
  * Utility called from memblock_find_in_range_node(), find free area bottom-up.
  *
@@ -229,12 +265,15 @@ bool __init_memblock memblock_overlaps_region(struct memblock_type *type,
 static phys_addr_t __init_memblock
 __memblock_find_range_bottom_up(phys_addr_t start, phys_addr_t end,
 				phys_addr_t size, phys_addr_t align, int nid,
-				enum memblock_flags flags)
+				enum memblock_flags flags, bool skip_private)
 {
 	phys_addr_t this_start, this_end, cand;
+	int m_nid;
 	u64 i;
 
-	for_each_free_mem_range(i, nid, flags, &this_start, &this_end, NULL) {
+	for_each_free_mem_range(i, nid, flags, &this_start, &this_end, &m_nid) {
+		if (skip_private && should_skip_private(nid, m_nid))
+			continue;
 		this_start = clamp(this_start, start, end);
 		this_end = clamp(this_end, start, end);
 
@@ -255,6 +294,7 @@ __memblock_find_range_bottom_up(phys_addr_t start, phys_addr_t end,
  * @align: alignment of free area to find
  * @nid: nid of the free area to find, %NUMA_NO_NODE for any node
  * @flags: pick from blocks based on memory attributes
+ * @skip_private: skip private boot nodes if @nid is %NUMA_NO_NODE
  *
  * Utility called from memblock_find_in_range_node(), find free area top-down.
  *
@@ -264,13 +304,16 @@ __memblock_find_range_bottom_up(phys_addr_t start, phys_addr_t end,
 static phys_addr_t __init_memblock
 __memblock_find_range_top_down(phys_addr_t start, phys_addr_t end,
 			       phys_addr_t size, phys_addr_t align, int nid,
-			       enum memblock_flags flags)
+			       enum memblock_flags flags, bool skip_private)
 {
 	phys_addr_t this_start, this_end, cand;
+	int m_nid;
 	u64 i;
 
 	for_each_free_mem_range_reverse(i, nid, flags, &this_start, &this_end,
-					NULL) {
+					&m_nid) {
+		if (skip_private && should_skip_private(nid, m_nid))
+			continue;
 		this_start = clamp(this_start, start, end);
 		this_end = clamp(this_end, start, end);
 
@@ -283,6 +326,18 @@ __memblock_find_range_top_down(phys_addr_t start, phys_addr_t end,
 	}
 
 	return 0;
+}
+
+static phys_addr_t __init_memblock
+__memblock_find_range(phys_addr_t start, phys_addr_t end, phys_addr_t size,
+		      phys_addr_t align, int nid, enum memblock_flags flags,
+		      bool skip_private)
+{
+	if (memblock_bottom_up())
+		return __memblock_find_range_bottom_up(start, end, size, align,
+						       nid, flags, skip_private);
+	return __memblock_find_range_top_down(start, end, size, align, nid,
+					      flags, skip_private);
 }
 
 /**
@@ -305,6 +360,8 @@ static phys_addr_t __init_memblock memblock_find_in_range_node(phys_addr_t size,
 					phys_addr_t end, int nid,
 					enum memblock_flags flags)
 {
+	phys_addr_t found;
+
 	/* pump up @end */
 	if (end == MEMBLOCK_ALLOC_ACCESSIBLE ||
 	    end == MEMBLOCK_ALLOC_NOLEAKTRACE)
@@ -314,12 +371,13 @@ static phys_addr_t __init_memblock memblock_find_in_range_node(phys_addr_t size,
 	start = max_t(phys_addr_t, start, PAGE_SIZE);
 	end = max(start, end);
 
-	if (memblock_bottom_up())
-		return __memblock_find_range_bottom_up(start, end, size, align,
-						       nid, flags);
-	else
-		return __memblock_find_range_top_down(start, end, size, align,
-						      nid, flags);
+	found = __memblock_find_range(start, end, size, align, nid, flags, true);
+
+	/* Private boot nodes are a last resort, not a reason to fail. */
+	if (!found && memblock_has_private_nodes())
+		found = __memblock_find_range(start, end, size, align, nid,
+					      flags, false);
+	return found;
 }
 
 /**
@@ -1927,6 +1985,24 @@ phys_addr_t __init_memblock memblock_reserved_kern_size(phys_addr_t limit, int n
 	return total;
 }
 
+/* Free memory on private boot nodes, which ordinary allocations cannot use. */
+static phys_addr_t __init memblock_private_free_size(void)
+{
+	struct memblock_region *r;
+	phys_addr_t total = 0;
+
+	for_each_mem_region(r) {
+		if (should_skip_private(NUMA_NO_NODE, memblock_get_region_node(r)))
+			total += r->size;
+	}
+	for_each_reserved_mem_region(r) {
+		if ((r->flags & MEMBLOCK_RSRV_KERN) &&
+		    should_skip_private(NUMA_NO_NODE, memblock_get_region_node(r)))
+			total -= r->size;
+	}
+	return total;
+}
+
 /**
  * memblock_estimated_nr_free_pages - return estimated number of free pages
  * from memblock point of view
@@ -1941,7 +2017,7 @@ phys_addr_t __init_memblock memblock_reserved_kern_size(phys_addr_t limit, int n
  */
 unsigned long __init memblock_estimated_nr_free_pages(void)
 {
-	return PHYS_PFN(memblock_phys_mem_size() -
+	return PHYS_PFN(memblock_phys_mem_size() - memblock_private_free_size() -
 			memblock_reserved_kern_size(MEMBLOCK_ALLOC_ANYWHERE, NUMA_NO_NODE));
 }
 
