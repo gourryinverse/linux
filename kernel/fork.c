@@ -254,7 +254,7 @@ static bool try_release_thread_stack_to_cache(struct vm_struct *vm_area)
 	 */
 	scoped_guard(preempt) {
 		nid = numa_node_id();
-		if (node_state(nid, N_MEMORY)) {
+		if (node_state(nid, N_MEMORY_COMMON)) {
 			for (i = 0; i < vm_area->nr_pages; i++) {
 				struct page *page = vm_area->pages[i];
 				if (page_to_nid(page) != nid)
