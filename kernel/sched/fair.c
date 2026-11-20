@@ -2876,7 +2876,7 @@ bool should_numa_migrate_memory(struct task_struct *p, struct folio *folio,
 	/*
 	 * Cannot migrate to memoryless nodes.
 	 */
-	if (!node_state(dst_nid, N_MEMORY))
+	if (!node_state(dst_nid, N_MEMORY_COMMON))
 		return false;
 
 	/*
